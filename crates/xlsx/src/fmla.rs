@@ -80,8 +80,14 @@ fn expr_to_file(e: Expr) -> String {
         // reference that became `#REF!` (its cell was deleted) as plain `#REF!`.
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) if matches!(*r, Expr::Error(_)) => *r,
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) => Expr::Call("_xlfn.ANCHORARRAY".into(), vec![*r]),
-        // Nor an `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)`.
-        Expr::Unary(gridcraft_formula::UnOp::At, x) => Expr::Call("_xlfn.SINGLE".into(), vec![*x]),
+        // Nor an `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)`, and `@(x)` likewise.
+        Expr::Unary(gridcraft_formula::UnOp::At, x) => Expr::Call(
+            "_xlfn.SINGLE".into(),
+            vec![match *x {
+                Expr::Paren(inner) => *inner,
+                other => other,
+            }],
+        ),
         // Nor the `[@Col]` shorthand: files spell it `[[#This Row],[Col]]`, or Excel repairs
         // the file and drops the table. Carried as a name, which prints verbatim.
         Expr::Struct(st) => Expr::Name(gridcraft_formula::printer::struct_ref_file(&st)),

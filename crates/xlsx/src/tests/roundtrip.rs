@@ -859,10 +859,11 @@ fn icon_sets_always_write_one_cfvo_per_icon() {
     assert_eq!(rules, [3, 4, 5]);
 }
 
-/// Files have no `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)` in a dynamic-array
-/// formula, and reads it back as `@x`.
+/// Files have no `@` operator. An `@` that legacy Excel implies is written without it in a
+/// legacy formula (no dynamic-array metadata); any other `@x` is written as `_xlfn.SINGLE(x)`
+/// in a dynamic-array formula. Both read back as written in the model.
 #[test]
-fn implicit_intersection_is_written_as_single() {
+fn implicit_intersection_is_written_as_legacy_or_single() {
     let mut wb = Workbook::new();
     let s = wb.sheet_mut(0).unwrap();
     for (r, n) in [(0, 1.0), (1, 3.0), (2, 5.0)] {
@@ -870,16 +871,46 @@ fn implicit_intersection_is_written_as_single() {
     }
     s.cells.set(at("D3"), Cell { value: Value::Number(10.0), ..Cell::formula(Formula::new("@A1:A3*2")) });
     s.cells.set(at("D4"), Cell { value: Value::Number(2.0), ..Cell::formula(Formula::new("A1*2")) });
+    s.cells.set(at("D5"), Cell { value: Value::Number(2.0), ..Cell::formula(Formula::new("@(A1:A3*2)")) });
     let bytes = write_xlsx(&wb).unwrap();
     let (xml, metadata) = sheet1_xml(&bytes);
-    assert!(xml.contains("<c r=\"D3\" cm=\"1\"><f t=\"array\" ref=\"D3\">_xlfn.SINGLE(A1:A3)*2</f><v>10</v>"), "{xml}");
+    assert!(xml.contains("<c r=\"D3\"><f>A1:A3*2</f><v>10</v>"), "{xml}");
     assert!(xml.contains("<c r=\"D4\"><f>A1*2</f>"), "{xml}");
+    assert!(xml.contains("<c r=\"D5\" cm=\"1\"><f t=\"array\" ref=\"D5\">_xlfn.SINGLE(A1:A3*2)</f><v>2</v>"), "{xml}");
     assert!(!xml.contains('@'), "{xml}");
     assert!(metadata);
     let (back, _) = read_xlsx(&bytes).unwrap();
     let sh = back.sheet(0).unwrap();
-    assert_eq!(sh.cell(at("D3")).and_then(|c| c.formula.as_ref()).map(|f| f.text.as_str()), Some("@A1:A3*2"));
-    assert_eq!(sh.cell(at("D3")).and_then(|c| c.formula.as_ref()).and_then(|f| f.array), None);
+    let text = |a: &str| sh.cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone());
+    assert_eq!(text("D3").as_deref(), Some("@A1:A3*2"));
+    assert_eq!(text("D4").as_deref(), Some("A1*2"));
+    assert_eq!(text("D5").as_deref(), Some("@(A1:A3*2)"));
+    assert_eq!(sh.cell(at("D5")).and_then(|c| c.formula.as_ref()).and_then(|f| f.array), None);
+}
+
+/// A legacy formula read from a file (shown with Excel's implicit `@`) is saved as it was read,
+/// without dynamic-array metadata; a dynamic-array formula keeps its metadata.
+#[test]
+fn legacy_and_dynamic_formulas_keep_their_kind() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="B2"><f>TANH(A1:A3)+A1:A3</f><v>4</v></c><c r="C2" cm="1"><f t="array" ref="C2:C4">TANH(A1:A3)</f><v>0.76</v></c><c r="D2"><f t="array" ref="D2:D4">TANH(A1:A3)</f><v>0.76</v></c></row>
+      <row r="3"><c r="A3"><v>3</v></c><c r="B3"><f>SUM(A1:A3)</f><v>6</v></c></row>
+    </sheetData>"#;
+    let (wb, _) = read_xlsx(&super::minimal(body, &[], "", "")).unwrap();
+    let text = |wb: &Workbook, a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| (f.text.clone(), f.array)).unwrap();
+    assert_eq!(text(&wb, "B2"), ("TANH(@A1:A3)+@A1:A3".to_string(), None));
+    let bytes = write_xlsx(&wb).unwrap();
+    let (xml, _) = sheet1_xml(&bytes);
+    assert!(xml.contains("<c r=\"B2\"><f>TANH(A1:A3)+A1:A3</f>"), "{xml}");
+    assert!(xml.contains("<c r=\"B3\"><f>SUM(A1:A3)</f>"), "{xml}");
+    // Uncalculated, the spill range is not known yet; the formula stays dynamic.
+    assert!(xml.contains("<c r=\"C2\" cm=\"1\"><f t=\"array\" ref=\"C2\">TANH(A1:A3)</f>"), "{xml}");
+    assert!(xml.contains("<c r=\"D2\"><f t=\"array\" ref=\"D2:D4\">TANH(A1:A3)</f>"), "{xml}");
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    for a in ["B2", "B3", "C2", "D2"] {
+        assert_eq!(text(&back, a), text(&wb, a), "{a}");
+    }
 }
 
 #[test]

@@ -1,68 +1,217 @@
-//! Export-time implicit-intersection analysis, without evaluating the workbook.
+//! Legacy (pre-dynamic-array) cell formulas and implicit intersection, without evaluating.
 //!
-//! A range is harmless in SUM, but not in SQRT or arithmetic. Keep the result's shape separate
-//! from affected operations inside it: SUM(range * range) returns a scalar yet needs array
-//! evaluation. Legacy array-aware contexts such as SUMPRODUCT already preserve those operations.
+//! Excel evaluates a cell formula saved without dynamic-array metadata (no `cm` attribute) the
+//! legacy way: a reference that may cover several cells, used where one value is expected, is
+//! intersected with the formula's row or column, and a multi-valued result shows its top-left
+//! value. Dynamic-array Excel displays such a formula with the implicit intersection operator `@`
+//! inserted where that happens (Microsoft support, "Implicit intersection operator: @"). The
+//! reader does the same ([`apply_legacy`]), so the dynamic-array evaluator computes the legacy
+//! result; the writer ([`export`]) saves a formula that is the legacy reading of some text as
+//! that text, without `@`, and gives every other formula dynamic-array metadata.
+//!
+//! A range is harmless in SUM, but not in SQRT or arithmetic: `SUM(A1:A3*B1:B3)` intersects both
+//! operands. Legacy array-aware parameters such as SUMPRODUCT's evaluate everything inside as
+//! arrays, so nothing there is intersected. This is file-format policy, not a second evaluator:
+//! unknown results are never calculated.
+
+use std::sync::Arc;
 
 use gridcraft_core::CellRef;
 use gridcraft_formula::{BinOp, Expr, SheetSel, StructItem, UnOp};
 use gridcraft_model::{Formula, Workbook};
 
-#[derive(Clone, Copy, Default)]
-struct Shape {
-    array: bool,
-    affected: bool,
+use crate::FunctionInfo;
+
+/// What an expression produces, as far as implicit intersection is concerned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    /// One value, or a reference to one cell.
+    Scalar,
+    /// A reference that may cover several cells.
+    Ref,
+    /// Several values that are not a reference.
+    Array,
 }
 
-impl Shape {
-    fn array() -> Self {
-        Self { array: true, affected: false }
+impl Kind {
+    fn join(self, other: Kind) -> Kind {
+        match (self, other) {
+            (Kind::Array, _) | (_, Kind::Array) => Kind::Array,
+            (Kind::Ref, _) | (_, Kind::Ref) => Kind::Ref,
+            _ => Kind::Scalar,
+        }
     }
 }
 
-pub(crate) fn needs_array(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula) -> bool {
-    let Some(expr) = formula.expr_arc() else { return false };
-    let mut scan = Scan { wb, at, remaining: 4096, locals: Vec::new() };
-    let shape = scan.expr(&expr, sheet, false, 0);
-    // An explicit `@` is written as `_xlfn.SINGLE`, which only dynamic-array formulas carry.
-    let mut at = false;
-    expr.walk(&mut |e| at |= matches!(e, Expr::Unary(UnOp::At, _)));
-    shape.array || shape.affected || at
+/// How a position consumes its operand in a legacy formula.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Ctx {
+    /// One value: a multi-cell reference is intersected.
+    Value,
+    /// A reference or array as such (SUM's arguments); nested operations still take values.
+    Ref,
+    /// Array evaluation of everything inside (SUMPRODUCT's arguments): nothing is intersected.
+    Array,
 }
 
-struct Scan<'a> {
+/// A function parameter's legacy evaluation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Param {
+    Value,
+    Ref,
+    Array,
+    /// The parameter is evaluated like the call itself (IF's and CHOOSE's results).
+    Pass,
+    /// A value read from the top-left cell of a reference, never intersected (T: Excel caches
+    /// `T(H12:J12)` as T of H12 in a formula outside columns H:J). The function lifts over the
+    /// cells, so the legacy result is the top-left one.
+    First,
+    /// An array parameter of a dynamic-array-era function: whether Excel evaluates a legacy
+    /// formula there as an array is not established, so such formulas are written as dynamic.
+    Uncertain,
+}
+
+/// How the writer saves a formula that neither spills nor is a legacy CSE array.
+pub(crate) enum Export {
+    /// As it is, without dynamic-array metadata.
+    Unchanged,
+    /// As this expression (the formula without its implicit `@`), without dynamic-array metadata.
+    Legacy(Expr),
+    /// With dynamic-array metadata: legacy evaluation would differ.
+    Dynamic,
+}
+
+pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo) -> Export {
+    let Some(expr) = formula.expr_arc() else { return Export::Unchanged };
+    let mut explicit = false;
+    expr.walk(&mut |e| explicit |= matches!(e, Expr::Unary(UnOp::At, _)));
+    let plain = if explicit { strip(expr.as_ref().clone()) } else { expr.as_ref().clone() };
+    let mut legacy = Legacy::new(wb, at, functions);
+    let read_back = legacy.formula(plain.clone(), sheet);
+    if !legacy.certain {
+        return Export::Dynamic;
+    }
+    if !explicit {
+        return if legacy.inserted { Export::Dynamic } else { Export::Unchanged };
+    }
+    if gridcraft_formula::print(&read_back) == gridcraft_formula::print(&expr) { Export::Legacy(plain) } else { Export::Dynamic }
+}
+
+/// Rewrites the legacy cell formulas at `cells` (model sheet index, positions) to their
+/// dynamic-array reading, with `@` where Excel intersects. Runs once names and tables are loaded.
+pub(crate) fn apply_legacy(wb: &mut Workbook, cells: Vec<(usize, Vec<CellRef>)>, functions: FunctionInfo) {
+    for (si, positions) in cells {
+        let Some(sheet) = wb.sheet(si) else { continue };
+        let mut changed = Vec::new();
+        for at in positions {
+            let Some(formula) = sheet.cell(at).and_then(|c| c.formula.as_deref()) else { continue };
+            if let Some(f) = legacy(wb, si, at, formula, functions) {
+                changed.push((at, f));
+            }
+        }
+        if changed.is_empty() {
+            continue;
+        }
+        let Some(sheet) = wb.sheet_mut(si) else { continue };
+        for (at, f) in changed {
+            if let Some(cell) = sheet.cells.get_mut(at) {
+                cell.formula = Some(Arc::new(f));
+            }
+        }
+    }
+}
+
+/// The dynamic-array reading of a legacy formula, when it differs.
+fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions: FunctionInfo) -> Option<Formula> {
+    if formula.array.is_some() {
+        return None;
+    }
+    let expr = formula.expr_arc()?;
+    let mut legacy = Legacy::new(wb, at, functions);
+    let out = legacy.formula(expr.as_ref().clone(), sheet);
+    // Text round trip: the stored expression is exactly what the text parses to.
+    legacy.inserted.then(|| Formula::new(&gridcraft_formula::print(&out)))
+}
+
+/// Removes every `@` (and the parentheses [`at`] adds).
+fn strip(e: Expr) -> Expr {
+    e.map(&mut |x| match x {
+        Expr::Unary(UnOp::At, inner) => match *inner {
+            Expr::Paren(p) if !atomic(&p) => *p,
+            other => other,
+        },
+        other => other,
+    })
+}
+
+/// `@e`, parenthesized unless `e` prints as one operand.
+fn at(e: Expr) -> Expr {
+    let e = if atomic(&e) { e } else { Expr::Paren(Box::new(e)) };
+    Expr::Unary(UnOp::At, Box::new(e))
+}
+
+fn atomic(e: &Expr) -> bool {
+    matches!(e, Expr::Ref(_) | Expr::Name(_) | Expr::Struct(_) | Expr::Call(..) | Expr::Paren(_) | Expr::Array(_))
+}
+
+struct Legacy<'a> {
     wb: &'a Workbook,
     at: CellRef,
+    functions: FunctionInfo,
     remaining: usize,
-    locals: Vec<(String, Shape)>,
+    locals: Vec<(String, Kind)>,
+    /// An `@` was inserted.
+    inserted: bool,
+    /// The analysis finished and covered only established legacy semantics.
+    certain: bool,
 }
 
-impl Scan<'_> {
-    fn expr(&mut self, e: &Expr, sheet: usize, array_context: bool, depth: usize) -> Shape {
+impl<'a> Legacy<'a> {
+    fn new(wb: &'a Workbook, at: CellRef, functions: FunctionInfo) -> Self {
+        Legacy { wb, at, functions, remaining: 4096, locals: Vec::new(), inserted: false, certain: true }
+    }
+
+    /// The whole cell formula: a multi-valued result shows its top-left value.
+    fn formula(&mut self, e: Expr, sheet: usize) -> Expr {
+        let (e, kind) = self.expr(e, sheet, Ctx::Value, 0);
+        if kind == Kind::Array {
+            self.inserted = true;
+            at(e)
+        } else {
+            e
+        }
+    }
+
+    fn expr(&mut self, e: Expr, sheet: usize, ctx: Ctx, depth: usize) -> (Expr, Kind) {
         // Names can be cyclic, and a short chain of repeated names can expand exponentially.
-        // Preserve array evaluation when analysis cannot safely finish.
         if depth >= 64 || self.remaining == 0 {
-            return Shape { array: true, affected: true };
+            self.certain = false;
+            return (e, Kind::Array);
         }
         self.remaining -= 1;
+        let (e, kind) = self.node(e, sheet, ctx, depth);
+        if ctx == Ctx::Value && kind == Kind::Ref {
+            self.inserted = true;
+            (at(e), Kind::Scalar)
+        } else {
+            (e, kind)
+        }
+    }
+
+    fn node(&mut self, e: Expr, sheet: usize, ctx: Ctx, depth: usize) -> (Expr, Kind) {
+        let inner = |wanted: Ctx| if ctx == Ctx::Array { Ctx::Array } else { wanted };
         match e {
-            Expr::Ref(r) => Shape { array: !r.range().is_single() || matches!(r.sheet, SheetSel::Span(_, _)), affected: false },
-            Expr::Array(rows) => Shape { array: rows.len() > 1 || rows.first().is_some_and(|r| r.len() > 1), affected: false },
+            Expr::Ref(r) => {
+                let kind = if r.range().is_single() && !matches!(r.sheet, SheetSel::Span(_, _)) { Kind::Scalar } else { Kind::Ref };
+                (Expr::Ref(r), kind)
+            }
+            Expr::Array(rows) => {
+                let kind = if rows.len() > 1 || rows.first().is_some_and(|r| r.len() > 1) { Kind::Array } else { Kind::Scalar };
+                (Expr::Array(rows), kind)
+            }
             Expr::Name(n) => {
-                if let Some((_, shape)) = self.locals.iter().rev().find(|(key, _)| key.eq_ignore_ascii_case(n)) {
-                    return *shape;
-                }
-                let (scope, bare) = match n.rsplit_once('!') {
-                    Some((s, name)) => (self.wb.sheet_index(&s.trim_matches('\'').replace("''", "'")).unwrap_or(sheet), name),
-                    None => (sheet, n.as_str()),
-                };
-                if let Some(def) = self.wb.name(bare, scope) {
-                    return match gridcraft_formula::parse(def.formula.trim_start_matches('=')) {
-                        Ok(expr) => self.expr(&expr, def.scope.unwrap_or(scope), array_context, depth + 1),
-                        Err(_) => Shape::array(),
-                    };
-                }
-                Shape { array: self.wb.table(bare).is_some(), affected: false }
+                let kind = self.name(&n, sheet, depth);
+                (Expr::Name(n), kind)
             }
             Expr::Struct(r) => {
                 let table = if r.table.is_empty() {
@@ -76,110 +225,198 @@ impl Scan<'_> {
                     (Some(_), None) => true,
                     _ => table.is_some_and(|t| t.columns.len() == 1),
                 };
-                Shape { array: !(one_row && one_col), affected: false }
+                (Expr::Struct(r), if one_row && one_col { Kind::Scalar } else { Kind::Ref })
             }
-            Expr::Paren(x) => self.expr(x, sheet, array_context, depth + 1),
+            Expr::Paren(x) => {
+                let (x, kind) = self.expr(*x, sheet, ctx, depth + 1);
+                (Expr::Paren(Box::new(x)), kind)
+            }
+            Expr::Unary(UnOp::At, x) => {
+                let (x, _) = self.expr(*x, sheet, inner(Ctx::Ref), depth + 1);
+                (Expr::Unary(UnOp::At, Box::new(x)), Kind::Scalar)
+            }
+            // A trim reference is a reference operator, like `:`.
+            Expr::Unary(op @ (UnOp::Spill | UnOp::Trim(_)), x) => {
+                let (x, _) = self.expr(*x, sheet, inner(Ctx::Ref), depth + 1);
+                (Expr::Unary(op, Box::new(x)), Kind::Ref)
+            }
             Expr::Unary(op, x) => {
-                let child = self.expr(x, sheet, array_context, depth + 1);
-                match op {
-                    UnOp::At => Shape { array: false, affected: child.affected },
-                    // A trim reference is a reference operator, like `:`.
-                    UnOp::Spill | UnOp::Trim(_) => Shape { array: true, affected: child.affected },
-                    _ => Shape { array: child.array, affected: child.affected || (child.array && !array_context) },
-                }
+                let (x, kind) = self.expr(*x, sheet, inner(Ctx::Value), depth + 1);
+                (Expr::Unary(op, Box::new(x)), if kind == Kind::Scalar { Kind::Scalar } else { Kind::Array })
+            }
+            Expr::Binary(op @ (BinOp::Range | BinOp::Union | BinOp::Intersect), a, b) => {
+                let (a, _) = self.expr(*a, sheet, inner(Ctx::Ref), depth + 1);
+                let (b, _) = self.expr(*b, sheet, inner(Ctx::Ref), depth + 1);
+                (Expr::Binary(op, Box::new(a), Box::new(b)), Kind::Ref)
             }
             Expr::Binary(op, a, b) => {
-                let a = self.expr(a, sheet, array_context, depth + 1);
-                let b = self.expr(b, sheet, array_context, depth + 1);
-                let reference = matches!(op, BinOp::Range | BinOp::Union | BinOp::Intersect);
-                let array = reference || a.array || b.array;
-                Shape { array, affected: a.affected || b.affected || (!reference && array && !array_context) }
+                let (a, ka) = self.expr(*a, sheet, inner(Ctx::Value), depth + 1);
+                let (b, kb) = self.expr(*b, sheet, inner(Ctx::Value), depth + 1);
+                let kind = if ka == Kind::Scalar && kb == Kind::Scalar { Kind::Scalar } else { Kind::Array };
+                (Expr::Binary(op, Box::new(a), Box::new(b)), kind)
             }
-            Expr::Call(name, args) => self.call(name, args, sheet, array_context, depth + 1),
-            Expr::Invoke(_, _) => Shape { array: true, affected: false },
-            _ => Shape::default(),
+            Expr::Call(name, args) => self.call(name, args, sheet, ctx, depth + 1),
+            Expr::Invoke(f, args) => {
+                self.certain = false;
+                (Expr::Invoke(f, args), Kind::Array)
+            }
+            other => (other, Kind::Scalar),
         }
     }
 
-    fn call(&mut self, name: &str, args: &[Expr], sheet: usize, array_context: bool, depth: usize) -> Shape {
-        if name == "LET"
-            && args.len() >= 3
-            && let Some((last, bindings)) = args.split_last()
+    fn name(&mut self, n: &str, sheet: usize, depth: usize) -> Kind {
+        if let Some((_, kind)) = self.locals.iter().rev().find(|(key, _)| key.eq_ignore_ascii_case(n)) {
+            return *kind;
+        }
+        let (scope, bare) = match n.rsplit_once('!') {
+            Some((s, name)) => (self.wb.sheet_index(&s.trim_matches('\'').replace("''", "'")).unwrap_or(sheet), name),
+            None => (sheet, n),
+        };
+        if let Some(def) = self.wb.name(bare, scope) {
+            let Ok(expr) = gridcraft_formula::parse(def.formula.trim_start_matches('=')) else { return Kind::Array };
+            // A name's own formula does not see the formula's LET variables.
+            let locals = std::mem::take(&mut self.locals);
+            let (_, kind) = self.expr(expr, def.scope.unwrap_or(scope), Ctx::Array, depth + 1);
+            self.locals = locals;
+            return kind;
+        }
+        if self.wb.table(bare).is_some() { Kind::Ref } else { Kind::Scalar }
+    }
+
+    fn call(&mut self, name: String, args: Vec<Expr>, sheet: usize, ctx: Ctx, depth: usize) -> (Expr, Kind) {
+        if name == "LET" && args.len() >= 3 {
+            return self.let_(args, sheet, ctx, depth);
+        }
+        let lambda_name = !(self.functions.is_builtin)(&name) && !host_function(&name) && self.wb.name(&name, sheet).is_some();
+        if args.len() > 255
+            || lambda_name
+            || matches!(name.as_str(), "LAMBDA" | "MAP" | "REDUCE" | "SCAN" | "BYROW" | "BYCOL" | "MAKEARRAY" | "ISOMITTED")
         {
-            let saved = self.locals.len();
-            let mut affected = false;
-            for pair in bindings.as_chunks::<2>().0 {
-                if let [Expr::Name(n), value] = pair {
-                    let shape = self.expr(value, sheet, array_context, depth);
-                    affected |= shape.affected;
-                    self.locals.push((n.clone(), shape));
-                }
-            }
-            let mut result = self.expr(last, sheet, array_context, depth);
-            result.affected |= affected;
-            self.locals.truncate(saved);
-            return result;
+            self.certain = false;
+            return (Expr::Call(name, args), Kind::Array);
         }
-        let legacy_array =
-            matches!(name, "SUMPRODUCT" | "MMULT" | "MINVERSE" | "MDETERM" | "TRANSPOSE" | "FREQUENCY" | "LINEST" | "LOGEST" | "TREND" | "GROWTH");
-        let mut affected = false;
         let mut lifted = false;
-        let mut shapes = Vec::with_capacity(args.len().min(256));
-        if args.len() > 255 {
-            return Shape { array: true, affected: true };
-        }
-        for (i, arg) in args.iter().enumerate() {
-            let context = array_context || legacy_array || (name == "INDEX" && i == 0);
-            let shape = self.expr(arg, sheet, context, depth);
-            affected |= shape.affected;
-            if shape.array && scalar_arg(name, i) {
-                lifted = true;
-                affected |= !context;
-            }
-            shapes.push(shape);
-        }
-        let first_array = shapes.first().is_some_and(|s| s.array);
-        let array = match name {
-            "INDIRECT" => match args.first() {
-                Some(Expr::Text(text)) if !matches!(args.get(1), Some(Expr::Bool(false))) => {
-                    gridcraft_formula::parse(text).map(|e| self.expr(&e, sheet, array_context, depth).array).unwrap_or(true)
+        let mut kinds = Vec::with_capacity(args.len());
+        let mut out = Vec::with_capacity(args.len());
+        for (i, arg) in args.into_iter().enumerate() {
+            let param = param(&name, i, self.functions);
+            let arg_ctx = match param {
+                Param::Value => Ctx::Value,
+                Param::Ref | Param::First => Ctx::Ref,
+                Param::Pass => ctx,
+                Param::Array => Ctx::Array,
+                Param::Uncertain => {
+                    self.certain = false;
+                    Ctx::Array
                 }
-                _ => true,
+            };
+            let arg_ctx = if ctx == Ctx::Array { Ctx::Array } else { arg_ctx };
+            let (arg, kind) = self.expr(arg, sheet, arg_ctx, depth);
+            // A value parameter given several values evaluates the function once per value.
+            lifted |= match param {
+                Param::Value => kind == Kind::Array || (kind == Kind::Ref && arg_ctx == Ctx::Array),
+                Param::First => kind != Kind::Scalar,
+                _ => false,
+            };
+            kinds.push(kind);
+            out.push(arg);
+        }
+        let first = kinds.first().copied().unwrap_or(Kind::Scalar);
+        let kind = match name.as_str() {
+            "IF" | "CHOOSE" if !lifted => kinds.iter().skip(1).fold(Kind::Scalar, |k, x| k.join(*x)),
+            "ROW" | "COLUMN" => {
+                if first == Kind::Scalar {
+                    Kind::Scalar
+                } else if ctx == Ctx::Array {
+                    Kind::Array
+                } else {
+                    // Outside array evaluation, ROW and COLUMN of a range give its first row or column.
+                    self.inserted = true;
+                    return (at(Expr::Call(name, out)), Kind::Scalar);
+                }
+            }
+            "INDIRECT" => match out.first() {
+                Some(Expr::Text(text)) if !matches!(out.get(1), Some(Expr::Bool(false))) => match gridcraft_formula::parse(text) {
+                    Ok(e) => {
+                        let (_, kind) = self.expr(e, sheet, Ctx::Array, depth);
+                        if kind == Kind::Scalar { Kind::Scalar } else { Kind::Ref }
+                    }
+                    Err(_) => Kind::Ref,
+                },
+                _ => Kind::Ref,
             },
             "OFFSET" => {
-                // Omitted dimensions retain the source reference's shape; unknown dimensions
-                // might become multiple cells on a later calculation.
-                if args.len() <= 3 { first_array } else { !args.get(3).is_some_and(one) || args.get(4).map_or(first_array, |e| !one(e)) }
+                // Omitted dimensions keep the source reference's shape; unknown dimensions might
+                // become several cells on a later calculation.
+                let first_multi = first != Kind::Scalar;
+                let multi = if out.len() <= 3 { first_multi } else { !out.get(3).is_some_and(one) || out.get(4).map_or(first_multi, |e| !one(e)) };
+                if lifted {
+                    Kind::Array
+                } else if multi {
+                    Kind::Ref
+                } else {
+                    Kind::Scalar
+                }
             }
             "INDEX" => {
-                let row = args.get(1);
-                let col = args.get(2);
-                !row.is_some_and(positive) || col.is_some_and(|e| !positive(e)) || (col.is_none() && !args.first().is_some_and(single_column))
+                let row = out.get(1);
+                let col = out.get(2);
+                let multi = !row.is_some_and(positive) || col.is_some_and(|e| !positive(e)) || (col.is_none() && !out.first().is_some_and(one_line));
+                if multi {
+                    if first == Kind::Array { Kind::Array } else { Kind::Ref }
+                } else if lifted {
+                    Kind::Array
+                } else {
+                    Kind::Scalar
+                }
             }
-            "ROW" | "COLUMN" => {
-                affected |= first_array && !array_context;
-                first_array
-            }
-            "IF" | "IFERROR" | "IFNA" | "IFS" | "SWITCH" | "CHOOSE" => shapes.iter().any(|s| s.array),
-            "XLOOKUP" => {
-                lifted
-                    || match (args.get(1), args.get(2)) {
-                        (Some(Expr::Ref(lookup)), Some(Expr::Ref(result))) => {
-                            if lookup.range().width() == 1 {
-                                result.range().width() > 1
-                            } else {
-                                result.range().height() > 1
-                            }
-                        }
-                        _ => true,
-                    }
-            }
+            "XLOOKUP" if !lifted => match (out.get(1), out.get(2)) {
+                (Some(Expr::Ref(lookup)), Some(Expr::Ref(result))) => {
+                    let multi = if lookup.range().width() == 1 { result.range().width() > 1 } else { result.range().height() > 1 };
+                    if multi { Kind::Ref } else { Kind::Scalar }
+                }
+                _ => Kind::Ref,
+            },
+            "ANCHORARRAY" => Kind::Ref,
             "FILTER" | "SORT" | "SORTBY" | "UNIQUE" | "SEQUENCE" | "RANDARRAY" | "VSTACK" | "HSTACK" | "TOROW" | "TOCOL" | "WRAPROWS"
             | "WRAPCOLS" | "TAKE" | "DROP" | "CHOOSEROWS" | "CHOOSECOLS" | "EXPAND" | "GROUPBY" | "PIVOTBY" | "TRANSPOSE" | "MMULT" | "MINVERSE"
-            | "FREQUENCY" | "LINEST" | "LOGEST" | "TREND" | "GROWTH" | "MAP" | "SCAN" | "BYROW" | "BYCOL" | "MAKEARRAY" | "ANCHORARRAY" => true,
-            _ => lifted || self.wb.name(name, sheet).is_some(),
+            | "FREQUENCY" | "LINEST" | "LOGEST" | "TREND" | "GROWTH" => Kind::Array,
+            // A user-defined function may return a range or an array.
+            n if user_function(n, self.functions) => Kind::Array,
+            _ if lifted => Kind::Array,
+            _ => Kind::Scalar,
         };
-        Shape { array, affected }
+        (Expr::Call(name, out), kind)
+    }
+
+    fn let_(&mut self, args: Vec<Expr>, sheet: usize, ctx: Ctx, depth: usize) -> (Expr, Kind) {
+        let saved = self.locals.len();
+        let count = args.len();
+        let mut out = Vec::with_capacity(count);
+        let mut pending: Option<String> = None;
+        let mut kind = Kind::Scalar;
+        for (i, arg) in args.into_iter().enumerate() {
+            if i + 1 == count {
+                let (body, k) = self.expr(arg, sheet, ctx, depth);
+                out.push(body);
+                kind = k;
+            } else if i % 2 == 0 {
+                pending = match &arg {
+                    Expr::Name(n) => Some(n.clone()),
+                    _ => None,
+                };
+                out.push(arg);
+            } else {
+                let value_ctx = if ctx == Ctx::Array { Ctx::Array } else { Ctx::Ref };
+                let (value, k) = self.expr(arg, sheet, value_ctx, depth);
+                if let Some(n) = pending.take() {
+                    self.locals.push((n, k));
+                }
+                out.push(value);
+            }
+        }
+        self.locals.truncate(saved);
+        (Expr::Call("LET".into(), out), kind)
     }
 }
 
@@ -191,12 +428,90 @@ fn one(e: &Expr) -> bool {
     matches!(e, Expr::Number(n) if *n == 1.0)
 }
 
-fn single_column(e: &Expr) -> bool {
-    matches!(e, Expr::Ref(r) if r.range().width() == 1)
+/// A one-column or one-row reference: INDEX with a single index picks one cell of it.
+fn one_line(e: &Expr) -> bool {
+    matches!(e, Expr::Ref(r) if r.range().width() == 1 || r.range().height() == 1)
 }
 
-/// Legacy reference/array-taking parameters. Other parameters consume a single value.
-/// This is file-format policy, not a second evaluator: unknown results are never calculated.
+/// Functions the calculation engine evaluates itself, whose parameters are described here
+/// rather than by the function library's lifting metadata.
+fn host_function(name: &str) -> bool {
+    matches!(
+        name,
+        "IF" | "IFS"
+            | "IFERROR"
+            | "IFNA"
+            | "CHOOSE"
+            | "SWITCH"
+            | "ROW"
+            | "COLUMN"
+            | "ROWS"
+            | "COLUMNS"
+            | "AREAS"
+            | "ISREF"
+            | "ISFORMULA"
+            | "FORMULATEXT"
+            | "SHEET"
+            | "SHEETS"
+            | "OFFSET"
+            | "INDIRECT"
+            | "INDEX"
+            | "CELL"
+            | "TRIMRANGE"
+            | "SUBTOTAL"
+            | "AGGREGATE"
+            | "TEXT"
+            | "LET"
+            | "LAMBDA"
+            | "ISOMITTED"
+            | "MAP"
+            | "REDUCE"
+            | "SCAN"
+            | "BYROW"
+            | "BYCOL"
+            | "MAKEARRAY"
+            | "ANCHORARRAY"
+            | "GETPIVOTDATA"
+    )
+}
+
+/// Not a built-in worksheet function: an add-in or VBA function.
+fn user_function(name: &str, functions: FunctionInfo) -> bool {
+    !host_function(name) && !(functions.is_builtin)(name)
+}
+
+fn param(name: &str, i: usize, functions: FunctionInfo) -> Param {
+    match name {
+        "IF" | "CHOOSE" => {
+            if i == 0 {
+                Param::Value
+            } else {
+                Param::Pass
+            }
+        }
+        "SUMPRODUCT" | "MMULT" | "MINVERSE" | "MDETERM" | "TRANSPOSE" | "FREQUENCY" | "LINEST" | "LOGEST" | "TREND" | "GROWTH" => Param::Array,
+        "INDEX" if i == 0 => Param::Array,
+        // LOOKUP's vectors and AGGREGATE's array form evaluate their arguments as arrays.
+        "LOOKUP" if i > 0 => Param::Array,
+        "AGGREGATE" if i == 2 => Param::Array,
+        "ROW" | "COLUMN" | "ROWS" | "COLUMNS" | "AREAS" | "ISREF" | "ISFORMULA" | "FORMULATEXT" | "SHEET" | "SHEETS" | "TRIMRANGE"
+        | "ANCHORARRAY" => Param::Ref,
+        "CELL" | "GETPIVOTDATA" if i == 1 => Param::Ref,
+        "T" => Param::First,
+        "FILTER" | "SORT" | "SORTBY" | "UNIQUE" | "VSTACK" | "HSTACK" | "TOROW" | "TOCOL" | "WRAPROWS" | "WRAPCOLS" | "TAKE" | "DROP"
+        | "CHOOSEROWS" | "CHOOSECOLS" | "EXPAND" | "GROUPBY" | "PIVOTBY"
+            if !scalar_arg(name, i) =>
+        {
+            Param::Uncertain
+        }
+        n if user_function(n, functions) => Param::Ref,
+        n if scalar_arg(n, i) && (host_function(n) || (functions.is_scalar_arg)(n, i)) => Param::Value,
+        _ => Param::Ref,
+    }
+}
+
+/// Legacy reference/array-taking parameters. Other parameters consume a single value; the
+/// function library's lifting metadata refines this for the functions it implements.
 fn scalar_arg(name: &str, i: usize) -> bool {
     match name {
         "SUM" | "AVERAGE" | "AVERAGEA" | "MIN" | "MINA" | "MAX" | "MAXA" | "COUNT" | "COUNTA" | "COUNTBLANK" | "PRODUCT" | "SUMSQ" | "MEDIAN"
