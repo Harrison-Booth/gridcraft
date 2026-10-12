@@ -146,21 +146,20 @@ fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions
     (legacy.inserted && legacy.certain).then(|| Formula::new(&gridcraft_formula::print(&out)))
 }
 
-/// `e` without its `@`, such that its text (the printer writes only the parentheses the
-/// expression has) reads back as the same expression. Every `@` goes with the parentheses [`at`]
-/// adds, as a legacy formula's reading needs (a union there is always inside the file's own
-/// parentheses); when the text would then read differently (an `@` of a union given outside
-/// parentheses: its comma would separate function arguments or fail to parse), a union keeps them.
+/// `e` without its `@`, when its text (the printer writes only the parentheses the expression
+/// has) reads back as the same expression. Every `@` goes with the parentheses [`at`] adds, as a
+/// legacy formula's reading needs (a union there is always inside the file's own parentheses).
+/// An `@` of a bare union has no such text, so its formula is saved as a dynamic one.
 fn strip(e: &Expr) -> Option<Expr> {
-    let reads_back = |x: Expr| gridcraft_formula::parse(&gridcraft_formula::print(&x)).is_ok_and(|p| p == x).then_some(x);
-    reads_back(remove_at(e.clone(), false)).or_else(|| reads_back(remove_at(e.clone(), true)))
+    let plain = remove_at(e.clone());
+    gridcraft_formula::parse(&gridcraft_formula::print(&plain)).is_ok_and(|p| p == plain).then_some(plain)
 }
 
-/// Removes every `@` and the parentheses [`at`] adds, except a union's when `keep_unions`.
-fn remove_at(e: Expr, keep_unions: bool) -> Expr {
+/// Removes every `@` and the parentheses [`at`] adds.
+fn remove_at(e: Expr) -> Expr {
     e.map(&mut |x| match x {
         Expr::Unary(UnOp::At, inner) => match *inner {
-            Expr::Paren(p) if !atomic(&p) && !(keep_unions && matches!(*p, Expr::Binary(BinOp::Union, ..))) => *p,
+            Expr::Paren(p) if !atomic(&p) => *p,
             other => other,
         },
         other => other,
