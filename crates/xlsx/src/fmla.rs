@@ -80,11 +80,12 @@ fn expr_to_file(e: Expr) -> String {
         // reference that became `#REF!` (its cell was deleted) as plain `#REF!`.
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) if matches!(*r, Expr::Error(_)) => *r,
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) => Expr::Call("_xlfn.ANCHORARRAY".into(), vec![*r]),
-        // Nor an `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)`, and `@(x)` likewise.
+        // Nor an `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)`, and `@(x)` likewise,
+        // except that a union keeps its parentheses (its comma would separate arguments).
         Expr::Unary(gridcraft_formula::UnOp::At, x) => Expr::Call(
             "_xlfn.SINGLE".into(),
             vec![match *x {
-                Expr::Paren(inner) => *inner,
+                Expr::Paren(inner) if !matches!(*inner, Expr::Binary(gridcraft_formula::BinOp::Union, ..)) => *inner,
                 other => other,
             }],
         ),

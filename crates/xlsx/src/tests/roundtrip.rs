@@ -913,6 +913,58 @@ fn legacy_and_dynamic_formulas_keep_their_kind() {
     }
 }
 
+/// The `<f>` text and `cm` attribute of a cell in a written package's first sheet.
+fn written_formula(bytes: &[u8], a: &str) -> (Option<String>, Option<String>) {
+    let mut pkg = Package::open(bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    let c = sheet.child("sheetData").unwrap().kids("row").flat_map(|r| r.kids("c")).find(|c| c.attr("r") == Some(a)).unwrap();
+    (c.child("f").map(|f| f.text.clone()), c.attr("cm").map(str::to_string))
+}
+
+/// A long operator chain is analysed in full (its ranges are intersected), and a legacy formula
+/// the analysis cannot finish is kept as written. Saving writes neither as `_xlfn.SINGLE`, which
+/// pre-dynamic-array Excel shows as #NAME?.
+#[test]
+fn long_and_deeply_nested_legacy_formulas_never_gain_single() {
+    let chain = (1..=70).map(|r| format!("B{r}")).collect::<Vec<_>>().join("+");
+    let nested = format!("{}A1:A3{}", "ABS(".repeat(70), ")".repeat(70));
+    let body = format!(
+        r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="D2"><f>{chain}</f></c></row>
+      <row r="3"><c r="A3"><v>3</v></c><c r="D3"><f>A1:A3+{chain}</f></c></row>
+      <row r="4"><c r="D4"><f>{nested}</f></c></row>
+    </sheetData>"#
+    );
+    let (wb, _) = read_xlsx(&super::minimal(&body, &[], "", "")).unwrap();
+    let text = |wb: &Workbook, a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    assert_eq!(text(&wb, "D2"), chain);
+    assert_eq!(text(&wb, "D3"), format!("@A1:A3+{chain}"));
+    assert_eq!(text(&wb, "D4"), nested);
+    let bytes = write_xlsx(&wb).unwrap();
+    assert_eq!(written_formula(&bytes, "D2"), (Some(chain.clone()), None));
+    assert_eq!(written_formula(&bytes, "D3"), (Some(format!("A1:A3+{chain}")), None));
+    assert_eq!(written_formula(&bytes, "D4").0, Some(nested));
+}
+
+/// `@` of a union keeps the union's parentheses when saved, with or without `_xlfn.SINGLE`:
+/// without them the comma separates function arguments or the text does not parse.
+#[test]
+fn implicit_intersection_of_a_union_keeps_its_parentheses() {
+    let mut wb = Workbook::new();
+    let s = wb.sheet_mut(0).unwrap();
+    let formulas = ["@(A1:A2,C1:C2)+1", "SQRT(@(A1:A2,C1:C2))", "@(A1:A2,C1:C2)+A1:A3"];
+    for (i, f) in formulas.iter().enumerate() {
+        s.cells.set(CellRef::new(4 + i as u32, 4), Cell::formula(Formula::new(f)));
+    }
+    let bytes = write_xlsx(&wb).unwrap();
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    for (i, f) in formulas.iter().enumerate() {
+        let cell = back.sheet(0).unwrap().cell(CellRef::new(4 + i as u32, 4)).and_then(|c| c.formula.as_ref());
+        assert_eq!(cell.map(|c| (c.text.as_str(), c.expr().is_some())), Some((*f, true)), "{f}");
+    }
+}
+
 #[test]
 fn threaded_comments_write_persons_and_linked_legacy_notes() {
     let wb = sample();

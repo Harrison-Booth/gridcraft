@@ -58,6 +58,10 @@ enum Ctx {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Param {
     Value,
+    /// IF's condition: one value even inside array evaluation. Legacy Excel's IF does not
+    /// evaluate its condition as an array inside SUMPRODUCT unless the formula is a
+    /// Ctrl+Shift+Enter array, which this analysis never sees.
+    Condition,
     Ref,
     Array,
     /// The parameter is evaluated like the call itself (IF's and CHOOSE's results).
@@ -94,7 +98,10 @@ pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula
     if !explicit {
         return if legacy.inserted { Export::Dynamic } else { Export::Unchanged };
     }
-    if gridcraft_formula::print(&read_back) == gridcraft_formula::print(&expr) { Export::Legacy(plain) } else { Export::Dynamic }
+    // The text written is `plain` printed: it must read back as `plain` (the printer writes
+    // only the parentheses the expression has).
+    let reparses = gridcraft_formula::parse(&gridcraft_formula::print(&plain)).is_ok_and(|e| e == plain);
+    if reparses && gridcraft_formula::print(&read_back) == gridcraft_formula::print(&expr) { Export::Legacy(plain) } else { Export::Dynamic }
 }
 
 /// Rewrites the legacy cell formulas at `cells` (model sheet index, positions) to their
@@ -129,15 +136,17 @@ fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions
     let expr = formula.expr_arc()?;
     let mut legacy = Legacy::new(wb, at, functions);
     let out = legacy.formula(expr.as_ref().clone(), sheet);
-    // Text round trip: the stored expression is exactly what the text parses to.
-    legacy.inserted.then(|| Formula::new(&gridcraft_formula::print(&out)))
+    // Text round trip: the stored expression is exactly what the text parses to. An analysis
+    // that stopped early leaves the formula as it was read.
+    (legacy.inserted && legacy.certain).then(|| Formula::new(&gridcraft_formula::print(&out)))
 }
 
-/// Removes every `@` (and the parentheses [`at`] adds).
+/// Removes every `@` (and the parentheses [`at`] adds; a union keeps them, as its comma would
+/// otherwise separate function arguments or fail to parse).
 fn strip(e: Expr) -> Expr {
     e.map(&mut |x| match x {
         Expr::Unary(UnOp::At, inner) => match *inner {
-            Expr::Paren(p) if !atomic(&p) => *p,
+            Expr::Paren(p) if !atomic(&p) && !matches!(*p, Expr::Binary(BinOp::Union, ..)) => *p,
             other => other,
         },
         other => other,
@@ -174,7 +183,7 @@ impl<'a> Legacy<'a> {
     /// The whole cell formula: a multi-valued result shows its top-left value.
     fn formula(&mut self, e: Expr, sheet: usize) -> Expr {
         let (e, kind) = self.expr(e, sheet, Ctx::Value, 0);
-        if kind == Kind::Array {
+        if kind == Kind::Array && self.certain {
             self.inserted = true;
             at(e)
         } else {
@@ -184,6 +193,7 @@ impl<'a> Legacy<'a> {
 
     fn expr(&mut self, e: Expr, sheet: usize, ctx: Ctx, depth: usize) -> (Expr, Kind) {
         // Names can be cyclic, and a short chain of repeated names can expand exponentially.
+        // Operator chains do not count towards the depth (see [`Legacy::binary`]).
         if depth >= 64 || self.remaining == 0 {
             self.certain = false;
             return (e, Kind::Array);
@@ -244,17 +254,7 @@ impl<'a> Legacy<'a> {
                 let (x, kind) = self.expr(*x, sheet, inner(Ctx::Value), depth + 1);
                 (Expr::Unary(op, Box::new(x)), if kind == Kind::Scalar { Kind::Scalar } else { Kind::Array })
             }
-            Expr::Binary(op @ (BinOp::Range | BinOp::Union | BinOp::Intersect), a, b) => {
-                let (a, _) = self.expr(*a, sheet, inner(Ctx::Ref), depth + 1);
-                let (b, _) = self.expr(*b, sheet, inner(Ctx::Ref), depth + 1);
-                (Expr::Binary(op, Box::new(a), Box::new(b)), Kind::Ref)
-            }
-            Expr::Binary(op, a, b) => {
-                let (a, ka) = self.expr(*a, sheet, inner(Ctx::Value), depth + 1);
-                let (b, kb) = self.expr(*b, sheet, inner(Ctx::Value), depth + 1);
-                let kind = if ka == Kind::Scalar && kb == Kind::Scalar { Kind::Scalar } else { Kind::Array };
-                (Expr::Binary(op, Box::new(a), Box::new(b)), kind)
-            }
+            Expr::Binary(..) => self.binary(e, sheet, ctx, depth),
             Expr::Call(name, args) => self.call(name, args, sheet, ctx, depth + 1),
             Expr::Invoke(f, args) => {
                 self.certain = false;
@@ -301,7 +301,7 @@ impl<'a> Legacy<'a> {
         for (i, arg) in args.into_iter().enumerate() {
             let param = param(&name, i, self.functions);
             let arg_ctx = match param {
-                Param::Value => Ctx::Value,
+                Param::Value | Param::Condition => Ctx::Value,
                 Param::Ref | Param::First => Ctx::Ref,
                 Param::Pass => ctx,
                 Param::Array => Ctx::Array,
@@ -310,11 +310,11 @@ impl<'a> Legacy<'a> {
                     Ctx::Array
                 }
             };
-            let arg_ctx = if ctx == Ctx::Array { Ctx::Array } else { arg_ctx };
+            let arg_ctx = if ctx == Ctx::Array && param != Param::Condition { Ctx::Array } else { arg_ctx };
             let (arg, kind) = self.expr(arg, sheet, arg_ctx, depth);
             // A value parameter given several values evaluates the function once per value.
             lifted |= match param {
-                Param::Value => kind == Kind::Array || (kind == Kind::Ref && arg_ctx == Ctx::Array),
+                Param::Value | Param::Condition => kind == Kind::Array || (kind == Kind::Ref && arg_ctx == Ctx::Array),
                 Param::First => kind != Kind::Scalar,
                 _ => false,
             };
@@ -387,6 +387,58 @@ impl<'a> Legacy<'a> {
             _ => Kind::Scalar,
         };
         (Expr::Call(name, out), kind)
+    }
+
+    /// A binary operation. `A1+A2+…+A70` parses as a left-nested chain as deep as it is long, so
+    /// the chain's left operands are walked iteratively, at the same depth; each operation still
+    /// costs one node of the budget.
+    fn binary(&mut self, e: Expr, sheet: usize, ctx: Ctx, depth: usize) -> (Expr, Kind) {
+        let operand = |op: BinOp, node: Ctx| {
+            if node == Ctx::Array {
+                Ctx::Array
+            } else if matches!(op, BinOp::Range | BinOp::Union | BinOp::Intersect) {
+                Ctx::Ref
+            } else {
+                Ctx::Value
+            }
+        };
+        // (operator, right operand, the operation's context), outermost first.
+        let mut spine = Vec::new();
+        let mut cur = e;
+        let mut cur_ctx = ctx;
+        while let Expr::Binary(op, a, b) = cur {
+            if !spine.is_empty() {
+                // The caller's `expr` counted the outermost operation.
+                if self.remaining == 0 {
+                    self.certain = false;
+                } else {
+                    self.remaining -= 1;
+                }
+            }
+            spine.push((op, *b, cur_ctx));
+            cur_ctx = operand(op, cur_ctx);
+            cur = *a;
+        }
+        let (mut acc, mut kind) = self.expr(cur, sheet, cur_ctx, depth);
+        for (i, (op, b, node_ctx)) in spine.into_iter().enumerate().rev() {
+            let (b, kb) = self.expr(b, sheet, operand(op, node_ctx), depth);
+            let node = Expr::Binary(op, Box::new(acc), Box::new(b));
+            let k = if matches!(op, BinOp::Range | BinOp::Union | BinOp::Intersect) {
+                Kind::Ref
+            } else if kind == Kind::Scalar && kb == Kind::Scalar {
+                Kind::Scalar
+            } else {
+                Kind::Array
+            };
+            // An inner operation is an operand: `expr` would intersect it there.
+            (acc, kind) = if i > 0 && node_ctx == Ctx::Value && k == Kind::Ref {
+                self.inserted = true;
+                (at(node), Kind::Scalar)
+            } else {
+                (node, k)
+            };
+        }
+        (acc, kind)
     }
 
     fn let_(&mut self, args: Vec<Expr>, sheet: usize, ctx: Ctx, depth: usize) -> (Expr, Kind) {
@@ -482,13 +534,9 @@ fn user_function(name: &str, functions: FunctionInfo) -> bool {
 
 fn param(name: &str, i: usize, functions: FunctionInfo) -> Param {
     match name {
-        "IF" | "CHOOSE" => {
-            if i == 0 {
-                Param::Value
-            } else {
-                Param::Pass
-            }
-        }
+        "IF" if i == 0 => Param::Condition,
+        "CHOOSE" if i == 0 => Param::Value,
+        "IF" | "CHOOSE" => Param::Pass,
         "SUMPRODUCT" | "MMULT" | "MINVERSE" | "MDETERM" | "TRANSPOSE" | "FREQUENCY" | "LINEST" | "LOGEST" | "TREND" | "GROWTH" => Param::Array,
         "INDEX" if i == 0 => Param::Array,
         // LOOKUP's vectors and AGGREGATE's array form evaluate their arguments as arrays.

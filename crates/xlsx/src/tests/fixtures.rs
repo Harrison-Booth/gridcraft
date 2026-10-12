@@ -645,3 +645,19 @@ fn legacy_formulas_use_the_callers_function_facts() {
     let (back, _) = crate::read_xlsx_with(&out, library).unwrap();
     assert_eq!(text(&back, "B2"), "@MYUDF(A1:A3)");
 }
+
+/// Legacy IF does not evaluate its condition as an array inside SUMPRODUCT (that needs
+/// Ctrl+Shift+Enter): the condition is intersected there, while IF's results stay arrays.
+#[test]
+fn legacy_if_condition_is_intersected_inside_array_functions() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c></row>
+      <row r="2"><c r="A2"><v>2</v></c></row>
+      <row r="3"><c r="A3"><v>3</v></c></row>
+      <row r="4"><c r="D4"><f>SUMPRODUCT(IF(A1:A3&gt;1,1,0))</f></c><c r="E4"><f>SUMPRODUCT(IF(A1&gt;1,A1:A3,0))</f></c></row>
+    </sheetData>"#;
+    let (wb, _) = read_xlsx(&minimal(body, &[], "", "")).unwrap();
+    let text = |a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    assert_eq!(text("D4"), "SUMPRODUCT(IF(@A1:A3>1,1,0))");
+    assert_eq!(text("E4"), "SUMPRODUCT(IF(A1>1,A1:A3,0))");
+}
