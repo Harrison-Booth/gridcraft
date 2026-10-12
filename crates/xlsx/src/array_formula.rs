@@ -60,7 +60,8 @@ enum Param {
     Value,
     /// IF's condition: one value even inside array evaluation. Legacy Excel's IF does not
     /// evaluate its condition as an array inside SUMPRODUCT unless the formula is a
-    /// Ctrl+Shift+Enter array, which this analysis never sees.
+    /// Ctrl+Shift+Enter array, which this analysis never sees. A name's definition is still
+    /// evaluated as an array throughout ([`Legacy::kind_of`]).
     Condition,
     Ref,
     Array,
@@ -89,7 +90,14 @@ pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula
     let Some(expr) = formula.expr_arc() else { return Export::Unchanged };
     let mut explicit = false;
     expr.walk(&mut |e| explicit |= matches!(e, Expr::Unary(UnOp::At, _)));
-    let plain = if explicit { strip(expr.as_ref().clone()) } else { expr.as_ref().clone() };
+    let plain = if explicit {
+        match strip(&expr) {
+            Some(plain) => plain,
+            None => return Export::Dynamic,
+        }
+    } else {
+        expr.as_ref().clone()
+    };
     let mut legacy = Legacy::new(wb, at, functions);
     let read_back = legacy.formula(plain.clone(), sheet);
     if !legacy.certain {
@@ -98,10 +106,7 @@ pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula
     if !explicit {
         return if legacy.inserted { Export::Dynamic } else { Export::Unchanged };
     }
-    // The text written is `plain` printed: it must read back as `plain` (the printer writes
-    // only the parentheses the expression has).
-    let reparses = gridcraft_formula::parse(&gridcraft_formula::print(&plain)).is_ok_and(|e| e == plain);
-    if reparses && gridcraft_formula::print(&read_back) == gridcraft_formula::print(&expr) { Export::Legacy(plain) } else { Export::Dynamic }
+    if gridcraft_formula::print(&read_back) == gridcraft_formula::print(&expr) { Export::Legacy(plain) } else { Export::Dynamic }
 }
 
 /// Rewrites the legacy cell formulas at `cells` (model sheet index, positions) to their
@@ -141,12 +146,21 @@ fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions
     (legacy.inserted && legacy.certain).then(|| Formula::new(&gridcraft_formula::print(&out)))
 }
 
-/// Removes every `@` (and the parentheses [`at`] adds; a union keeps them, as its comma would
-/// otherwise separate function arguments or fail to parse).
-fn strip(e: Expr) -> Expr {
+/// `e` without its `@`, such that its text (the printer writes only the parentheses the
+/// expression has) reads back as the same expression. Every `@` goes with the parentheses [`at`]
+/// adds, as a legacy formula's reading needs (a union there is always inside the file's own
+/// parentheses); when the text would then read differently (an `@` of a union given outside
+/// parentheses: its comma would separate function arguments or fail to parse), a union keeps them.
+fn strip(e: &Expr) -> Option<Expr> {
+    let reads_back = |x: Expr| gridcraft_formula::parse(&gridcraft_formula::print(&x)).is_ok_and(|p| p == x).then_some(x);
+    reads_back(remove_at(e.clone(), false)).or_else(|| reads_back(remove_at(e.clone(), true)))
+}
+
+/// Removes every `@` and the parentheses [`at`] adds, except a union's when `keep_unions`.
+fn remove_at(e: Expr, keep_unions: bool) -> Expr {
     e.map(&mut |x| match x {
         Expr::Unary(UnOp::At, inner) => match *inner {
-            Expr::Paren(p) if !atomic(&p) && !matches!(*p, Expr::Binary(BinOp::Union, ..)) => *p,
+            Expr::Paren(p) if !atomic(&p) && !(keep_unions && matches!(*p, Expr::Binary(BinOp::Union, ..))) => *p,
             other => other,
         },
         other => other,
@@ -173,11 +187,23 @@ struct Legacy<'a> {
     inserted: bool,
     /// The analysis finished and covered only established legacy semantics.
     certain: bool,
+    /// Analysing an expression whose rewrite is discarded (see [`Legacy::kind_of`]).
+    discarded: bool,
 }
 
 impl<'a> Legacy<'a> {
     fn new(wb: &'a Workbook, at: CellRef, functions: FunctionInfo) -> Self {
-        Legacy { wb, at, functions, remaining: 4096, locals: Vec::new(), inserted: false, certain: true }
+        Legacy { wb, at, functions, remaining: 4096, locals: Vec::new(), inserted: false, certain: true, discarded: false }
+    }
+
+    /// The kind of an expression analysed only for its kind (a name's definition, INDIRECT's
+    /// text), evaluated as legacy Excel evaluates a name: as an array throughout, IF's condition
+    /// included. Its rewrite is discarded, so it inserts no `@` into the formula.
+    fn kind_of(&mut self, e: Expr, sheet: usize, depth: usize) -> Kind {
+        let outer = (std::mem::replace(&mut self.discarded, true), self.inserted);
+        let (_, kind) = self.expr(e, sheet, Ctx::Array, depth);
+        (self.discarded, self.inserted) = outer;
+        kind
     }
 
     /// The whole cell formula: a multi-valued result shows its top-left value.
@@ -276,7 +302,7 @@ impl<'a> Legacy<'a> {
             let Ok(expr) = gridcraft_formula::parse(def.formula.trim_start_matches('=')) else { return Kind::Array };
             // A name's own formula does not see the formula's LET variables.
             let locals = std::mem::take(&mut self.locals);
-            let (_, kind) = self.expr(expr, def.scope.unwrap_or(scope), Ctx::Array, depth + 1);
+            let kind = self.kind_of(expr, def.scope.unwrap_or(scope), depth + 1);
             self.locals = locals;
             return kind;
         }
@@ -310,7 +336,7 @@ impl<'a> Legacy<'a> {
                     Ctx::Array
                 }
             };
-            let arg_ctx = if ctx == Ctx::Array && param != Param::Condition { Ctx::Array } else { arg_ctx };
+            let arg_ctx = if ctx == Ctx::Array && (param != Param::Condition || self.discarded) { Ctx::Array } else { arg_ctx };
             let (arg, kind) = self.expr(arg, sheet, arg_ctx, depth);
             // A value parameter given several values evaluates the function once per value.
             lifted |= match param {
@@ -338,7 +364,7 @@ impl<'a> Legacy<'a> {
             "INDIRECT" => match out.first() {
                 Some(Expr::Text(text)) if !matches!(out.get(1), Some(Expr::Bool(false))) => match gridcraft_formula::parse(text) {
                     Ok(e) => {
-                        let (_, kind) = self.expr(e, sheet, Ctx::Array, depth);
+                        let kind = self.kind_of(e, sheet, depth);
                         if kind == Kind::Scalar { Kind::Scalar } else { Kind::Ref }
                     }
                     Err(_) => Kind::Ref,

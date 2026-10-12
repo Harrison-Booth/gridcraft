@@ -965,6 +965,29 @@ fn implicit_intersection_of_a_union_keeps_its_parentheses() {
     }
 }
 
+/// A legacy formula read from a file saves back exactly as it was read, without `cm` or
+/// `_xlfn.SINGLE`: a union already in parentheses where one value is expected, and a name whose
+/// definition holds IF of a range (legacy Excel evaluates a name's definition as an array).
+#[test]
+fn legacy_unions_in_parentheses_and_names_with_if_save_as_read() {
+    let body = r#"<sheetData>
+      <row r="1"><c r="A1"><v>1</v></c><c r="C1"><v>4</v></c><c r="E1"><f>SQRT((A1:A2,C1:C2))</f></c></row>
+      <row r="2"><c r="A2"><v>2</v></c><c r="C2"><v>9</v></c><c r="E2"><f>(A1:A2,C1:C2)+1</f></c></row>
+      <row r="3"><c r="A3"><v>3</v></c><c r="E3"><f>SUM(Flag)</f></c><c r="F3"><f>SQRT(Flag)</f></c></row>
+    </sheetData>"#;
+    let names = r#"<definedNames><definedName name="Flag">IF(Data!$A$1:$A$3&gt;1,1,0)</definedName></definedNames>"#;
+    let (wb, _) = read_xlsx(&super::minimal(body, &[], "", names)).unwrap();
+    let text = |a: &str| wb.sheet(0).unwrap().cell(at(a)).and_then(|c| c.formula.as_ref()).map(|f| f.text.clone()).unwrap();
+    let bytes = write_xlsx(&wb).unwrap();
+    let cases = [("E1", "SQRT((A1:A2,C1:C2))"), ("E2", "(A1:A2,C1:C2)+1"), ("E3", "SUM(Flag)"), ("F3", "SQRT(Flag)")];
+    let wrong: Vec<_> =
+        cases.iter().map(|(a, f)| (*a, *f, written_formula(&bytes, a))).filter(|(_, f, w)| *w != (Some(f.to_string()), None)).collect();
+    assert!(wrong.is_empty(), "{wrong:?}");
+    assert_eq!(text("F3"), "@SQRT(Flag)");
+    let (xml, _) = sheet1_xml(&bytes);
+    assert!(!xml.contains("SINGLE") && !xml.contains("cm=") && !xml.contains("t=\"array\""), "{xml}");
+}
+
 #[test]
 fn threaded_comments_write_persons_and_linked_legacy_notes() {
     let wb = sample();
