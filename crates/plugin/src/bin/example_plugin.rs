@@ -21,6 +21,8 @@ fn manifest() -> Json {
         "name": "Example plugin",
         "version": env!("CARGO_PKG_VERSION"),
         "description": "Reference plugin: a few functions and commands",
+        "author": "GridCraft contributors",
+        "homepage": "https://github.com/storytold/gridcraft/blob/main/docs/plugins.md",
         "run": {"command": exe},
         "functions": [
             {"name": "EXAMPLE.HELLO", "signature": "EXAMPLE.HELLO(name)", "description": "Greets name", "minArgs": 1, "maxArgs": 1},

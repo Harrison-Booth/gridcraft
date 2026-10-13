@@ -1,6 +1,6 @@
 # Plugins
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (ribbon groups, tabs and menu items from plugins) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (Options › Add-ins: turn plugins off and on, documentation links) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -31,14 +31,24 @@ A folder holding `plugin.json` is one plugin. Otherwise, each of its subfolders 
 a plugin. Loading only reads the manifest. The plugin's process starts the first time one of its
 functions or commands is used.
 
-In the app, **Automate › Add-ins** lists the loaded plugins, runs their commands, and loads or
-unloads a plugin. Commands do the same:
+**File › Options › Add-ins** lists the installed plugins with their version, author and status.
+**Documentation** opens a plugin's web page (its `homepage`), and **Deactivate** turns a plugin
+off: it stays listed, but its functions (cells show `#NAME?`), commands, ribbon buttons and menu
+items are gone and its process stops. **Activate** brings it back. The app remembers which
+plugins are off (`disabledPlugins` in `prefs.json`), so they stay off at the next start and when
+loaded again.
+
+**Automate › Add-ins** (also **Manage Add-ins…** in Options) lists the loaded plugins with their
+functions, runs their commands, turns them off and on, and loads or unloads a plugin. Commands do
+the same:
 
 | Command | Params | Does |
 |---|---|---|
 | `plugins.list` (also `home.addIns`) | `{}` | The loaded plugins with their status, functions and commands |
 | `plugins.load` | `{path}` | Loads the plugin in a folder (or a manifest file). A plugin with the same id is replaced |
-| `plugins.unload` | `{id}` | Unloads a plugin and stops its process |
+| `plugins.unload` | `{id}` | Unloads a plugin and stops its process (until the next start) |
+| `plugins.setEnabled` | `{id, enabled}` | Turns a plugin off or back on, and remembers it in the preferences |
+| `plugins.openHomepage` | `{id}` | Opens the plugin's web page in the browser |
 | `plugins.run` | `{plugin, command, params?}` | Runs a plugin command (one undoable step) |
 
 Open workbooks that call a plugin's functions are recalculated when it loads or unloads.
@@ -61,6 +71,8 @@ Install plugins only from people you trust. GridCraft doesn't sandbox them.
   "name": "Finance tools",
   "version": "1.2.0",
   "description": "Prices and rates",
+  "author": "Example Corp",
+  "homepage": "https://example.org/finance-plugin",
   "run": {"command": "python3", "args": ["main.py"]},
   "functions": [
     {
@@ -95,6 +107,7 @@ Install plugins only from people you trust. GridCraft doesn't sandbox them.
 | Field | Meaning |
 |---|---|
 | `id` | Unique id: 1–128 letters, digits, `.`, `-`, `_`. Reverse-domain style is recommended |
+| `author`, `homepage` | Shown in Options › Add-ins. `homepage` is an `http://` or `https://` link to the plugin's documentation |
 | `run.command`, `run.args` | The program to start. A command containing `/` or `\` is relative to the plugin folder; a bare name is looked up on `PATH`. It runs in the plugin folder, with `GRIDCRAFT_PLUGIN_DIR` and `GRIDCRAFT_VERSION` set |
 | `functions[].name` | The name formulas use (case-insensitive). It starts with a letter and holds letters, digits, `.` and `_`. It can't be a built-in function or another plugin's function. Prefix it with your own namespace (`FIN.`) |
 | `minArgs`, `maxArgs` | Argument count (default 0 and 255). Other counts give `#VALUE!` without calling the plugin |
@@ -222,5 +235,6 @@ for line in sys.stdin:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Options › Add-ins: turn plugins off and on (remembered), `homepage` and `author`, `plugins.setEnabled`, `plugins.openHomepage` |
 | 2026-10-13 | minor | `ui` in the manifest: ribbon groups on built-in or new tabs, items in the cell, row, column and sheet-tab menus |
 | 2026-10-13 | major | Created: out-of-process plugin host, manifest, protocol 1 (functions, commands), Add-ins dialog |

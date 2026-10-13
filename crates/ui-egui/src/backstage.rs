@@ -973,6 +973,8 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
         app.grid.toggle_autosave();
     }
+    ui.add_space(18.0);
+    add_ins(app, ui);
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
     ui.add_space(18.0);
     section(ui, lang, "Formulas");
@@ -994,6 +996,52 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+/// Options › Add-ins: the loaded plugins, each with its web page and an Activate/Deactivate button.
+fn add_ins(app: &mut SheetApp, ui: &mut Ui) {
+    let lang = app.ui.language;
+    section(ui, lang, "Add-ins");
+    let plugins = gridcraft_engine::plugin::list();
+    if plugins.is_empty() {
+        dim(ui, lang.tr("No add-ins are installed. Put a plugin folder in the plugins folder of the settings."));
+    }
+    egui::Grid::new("backstage_options_addins").num_columns(3).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        for p in &plugins {
+            let m = &p.manifest;
+            let on = p.enabled();
+            ui.vertical(|ui| {
+                let mut title = m.name.clone();
+                if !m.version.is_empty() {
+                    title = format!("{title} {}", m.version);
+                }
+                ui.label(RichText::new(title).strong());
+                let mut about = vec![if on { lang.tr("Active").to_string() } else { lang.tr("Inactive").to_string() }];
+                if !m.author.is_empty() {
+                    about.push(m.author.clone());
+                }
+                about.push(m.id.clone());
+                dim(ui, &about.join(" · "));
+                if !m.description.is_empty() {
+                    ui.label(&m.description);
+                }
+            });
+            if m.homepage.trim().is_empty() {
+                ui.label("");
+            } else if ui.link(lang.tr("Documentation")).on_hover_text(m.homepage.trim()).clicked() {
+                app.run_or_alert("plugins.openHomepage", json!({"id": m.id}));
+            }
+            let label = if on { "Deactivate" } else { "Activate" };
+            if ui.button(lang.tr(label)).clicked() {
+                app.run_or_alert("plugins.setEnabled", json!({"id": m.id, "enabled": !on}));
+            }
+            ui.end_row();
+        }
+    });
+    ui.add_space(6.0);
+    if ui.button(lang.tr("Manage Add-ins…")).clicked() {
+        app.open_dialog("addIns", json!({}));
+    }
 }
 
 #[cfg(test)]

@@ -1543,9 +1543,17 @@ fn add_ins(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(s("name")).strong());
                 ui.weak(format!("{} · {}", s("version"), s("status")));
+                let on = p.get("enabled").and_then(Json::as_bool).unwrap_or(true);
+                if ui.small_button(if on { "Deactivate" } else { "Activate" }).clicked() {
+                    app.run_or_alert("plugins.setEnabled", json!({"id": id, "enabled": !on}));
+                    refresh = true;
+                }
                 if ui.small_button("Unload").clicked() {
                     app.run_or_alert("plugins.unload", json!({"id": id}));
                     refresh = true;
+                }
+                if !s("homepage").is_empty() && ui.link("Documentation").on_hover_text(s("homepage")).clicked() {
+                    app.run_or_alert("plugins.openHomepage", json!({"id": id}));
                 }
             });
             if !s("description").is_empty() {
@@ -1566,8 +1574,10 @@ fn add_ins(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
             for c in p.get("commands").and_then(Json::as_array).into_iter().flatten() {
                 let label = c.get("label").and_then(Json::as_str).unwrap_or("");
                 let cid = c.get("id").and_then(Json::as_str).unwrap_or("");
+                let on = p.get("enabled").and_then(Json::as_bool).unwrap_or(true);
                 ui.horizontal(|ui| {
-                    if ui.button(label).on_hover_text(c.get("description").and_then(Json::as_str).unwrap_or("")).clicked() {
+                    if ui.add_enabled(on, egui::Button::new(label)).on_hover_text(c.get("description").and_then(Json::as_str).unwrap_or("")).clicked()
+                    {
                         app.run_or_alert("plugins.run", json!({"plugin": id, "command": cid}));
                         refresh = true;
                     }

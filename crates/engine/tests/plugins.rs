@@ -15,10 +15,11 @@ fn main() {
         serve();
         return;
     }
-    let tests: [(&str, fn()); 3] = [
+    let tests: [(&str, fn()); 4] = [
         ("functions_recalculate_when_the_plugin_arrives_and_leaves", functions_recalculate_when_the_plugin_arrives_and_leaves),
         ("plugin_commands_are_one_undo_step", plugin_commands_are_one_undo_step),
         ("a_failing_plugin_command_changes_nothing", a_failing_plugin_command_changes_nothing),
+        ("plugins_turn_off_and_on_and_the_preferences_remember", plugins_turn_off_and_on_and_the_preferences_remember),
     ];
     for (name, t) in tests {
         t();
@@ -60,7 +61,7 @@ fn load(s: &mut Session) {
     std::fs::create_dir_all(&dir).unwrap();
     let exe = std::env::current_exe().unwrap();
     let manifest = json!({
-        "id": PLUGIN, "name": "Engine test", "run": {"command": exe, "args": ["--serve-plugin"]},
+        "id": PLUGIN, "name": "Engine test", "homepage": "https://example.org/docs", "run": {"command": exe, "args": ["--serve-plugin"]},
         "functions": [{"name": "TESTPLUG.DOUBLE", "minArgs": 1, "maxArgs": 1}],
         "commands": [{"id": "fill", "label": "Fill"}, {"id": "broken", "label": "Broken"}],
     });
@@ -123,4 +124,38 @@ fn a_failing_plugin_command_changes_nothing() {
     assert!(s.execute("plugins.run", json!({"plugin": PLUGIN, "command": "nope"})).is_err());
     assert!(s.execute("plugins.run", json!({})).is_err());
     s.execute("plugins.unload", json!({"id": PLUGIN})).unwrap();
+}
+
+fn plugins_turn_off_and_on_and_the_preferences_remember() {
+    let mut s = Session::new();
+    s.new_workbook();
+    load(&mut s);
+    s.execute("cell.set", json!({"cell": "A1", "input": "=TESTPLUG.DOUBLE(3)"})).unwrap();
+    assert_eq!(value(&s, "A1"), Value::number(6.0));
+
+    let off = s.execute("plugins.setEnabled", json!({"id": PLUGIN, "enabled": false})).unwrap();
+    assert_eq!((off["enabled"].clone(), off["status"].clone()), (json!(false), json!("off")));
+    assert_eq!(value(&s, "A1"), Value::Error(CellError::Name), "its functions go");
+    assert_eq!(s.prefs.disabled_plugins, vec![PLUGIN.to_string()]);
+    let e = s.execute("plugins.run", json!({"plugin": PLUGIN, "command": "fill"})).unwrap_err().to_string();
+    assert!(e.contains("turned off"), "{e}");
+    assert!(s.execute("plugins.list", json!({})).unwrap().as_array().unwrap().iter().any(|p| p["id"] == PLUGIN), "still listed");
+
+    // Loading it again (as at the next start) keeps it off.
+    load(&mut s);
+    assert!(!gridcraft_engine::plugin::get(PLUGIN).unwrap().enabled());
+    gridcraft_engine::cmd::plugins::apply_prefs(&s.prefs);
+    assert!(!gridcraft_engine::plugin::get(PLUGIN).unwrap().enabled());
+
+    let on = s.execute("plugins.setEnabled", json!({"id": PLUGIN, "enabled": true})).unwrap();
+    assert_eq!(on["enabled"], true);
+    assert_eq!(value(&s, "A1"), Value::number(6.0));
+    assert!(s.prefs.disabled_plugins.is_empty());
+    assert!(s.execute("plugins.setEnabled", json!({"id": PLUGIN})).is_err());
+
+    s.ui_requests.clear();
+    assert_eq!(s.execute("plugins.openHomepage", json!({"id": PLUGIN})).unwrap()["url"], "https://example.org/docs");
+    assert!(s.ui_requests.contains(&gridcraft_engine::UiRequest::OpenUrl("https://example.org/docs".into())));
+    s.execute("plugins.unload", json!({"id": PLUGIN})).unwrap();
+    assert!(s.execute("plugins.openHomepage", json!({"id": PLUGIN})).is_err());
 }

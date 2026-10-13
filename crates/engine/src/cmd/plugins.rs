@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gridcraft_core::RangeRef;
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, always, bad, cmd, str_param};
+use super::{CommandSpec, always, bad, bool_param, cmd, str_param};
 use crate::{Result, Session, UiRequest};
 
 /// Most selected cells whose values a plugin command receives.
@@ -17,6 +17,16 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "plugins.list", "Plugins", [], None, "{} → [{id, name, version, description, dir, status, functions, commands}]", always, |_, _| Ok(list())),
         cmd!(query "plugins.load", "Load Plugin", [], None, "{path} → the plugin. `path`: a folder holding plugin.json, or the manifest", always, load),
         cmd!(query "plugins.unload", "Unload Plugin", [], None, "{id}", always, unload),
+        cmd!(
+            query "plugins.setEnabled",
+            "Turn Plugin On or Off",
+            [],
+            None,
+            "{id, enabled} → the plugin. Off, a plugin stays listed but its functions, commands, ribbon and menu items are gone; remembered in the preferences",
+            always,
+            set_enabled
+        ),
+        cmd!(query "plugins.openHomepage", "Plugin Documentation", [], None, "{id} → {url}. Opens the plugin's web page (its manifest's `homepage`) in the browser", always, open_homepage),
         cmd!(
             "plugins.run",
             "Run Plugin Command",
@@ -37,6 +47,10 @@ pub fn list() -> Json {
 fn load(s: &mut Session, p: &Json) -> Result<Json> {
     let path = str_param(p, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad("plugins.load", "missing `path`"))?;
     let plugin = gridcraft_plugin::load(std::path::Path::new(path)).map_err(|e| bad("plugins.load", e))?;
+    // A plugin turned off stays off when it's loaded again.
+    if s.prefs.disabled_plugins.contains(&plugin.manifest.id) {
+        let _ = gridcraft_plugin::set_enabled(&plugin.manifest.id, false);
+    }
     recalc_users(s, &plugin.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>());
     Ok(plugin.info())
 }
@@ -47,6 +61,45 @@ fn unload(s: &mut Session, p: &Json) -> Result<Json> {
     gridcraft_plugin::unload(id);
     recalc_users(s, &plugin.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>());
     Ok(json!({"unloaded": id}))
+}
+
+fn set_enabled(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "plugins.setEnabled";
+    let id = str_param(p, "id").ok_or_else(|| bad(ID, "missing `id`"))?;
+    let on = bool_param(p, "enabled").ok_or_else(|| bad(ID, "missing `enabled` (true or false)"))?;
+    let plugin = gridcraft_plugin::get(id).ok_or_else(|| bad(ID, format!("no plugin `{id}` is loaded")))?;
+    let changed = gridcraft_plugin::set_enabled(id, on).map_err(|e| bad(ID, e))?;
+    s.prefs.disabled_plugins.retain(|x| x != id);
+    if !on {
+        s.prefs.disabled_plugins.push(id.to_string());
+    }
+    if changed {
+        recalc_users(s, &plugin.manifest.functions.iter().map(|f| f.name.clone()).collect::<Vec<_>>());
+    }
+    Ok(plugin.info())
+}
+
+fn open_homepage(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "plugins.openHomepage";
+    let id = str_param(p, "id").ok_or_else(|| bad(ID, "missing `id`"))?;
+    let plugin = gridcraft_plugin::get(id).ok_or_else(|| bad(ID, format!("no plugin `{id}` is loaded")))?;
+    let url = plugin.manifest.homepage.trim();
+    if url.is_empty() {
+        return Err(bad(ID, format!("plugin {id} has no web page")));
+    }
+    s.ui_requests.push(UiRequest::OpenUrl(url.to_string()));
+    Ok(json!({"url": url}))
+}
+
+/// Turns off the loaded plugins the preferences list as off (at startup, after loading them).
+pub fn apply_prefs(prefs: &crate::Prefs) {
+    for id in &prefs.disabled_plugins {
+        if gridcraft_plugin::get(id).is_some()
+            && let Err(e) = gridcraft_plugin::set_enabled(id, false)
+        {
+            log::warn!("plugin {id}: {e}");
+        }
+    }
 }
 
 /// Recalculates the open workbooks with formulas that call one of `names`, so their cells pick

@@ -24,7 +24,7 @@ pub struct Item {
 /// The tabs plugins add (names not among the built-in tabs), in load order.
 pub fn extra_tabs() -> Vec<String> {
     let mut tabs: Vec<String> = Vec::new();
-    for p in plugin::list() {
+    for p in plugin::list().into_iter().filter(|p| p.enabled()) {
         for g in &p.manifest.ui.ribbon {
             if !plugin::RIBBON_TABS.contains(&g.tab.as_str()) && !tabs.contains(&g.tab) {
                 tabs.push(g.tab.clone());
@@ -37,7 +37,7 @@ pub fn extra_tabs() -> Vec<String> {
 /// The plugin groups on `tab`: (group name, buttons).
 pub fn groups(tab: &str) -> Vec<(String, Vec<Item>)> {
     let mut out = Vec::new();
-    for p in plugin::list() {
+    for p in plugin::list().into_iter().filter(|p| p.enabled()) {
         let m = &p.manifest;
         for g in m.ui.ribbon.iter().filter(|g| g.tab == tab) {
             let buttons = g
@@ -65,7 +65,7 @@ pub fn groups(tab: &str) -> Vec<(String, Vec<Item>)> {
 /// The plugin items for a right-click menu.
 pub fn menu_items(kind: MenuKind) -> Vec<Item> {
     let mut out = Vec::new();
-    for p in plugin::list() {
+    for p in plugin::list().into_iter().filter(|p| p.enabled()) {
         let m = &p.manifest;
         for item in m.ui.menus.iter().filter(|i| i.menu == kind) {
             let decl = m.command(&item.command);

@@ -57,6 +57,45 @@ fn ui_declarations_must_name_the_plugins_commands() {
 }
 
 #[test]
+fn homepages_must_be_web_links() {
+    let with = |url: &str| json!({"id": "t.home", "name": "T", "run": {"command": "true"}, "homepage": url}).to_string();
+    assert_eq!(Manifest::parse(&with("https://example.org/doc")).unwrap().homepage, "https://example.org/doc");
+    assert!(Manifest::parse(&with("")).is_ok());
+    for bad in ["javascript:alert(1)", "file:///etc/passwd", "example.org", "https://a b"] {
+        assert!(Manifest::parse(&with(bad)).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn turned_off_plugins_lose_their_functions_and_commands() {
+    let m = Manifest::parse(
+        &json!({"id": "t.toggle", "name": "T", "run": {"command": "./never-started"},
+            "functions": [{"name": "TOGGLE.F"}], "commands": [{"id": "go", "label": "Go"}]})
+        .to_string(),
+    )
+    .unwrap();
+    crate::install(m, std::env::temp_dir()).unwrap();
+    assert!(gridcraft_calc::is_known_function("TOGGLE.F"));
+    assert_eq!(crate::set_enabled("t.toggle", false), Ok(true));
+    assert_eq!(crate::set_enabled("t.toggle", false), Ok(false));
+    assert!(!gridcraft_calc::is_known_function("TOGGLE.F"));
+    assert_eq!(crate::get("t.toggle").map(|p| p.status()), Some("off".into()));
+    assert!(crate::run_command("t.toggle", "go", json!({}), json!({})).unwrap_err().contains("turned off"));
+    assert_eq!(crate::set_enabled("t.toggle", true), Ok(true));
+    assert!(gridcraft_calc::is_known_function("TOGGLE.F"));
+    // Off, its function name is free; another plugin taking it blocks turning it back on.
+    crate::set_enabled("t.toggle", false).unwrap();
+    let other =
+        Manifest::parse(&json!({"id": "t.toggle2", "name": "T2", "run": {"command": "x"}, "functions": [{"name": "TOGGLE.F"}]}).to_string()).unwrap();
+    crate::install(other, std::env::temp_dir()).unwrap();
+    assert!(crate::set_enabled("t.toggle", true).is_err());
+    assert!(crate::unload("t.toggle"));
+    assert!(gridcraft_calc::is_known_function("TOGGLE.F"), "unloading the off plugin leaves the other's function");
+    assert!(crate::unload("t.toggle2"));
+    assert!(crate::set_enabled("t.toggle", true).is_err());
+}
+
+#[test]
 fn built_in_function_names_are_refused() {
     let m = Manifest::parse(&manifest(json!([{"name": "SUM"}]))).unwrap();
     let e = crate::install(m, std::env::temp_dir()).err().unwrap();

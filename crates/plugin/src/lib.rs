@@ -61,6 +61,11 @@ pub struct Manifest {
     pub version: String,
     #[serde(default)]
     pub description: String,
+    /// The plugin's web page (documentation, support): an `https://` or `http://` URL.
+    #[serde(default)]
+    pub homepage: String,
+    #[serde(default)]
+    pub author: String,
     pub run: RunSpec,
     #[serde(default)]
     pub functions: Vec<FunctionDecl>,
@@ -232,6 +237,14 @@ impl Manifest {
         if self.name.trim().is_empty() {
             return Err(format!("{MANIFEST}: `name` is empty"));
         }
+        let homepage = self.homepage.trim();
+        if !homepage.is_empty()
+            && (!(homepage.starts_with("https://") || homepage.starts_with("http://"))
+                || homepage.len() > 2048
+                || homepage.contains(char::is_whitespace))
+        {
+            return Err(format!("{MANIFEST}: `homepage` must be an http(s) URL"));
+        }
         if self.run.command.trim().is_empty() {
             return Err(format!("{MANIFEST}: `run.command` is empty"));
         }
@@ -311,6 +324,8 @@ pub struct Plugin {
     pub dir: PathBuf,
     state: Mutex<(State, u32)>,
     cache: Mutex<HashMap<String, Value>>,
+    /// Off: listed, but its functions, commands and ribbon and menu items are gone.
+    enabled: std::sync::atomic::AtomicBool,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -322,12 +337,22 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 
 impl Plugin {
     fn new(manifest: Manifest, dir: PathBuf) -> Plugin {
-        Plugin { manifest, dir, state: Mutex::new((State::Idle, 0)), cache: Mutex::new(HashMap::new()) }
+        Plugin {
+            manifest,
+            dir,
+            state: Mutex::new((State::Idle, 0)),
+            cache: Mutex::new(HashMap::new()),
+            enabled: std::sync::atomic::AtomicBool::new(true),
+        }
     }
 
     /// Sends a request and waits for its result, starting the plugin when needed.
     fn request(&self, method: &str, params: Json, timeout: Duration) -> Result<Json, String> {
         let mut guard = lock(&self.state);
+        // Checked under the lock: turning off stores the flag, then stops the process under it.
+        if !self.enabled() {
+            return Err(format!("plugin {} is turned off", self.manifest.id));
+        }
         let (state, failures) = &mut *guard;
         if let State::Failed(why) = state {
             return Err(why.clone());
@@ -395,7 +420,15 @@ impl Plugin {
     }
 
     /// `ready` (not started), `running`, or `failed: …`.
+    /// False once turned off with [`set_enabled`].
+    pub fn enabled(&self) -> bool {
+        self.enabled.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub fn status(&self) -> String {
+        if !self.enabled() {
+            return "off".into();
+        }
         match &lock(&self.state).0 {
             State::Idle => "ready".into(),
             State::Running(_) => "running".into(),
@@ -411,6 +444,9 @@ impl Plugin {
             "name": m.name,
             "version": m.version,
             "description": m.description,
+            "homepage": m.homepage,
+            "author": m.author,
+            "enabled": self.enabled(),
             "dir": self.dir.display().to_string(),
             "status": self.status(),
             "functions": m.functions.iter().map(|f| json!({
@@ -505,12 +541,45 @@ pub fn install(manifest: Manifest, dir: PathBuf) -> Result<Arc<Plugin>, String> 
         unload(&manifest.id);
     }
     let plugin = Arc::new(Plugin::new(manifest, dir));
-    for f in &plugin.manifest.functions {
-        gridcraft_calc::external::register(&f.name, Arc::new(PluginFunction { plugin: plugin.clone(), decl: f.clone() }));
-    }
+    register_functions(&plugin);
     lock(loaded()).push(plugin.clone());
     log::info!("plugin {} {} loaded from {}", plugin.manifest.id, plugin.manifest.version, plugin.dir.display());
     Ok(plugin)
+}
+
+fn register_functions(plugin: &Arc<Plugin>) {
+    for f in &plugin.manifest.functions {
+        gridcraft_calc::external::register(&f.name, Arc::new(PluginFunction { plugin: plugin.clone(), decl: f.clone() }));
+    }
+}
+
+/// Turns a loaded plugin off or back on. Off, it stays listed but its functions are gone
+/// (formulas show `#NAME?` after the next recalculation), its commands are refused and its process
+/// is stopped. Turning it on fails when another plugin has taken one of its function names since.
+/// Returns whether anything changed.
+pub fn set_enabled(id: &str, on: bool) -> Result<bool, String> {
+    let plugin = get(id).ok_or_else(|| format!("no plugin `{id}` is loaded"))?;
+    if plugin.enabled() == on {
+        return Ok(false);
+    }
+    if on {
+        if let Some(f) = plugin.manifest.functions.iter().find(|f| gridcraft_calc::is_known_function(&f.name)) {
+            return Err(format!("can't turn {id} on: function {} is now provided by something else", f.name));
+        }
+        // A plugin that failed too often gets a fresh start.
+        *lock(&plugin.state) = (State::Idle, 0);
+        plugin.enabled.store(true, std::sync::atomic::Ordering::Relaxed);
+        register_functions(&plugin);
+    } else {
+        plugin.enabled.store(false, std::sync::atomic::Ordering::Relaxed);
+        for f in &plugin.manifest.functions {
+            gridcraft_calc::external::unregister(&f.name);
+        }
+        plugin.stop();
+        lock(&plugin.cache).clear();
+    }
+    log::info!("plugin {id} turned {}", if on { "on" } else { "off" });
+    Ok(true)
 }
 
 /// Unloads a plugin: its functions disappear (formulas using them show `#NAME?` after the next
@@ -521,8 +590,11 @@ pub fn unload(id: &str) -> bool {
         let Some(i) = all.iter().position(|p| p.manifest.id == id) else { return false };
         all.remove(i)
     };
-    for f in &plugin.manifest.functions {
-        gridcraft_calc::external::unregister(&f.name);
+    // A plugin that is off no longer owns its names (another plugin may have taken them).
+    if plugin.enabled() {
+        for f in &plugin.manifest.functions {
+            gridcraft_calc::external::unregister(&f.name);
+        }
     }
     plugin.stop();
     true
@@ -580,6 +652,9 @@ pub const MAX_REPLY_COMMANDS: usize = 10_000;
 /// Runs one of a plugin's commands. `context` describes the workbook (sheet, selection, values).
 pub fn run_command(plugin_id: &str, command: &str, params: Json, context: Json) -> Result<CommandReply, String> {
     let plugin = get(plugin_id).ok_or_else(|| format!("no plugin `{plugin_id}` is loaded"))?;
+    if !plugin.enabled() {
+        return Err(format!("plugin {plugin_id} is turned off (File › Options › Add-ins)"));
+    }
     if !plugin.manifest.commands.iter().any(|c| c.id == command) {
         return Err(format!("plugin {plugin_id} has no command `{command}`"));
     }

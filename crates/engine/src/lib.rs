@@ -200,6 +200,8 @@ pub struct Prefs {
     pub user_dictionary: Vec<String>,
     /// View › Show › Formula Bar (an application option in Excel, not saved in the file).
     pub formula_bar: bool,
+    /// Ids of the plugins turned off in File › Options › Add-ins.
+    pub disabled_plugins: Vec<String>,
 }
 
 impl Default for Prefs {
@@ -214,6 +216,7 @@ impl Default for Prefs {
             r1c1: false,
             user_dictionary: vec![],
             formula_bar: true,
+            disabled_plugins: vec![],
         }
     }
 }

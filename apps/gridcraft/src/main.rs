@@ -320,6 +320,7 @@ fn main() -> eframe::Result<()> {
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
     load_prefs(&mut app);
+    gridcraft_engine::cmd::plugins::apply_prefs(&app.session.prefs);
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.

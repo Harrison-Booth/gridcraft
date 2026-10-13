@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (§21: plugin ribbon groups and menus) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (§21: Options › Add-ins) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -152,7 +152,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 21. Automation and add-ins (F)
 - VBA out of scope (dropped on open, #6); no Office Scripts compatibility. Plugin host landed
   (out-of-process plugins over JSON-RPC: custom functions, commands, ribbon groups and tabs,
-  right-click menu items, Automate › Add-ins; [plugins.md](plugins.md)). Missing: live data sources and streams (`STREAM()`, `RTD`, protocol 2),
+  right-click menu items, Automate › Add-ins, turning plugins off and on in File › Options;
+  [plugins.md](plugins.md)). Missing: live data sources and streams (`STREAM()`, `RTD`, protocol 2),
   asynchronous functions, plugin functions in Insert Function and autocomplete. **Estimate:** 15–25 h.
 
 ### 22. AI features (F)
@@ -170,6 +171,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | §21: Options › Add-ins turns plugins off and on |
 | 2026-10-13 | minor | §21: plugins add ribbon groups, tabs and menu items |
 | 2026-10-13 | minor | §21: plugin host landed (custom functions, commands); live data and streams remain |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |

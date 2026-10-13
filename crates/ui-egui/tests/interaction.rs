@@ -928,6 +928,36 @@ fn plugins_add_ribbon_tabs_groups_and_menu_items() {
 }
 
 #[test]
+fn options_lists_add_ins_and_turns_them_off_and_on() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-options", "name": "Options Test Plugin", "version": "2.0", "author": "Someone",
+            "homepage": "https://example.org/plugin", "run": {"command": "./not-started"},
+            "commands": [{"id": "go", "label": "Go"}],
+            "ui": {"ribbon": [{"tab": "Data", "group": "G", "buttons": [{"command": "go", "label": "Options Plugin Button"}]}]}}"#,
+    )
+    .unwrap();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    let mut h = harness(blank());
+    h.state_mut().ui.ribbon_tab = "Data".into();
+    h.state_mut().open_backstage(gridcraft_ui_egui::backstage::Page::Options);
+    h.run_steps(2);
+    assert!(h.query_by_label("Options Test Plugin 2.0").is_some());
+    assert!(h.query_by_label("Documentation").is_some());
+    h.get_by_label("Deactivate").click();
+    h.run_steps(2);
+    assert!(!gridcraft_engine::plugin::get("t.ui-options").unwrap().enabled());
+    assert_eq!(h.state().session.prefs.disabled_plugins, vec!["t.ui-options".to_string()]);
+    assert!(gridcraft_ui_egui::plugin_ui::groups("Data").is_empty(), "an inactive plugin's ribbon group goes");
+    h.get_by_label("Activate").click();
+    h.run_steps(2);
+    assert!(gridcraft_engine::plugin::get("t.ui-options").unwrap().enabled());
+    assert!(h.state().session.prefs.disabled_plugins.is_empty());
+    assert_eq!(gridcraft_ui_egui::plugin_ui::groups("Data").len(), 1);
+    gridcraft_engine::plugin::unload("t.ui-options");
+}
+
+#[test]
 fn add_ins_dialog_lists_and_unloads_plugins() {
     let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
     let m = gridcraft_engine::plugin::Manifest::parse(
