@@ -15,9 +15,10 @@ fn main() {
         serve();
         return;
     }
-    let tests: [(&str, fn()); 4] = [
+    let tests: [(&str, fn()); 5] = [
         ("functions_recalculate_when_the_plugin_arrives_and_leaves", functions_recalculate_when_the_plugin_arrives_and_leaves),
         ("plugin_commands_are_one_undo_step", plugin_commands_are_one_undo_step),
+        ("plugin_commands_see_the_selections_formulas", plugin_commands_see_the_selections_formulas),
         ("a_failing_plugin_command_changes_nothing", a_failing_plugin_command_changes_nothing),
         ("plugins_turn_off_and_on_and_the_preferences_remember", plugins_turn_off_and_on_and_the_preferences_remember),
     ];
@@ -46,7 +47,7 @@ fn serve() {
                 if p["command"] == "broken" {
                     cmds.push(json!({"command": "no.suchCommand"}));
                 }
-                json!({"commands": cmds, "message": "done", "result": {"saw": p["context"]["selection"]}})
+                json!({"commands": cmds, "message": "done", "result": {"saw": p["context"]["selection"], "formulas": p["context"]["formulas"]}})
             }
             _ => json!({}),
         };
@@ -109,6 +110,18 @@ fn plugin_commands_are_one_undo_step() {
     s.execute("edit.undo", json!({})).unwrap();
     assert_eq!(value(&s, "B2"), Value::Empty);
     assert_eq!(value(&s, "C1"), Value::Empty);
+    s.execute("plugins.unload", json!({"id": PLUGIN})).unwrap();
+}
+
+fn plugin_commands_see_the_selections_formulas() {
+    let mut s = Session::new();
+    s.new_workbook();
+    load(&mut s);
+    s.execute("cell.set", json!({"cell": "B2", "input": "=1+1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B3", "input": "7"})).unwrap();
+    s.execute("selection.set", json!({"range": "B2:B4"})).unwrap();
+    let r = s.execute("plugins.run", json!({"plugin": PLUGIN, "command": "fill"})).unwrap();
+    assert_eq!(r["result"]["formulas"], json!([["=1+1"], [null], [null]]));
     s.execute("plugins.unload", json!({"id": PLUGIN})).unwrap();
 }
 

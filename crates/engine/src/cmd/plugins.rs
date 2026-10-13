@@ -146,7 +146,8 @@ fn recalc_users(s: &mut Session, names: &[String]) {
 }
 
 /// What a plugin command sees of the workbook: its title, the active sheet, the selection and,
-/// for a selection up to 100,000 cells, its values (rows of values, as functions get them).
+/// for a selection up to 100,000 cells, its values (rows of values, as functions get them) and
+/// formulas (rows of formula text, `null` where a cell has none).
 fn context(s: &Session) -> Json {
     let Some(d) = s.active() else { return json!({}) };
     let sel = &d.selection;
@@ -170,6 +171,22 @@ fn context(s: &Session) -> Json {
             })
             .collect();
         ctx["values"] = Json::Array(rows);
+        // Formula text (`=A1*2`) in the same shape, `null` for cells without one, so plugins can
+        // tell inputs from calculations (colour coding, auditing).
+        let formulas: Vec<Json> = (range.start.row..=range.end.row)
+            .map(|r| {
+                Json::Array(
+                    (range.start.col..=range.end.col)
+                        .map(|c| {
+                            sh.cell(gridcraft_core::CellRef::new(r, c))
+                                .and_then(|cell| cell.formula.as_ref())
+                                .map_or(Json::Null, |f| Json::String(format!("={}", f.text)))
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        ctx["formulas"] = Json::Array(formulas);
     }
     ctx
 }
