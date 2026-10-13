@@ -948,12 +948,24 @@ fn long_and_deeply_nested_legacy_formulas_never_gain_single() {
 }
 
 /// `@` of a union keeps the union's parentheses when saved, with or without `_xlfn.SINGLE`:
-/// without them the comma separates function arguments or the text does not parse.
+/// without them the comma separates function arguments or the text does not parse. Redundant
+/// parentheses under `@` survive too, as only those the reader adds back are dropped.
 #[test]
-fn implicit_intersection_of_a_union_keeps_its_parentheses() {
+fn implicit_intersection_keeps_its_parentheses() {
     let mut wb = Workbook::new();
     let s = wb.sheet_mut(0).unwrap();
-    let formulas = ["@(A1:A2,C1:C2)+1", "SQRT(@(A1:A2,C1:C2))", "@(A1:A2,C1:C2)+A1:A3"];
+    let formulas = [
+        "@(A1:A2,C1:C2)+1",
+        "SQRT(@(A1:A2,C1:C2))",
+        "@(A1:A2,C1:C2)+A1:A3",
+        "@((A1:A2,C1:C2))",
+        "SQRT(@((A1:A2,C1:C2)))",
+        "@(((A1:A2,C1:C2)))",
+        "@((A1:A3*2))",
+        "@(A1:A3)",
+        "@(A1:A3*2)",
+        "@(-A1:A3)",
+    ];
     for (i, f) in formulas.iter().enumerate() {
         s.cells.set(CellRef::new(4 + i as u32, 4), Cell::formula(Formula::new(f)));
     }
