@@ -1034,7 +1034,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" | "addIns" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "addIns" => 760.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -1531,75 +1532,45 @@ fn macros(ui: &mut egui::Ui, d: &mut Dialog) {
 fn add_ins(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog) {
     ui.label("Plugins are programs that add functions and commands. Each runs in its own process.");
     ui.add_space(6.0);
-    let plugins: Vec<Json> = d.result.as_ref().and_then(Json::as_array).cloned().unwrap_or_default();
-    let mut refresh = false;
+    let plugins = gridcraft_engine::plugin::list();
     if plugins.is_empty() {
-        ui.weak("No plugins are loaded. Put a plugin folder in the plugins folder of the settings, or load one below.");
+        ui.weak("No plugins are loaded. Install one from GitHub, put a plugin folder in the plugins folder of the settings, or load one below.");
     }
-    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+    egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
         for p in &plugins {
-            let s = |k: &str| p.get(k).and_then(Json::as_str).unwrap_or("").to_string();
-            let id = s("id");
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(s("name")).strong());
-                ui.weak(format!("{} · {}", s("version"), s("status")));
-                let on = p.get("enabled").and_then(Json::as_bool).unwrap_or(true);
-                if ui.small_button(if on { "Deactivate" } else { "Activate" }).clicked() {
-                    app.run_or_alert("plugins.setEnabled", json!({"id": id, "enabled": !on}));
-                    refresh = true;
+            crate::plugin_ui::plugin_card(app, ui, p, true);
+            let on = p.enabled();
+            ui.indent(("addin", &p.manifest.id), |ui| {
+                for f in &p.manifest.functions {
+                    let sig = if f.signature.is_empty() { &f.name } else { &f.signature };
+                    ui.horizontal(|ui| {
+                        ui.monospace(sig);
+                        ui.weak(&f.description);
+                    });
                 }
-                if ui.small_button("Unload").clicked() {
-                    app.run_or_alert("plugins.unload", json!({"id": id}));
-                    refresh = true;
-                }
-                if !s("homepage").is_empty() && ui.link("Documentation").on_hover_text(s("homepage")).clicked() {
-                    app.run_or_alert("plugins.openHomepage", json!({"id": id}));
-                }
-            });
-            if !s("description").is_empty() {
-                ui.label(s("description"));
-            }
-            for f in p.get("functions").and_then(Json::as_array).into_iter().flatten() {
-                let sig = f
-                    .get("signature")
-                    .and_then(Json::as_str)
-                    .filter(|x| !x.is_empty())
-                    .or_else(|| f.get("name").and_then(Json::as_str))
-                    .unwrap_or("");
-                ui.horizontal(|ui| {
-                    ui.monospace(sig);
-                    ui.weak(f.get("description").and_then(Json::as_str).unwrap_or(""));
-                });
-            }
-            for c in p.get("commands").and_then(Json::as_array).into_iter().flatten() {
-                let label = c.get("label").and_then(Json::as_str).unwrap_or("");
-                let cid = c.get("id").and_then(Json::as_str).unwrap_or("");
-                let on = p.get("enabled").and_then(Json::as_bool).unwrap_or(true);
-                ui.horizontal(|ui| {
-                    if ui.add_enabled(on, egui::Button::new(label)).on_hover_text(c.get("description").and_then(Json::as_str).unwrap_or("")).clicked()
-                    {
-                        app.run_or_alert("plugins.run", json!({"plugin": id, "command": cid}));
-                        refresh = true;
+                ui.horizontal_wrapped(|ui| {
+                    for c in &p.manifest.commands {
+                        if ui.add_enabled(on, egui::Button::new(&c.label)).on_hover_text(&c.description).clicked() {
+                            app.run_or_alert("plugins.run", json!({"plugin": p.manifest.id, "command": c.id}));
+                        }
                     }
                 });
-            }
-            ui.separator();
+            });
+            ui.add_space(6.0);
         }
     });
+    ui.separator();
+    crate::plugin_ui::install_row(app, ui);
     ui.horizontal(|ui| {
         ui.label("Plugin folder:");
         let mut path = d.values.get("path").and_then(Json::as_str).unwrap_or("").to_string();
-        if ui.text_edit_singleline(&mut path).changed() {
+        if ui.add(egui::TextEdit::singleline(&mut path).desired_width(340.0)).changed() {
             d.values.insert("path".into(), json!(path));
         }
         if ui.add_enabled(!path.trim().is_empty(), egui::Button::new("Load")).clicked() {
             app.run_or_alert("plugins.load", json!({"path": path.trim()}));
-            refresh = true;
         }
     });
-    if refresh {
-        d.result = app.session.run("plugins.list", json!({})).ok();
-    }
 }
 
 fn format_cells(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {

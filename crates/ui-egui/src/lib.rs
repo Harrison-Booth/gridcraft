@@ -225,6 +225,8 @@ pub struct SheetApp {
     pub notice: Option<Notice>,
     pub services: Services,
     pub printing: printing::State,
+    /// Installing a plugin from GitHub (File › Options › Add-ins, Automate › Add-ins).
+    pub plugin_install: plugin_ui::Install,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -281,6 +283,7 @@ impl SheetApp {
             notice: None,
             services,
             printing: Default::default(),
+            plugin_install: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
             control_rx: None,
@@ -1095,6 +1098,7 @@ impl SheetApp {
     pub fn ui(&mut self, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         self.poll_printing(&ctx);
+        plugin_ui::poll_install(self, &ctx);
         if !self.fonts_ready || self.fonts_rebind {
             ctx.request_repaint();
             return;

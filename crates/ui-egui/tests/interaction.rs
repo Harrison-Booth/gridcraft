@@ -955,6 +955,21 @@ fn options_lists_add_ins_and_turns_them_off_and_on() {
     assert!(h.state().session.prefs.disabled_plugins.is_empty());
     assert_eq!(gridcraft_ui_egui::plugin_ui::groups("Data").len(), 1);
     gridcraft_engine::plugin::unload("t.ui-options");
+
+    // Install from GitHub: a bad address is refused at once; a good one asks first.
+    h.state_mut().plugin_install.url = "https://gitlab.com/acme/fin".into();
+    h.run_steps(1);
+    h.get_by_label("Install").click();
+    h.run_steps(2);
+    assert!(matches!(&h.state().plugin_install.outcome, Some(Err(e)) if e.contains("GitHub")));
+    h.state_mut().plugin_install.url = "https://github.com/acme/fin".into();
+    h.run_steps(1);
+    h.get_by_label("Install").click();
+    h.run_steps(2);
+    assert_eq!(h.state().plugin_install.confirming.as_deref(), Some("acme/fin"));
+    h.get_by_label("Cancel").click();
+    h.run_steps(2);
+    assert!(h.state().plugin_install.confirming.is_none() && !h.state().plugin_install.busy());
 }
 
 #[test]
@@ -970,11 +985,11 @@ fn add_ins_dialog_lists_and_unloads_plugins() {
     let mut h = harness(blank());
     h.state_mut().open_dialog("addIns", json!({}));
     h.run_steps(2);
-    assert!(h.query_by_label("Dialog Test Plugin").is_some());
+    assert!(h.query_by_label("Dialog Test Plugin 1.0").is_some());
     assert!(h.query_by_label("UITEST.F(x)").is_some());
     assert!(h.query_by_label("Do The Thing").is_some());
     h.get_by_label("Unload").click();
     h.run_steps(3);
     assert!(gridcraft_engine::plugin::get("t.ui-addins").is_none());
-    assert!(h.query_by_label("Dialog Test Plugin").is_none(), "the list refreshes after unloading");
+    assert!(h.query_by_label("Dialog Test Plugin 1.0").is_none(), "the list refreshes after unloading");
 }

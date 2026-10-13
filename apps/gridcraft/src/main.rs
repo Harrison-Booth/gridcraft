@@ -299,6 +299,8 @@ fn main() -> eframe::Result<()> {
     // process starts when one of its functions or commands is first used.
     if let Some(dir) = config_dir().filter(|_| prefs_enabled()) {
         plugin_dirs.push(dir.join("plugins"));
+        // Where File › Options › Add-ins installs plugins from GitHub.
+        gridcraft_engine::plugin::install::set_install_dir(Some(dir.join("plugins")));
     }
     for (dir, r) in gridcraft_engine::plugin::autoload(&plugin_dirs) {
         match r {

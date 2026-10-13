@@ -1002,46 +1002,24 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
 fn add_ins(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     section(ui, lang, "Add-ins");
-    let plugins = gridcraft_engine::plugin::list();
-    if plugins.is_empty() {
-        dim(ui, lang.tr("No add-ins are installed. Put a plugin folder in the plugins folder of the settings."));
-    }
-    egui::Grid::new("backstage_options_addins").num_columns(3).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+    ui.scope(|ui| {
+        // Wide enough for a description on a line or two; the page itself can be wider still.
+        ui.set_max_width(ui.available_width().min(820.0));
+        let plugins = gridcraft_engine::plugin::list();
+        if plugins.is_empty() {
+            dim(ui, lang.tr("No add-ins are installed. Install one from GitHub, or put a plugin folder in the plugins folder of the settings."));
+        }
         for p in &plugins {
-            let m = &p.manifest;
-            let on = p.enabled();
-            ui.vertical(|ui| {
-                let mut title = m.name.clone();
-                if !m.version.is_empty() {
-                    title = format!("{title} {}", m.version);
-                }
-                ui.label(RichText::new(title).strong());
-                let mut about = vec![if on { lang.tr("Active").to_string() } else { lang.tr("Inactive").to_string() }];
-                if !m.author.is_empty() {
-                    about.push(m.author.clone());
-                }
-                about.push(m.id.clone());
-                dim(ui, &about.join(" · "));
-                if !m.description.is_empty() {
-                    ui.label(&m.description);
-                }
-            });
-            if m.homepage.trim().is_empty() {
-                ui.label("");
-            } else if ui.link(lang.tr("Documentation")).on_hover_text(m.homepage.trim()).clicked() {
-                app.run_or_alert("plugins.openHomepage", json!({"id": m.id}));
-            }
-            let label = if on { "Deactivate" } else { "Activate" };
-            if ui.button(lang.tr(label)).clicked() {
-                app.run_or_alert("plugins.setEnabled", json!({"id": m.id, "enabled": !on}));
-            }
-            ui.end_row();
+            crate::plugin_ui::plugin_card(app, ui, p, false);
+            ui.add_space(4.0);
+        }
+        ui.add_space(6.0);
+        crate::plugin_ui::install_row(app, ui);
+        ui.add_space(6.0);
+        if ui.button(lang.tr("Manage Add-ins…")).clicked() {
+            app.open_dialog("addIns", json!({}));
         }
     });
-    ui.add_space(6.0);
-    if ui.button(lang.tr("Manage Add-ins…")).clicked() {
-        app.open_dialog("addIns", json!({}));
-    }
 }
 
 #[cfg(test)]

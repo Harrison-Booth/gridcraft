@@ -14,6 +14,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod install;
 mod process;
 pub mod values;
 
@@ -209,7 +210,10 @@ fn valid_label(s: &str) -> bool {
 }
 
 fn valid_id(s: &str) -> bool {
-    !s.is_empty() && s.len() <= 128 && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+    // Starts with a letter or digit: an id is also the folder an installed plugin goes in.
+    s.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && s.len() <= 128
+        && s.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
 fn valid_function_name(s: &str) -> bool {
@@ -326,6 +330,8 @@ pub struct Plugin {
     cache: Mutex<HashMap<String, Value>>,
     /// Off: listed, but its functions, commands and ribbon and menu items are gone.
     enabled: std::sync::atomic::AtomicBool,
+    /// Where it was installed from (`.gridcraft-source.json`), for plugins installed from GitHub.
+    pub source: Option<Json>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -339,10 +345,11 @@ impl Plugin {
     fn new(manifest: Manifest, dir: PathBuf) -> Plugin {
         Plugin {
             manifest,
-            dir,
             state: Mutex::new((State::Idle, 0)),
             cache: Mutex::new(HashMap::new()),
             enabled: std::sync::atomic::AtomicBool::new(true),
+            source: install::read_source(&dir),
+            dir,
         }
     }
 
@@ -448,6 +455,7 @@ impl Plugin {
             "author": m.author,
             "enabled": self.enabled(),
             "dir": self.dir.display().to_string(),
+            "source": self.source.clone().unwrap_or(Json::Null),
             "status": self.status(),
             "functions": m.functions.iter().map(|f| json!({
                 "name": f.name, "signature": f.signature, "description": f.description, "volatile": f.volatile,

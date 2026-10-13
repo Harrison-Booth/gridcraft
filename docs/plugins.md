@@ -1,6 +1,6 @@
 # Plugins
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (Options › Add-ins: turn plugins off and on, documentation links) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -18,8 +18,28 @@ Live data from sources and streams (protocol 2) and co-editing come later; see
 
 ## Installing a plugin
 
-A plugin is a folder holding a `plugin.json` manifest and whatever the plugin needs to run.
-GridCraft loads plugins from:
+**From GitHub.** In **File › Options › Add-ins** (or **Automate › Add-ins**), paste the
+repository's address in **Install from GitHub** and confirm. GridCraft downloads it in the
+background, unpacks it into the plugins folder of the settings (as `<plugin id>/`, replacing an
+earlier install of the same plugin) and loads it. Agents and the CLI use
+`plugins.install {"url": …, "dir": …}`. Addresses it understands:
+
+| Address | Installs |
+|---|---|
+| `https://github.com/owner/repo` (or `github.com/owner/repo`, `owner/repo`) | The latest release; the default branch's source when there is no release |
+| `…/releases/tag/v1.2.0` | That release |
+| `…/tree/<branch, tag or commit>` | That source |
+
+From a release, GridCraft takes the `.zip` asset built for this computer when there is one
+(see [Publishing a plugin](#publishing-a-plugin-on-github)), else the release's source code. The
+plugin is the folder in the zip that holds `plugin.json` (the shallowest one). Downloads are
+limited to 256 MiB and 512 MiB unpacked; paths that would leave the plugin's folder and symbolic
+links are skipped. GitHub allows 60 anonymous requests an hour per address; private repositories
+can't be installed. `.gridcraft-source.json` in the plugin's folder records where it came from,
+and Options shows the repository.
+
+**From a folder.** A plugin is a folder holding a `plugin.json` manifest and whatever the plugin
+needs to run. GridCraft loads plugins from:
 
 1. each folder in `GRIDCRAFT_PLUGIN_PATH` (separated like `PATH`);
 2. `--plugin DIR` on the command line (`gridcraft` and every `gridcraft-cli` subcommand; repeatable);
@@ -46,6 +66,7 @@ the same:
 |---|---|---|
 | `plugins.list` (also `home.addIns`) | `{}` | The loaded plugins with their status, functions and commands |
 | `plugins.load` | `{path}` | Loads the plugin in a folder (or a manifest file). A plugin with the same id is replaced |
+| `plugins.install` | `{url, dir?}` | Installs the plugin in a GitHub repository into `dir` (default: the app's plugins folder) and loads it |
 | `plugins.unload` | `{id}` | Unloads a plugin and stops its process (until the next start) |
 | `plugins.setEnabled` | `{id, enabled}` | Turns a plugin off or back on, and remembers it in the preferences |
 | `plugins.openHomepage` | `{id}` | Opens the plugin's web page in the browser |
@@ -218,6 +239,29 @@ for line in sys.stdin:
  "functions": [{"name": "PY.TWICE", "minArgs": 1, "maxArgs": 1}]}
 ```
 
+## Publishing a plugin on GitHub
+
+Put `plugin.json` at the root of the repository (or in one folder of it). A plugin written in
+a scripting language (`"run": {"command": "python3", "args": ["main.py"]}`) needs nothing more:
+GridCraft installs the source.
+
+A compiled plugin attaches one `.zip` per platform to each GitHub release, holding `plugin.json`
+and the program (`"run": {"command": "./my-plugin"}`; on Windows `./my-plugin.exe`). Name each zip
+after its platform and architecture, separated by `-`, `.` or `+`:
+
+| Platform | Words GridCraft recognises |
+|---|---|
+| macOS | `macos`, `darwin`, `mac`, `osx`, `apple`; `universal` for both architectures |
+| Windows | `windows`, `win`, `win64`, `win32` |
+| Linux | `linux` |
+| FreeBSD | `freebsd` |
+| Apple silicon, ARM | `aarch64`, `arm64` |
+| Intel, AMD | `x86_64`, `x64`, `amd64` |
+
+For example `finance-1.2.0-macos-aarch64.zip`, `finance-1.2.0-windows-x64.zip`. A zip naming no
+platform is used on every platform that has no zip of its own. Executable permissions in the zip
+are kept.
+
 ## Limits and next steps
 
 - Calls are synchronous. A slow function holds up recalculation for up to its timeout.
@@ -225,6 +269,8 @@ for line in sys.stdin:
 - Protocol 2 (planned): data sources and streams pushed by the plugin (`STREAM()`, `RTD`), with
   targeted recalculation of the cells that use them.
 - Plugin functions don't appear in Insert Function or formula autocomplete yet.
+- Installed plugins aren't updated automatically; install again to update. There's no
+  Uninstall button yet: unload the plugin and delete its folder.
 - Ribbon groups go at the end of a tab; plugins can't place them between built-in groups, add
   drop-downs or toggles, or ship their own icons yet. Their labels aren't translated.
 - The web app can't start processes, so plugins need the desktop app or the CLI.
@@ -235,6 +281,7 @@ for line in sys.stdin:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | Install from a GitHub repository (`plugins.install`, Options and Automate › Add-ins); wider add-in list |
 | 2026-10-13 | minor | Options › Add-ins: turn plugins off and on (remembered), `homepage` and `author`, `plugins.setEnabled`, `plugins.openHomepage` |
 | 2026-10-13 | minor | `ui` in the manifest: ribbon groups on built-in or new tabs, items in the cell, row, column and sheet-tab menus |
 | 2026-10-13 | major | Created: out-of-process plugin host, manifest, protocol 1 (functions, commands), Add-ins dialog |

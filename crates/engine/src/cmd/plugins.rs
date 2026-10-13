@@ -18,6 +18,15 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "plugins.load", "Load Plugin", [], None, "{path} → the plugin. `path`: a folder holding plugin.json, or the manifest", always, load),
         cmd!(query "plugins.unload", "Unload Plugin", [], None, "{id}", always, unload),
         cmd!(
+            query "plugins.install",
+            "Install Plugin from GitHub",
+            [],
+            None,
+            "{url, dir?} → the plugin. Downloads the plugin in a GitHub repository (the release zip for this platform, else its source) into `dir` (default: the app's plugins folder) and loads it",
+            always,
+            install
+        ),
+        cmd!(
             query "plugins.setEnabled",
             "Turn Plugin On or Off",
             [],
@@ -46,7 +55,23 @@ pub fn list() -> Json {
 
 fn load(s: &mut Session, p: &Json) -> Result<Json> {
     let path = str_param(p, "path").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad("plugins.load", "missing `path`"))?;
-    let plugin = gridcraft_plugin::load(std::path::Path::new(path)).map_err(|e| bad("plugins.load", e))?;
+    load_from(s, "plugins.load", std::path::Path::new(path))
+}
+
+fn install(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "plugins.install";
+    let url = str_param(p, "url").filter(|x| !x.trim().is_empty()).ok_or_else(|| bad(ID, "missing `url`"))?;
+    let root = match str_param(p, "dir").filter(|x| !x.trim().is_empty()) {
+        Some(d) => std::path::PathBuf::from(d),
+        None => gridcraft_plugin::install::install_dir().ok_or_else(|| bad(ID, "no plugins folder: pass `dir`"))?,
+    };
+    let dir = gridcraft_plugin::install::from_github(url, &root).map_err(|e| bad(ID, e))?;
+    load_from(s, ID, &dir)
+}
+
+/// Loads the plugin in `path` (a folder or its manifest) and recalculates the formulas using it.
+pub fn load_from(s: &mut Session, id: &str, path: &std::path::Path) -> Result<Json> {
+    let plugin = gridcraft_plugin::load(path).map_err(|e| bad(id, e))?;
     // A plugin turned off stays off when it's loaded again.
     if s.prefs.disabled_plugins.contains(&plugin.manifest.id) {
         let _ = gridcraft_plugin::set_enabled(&plugin.manifest.id, false);

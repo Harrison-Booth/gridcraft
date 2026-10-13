@@ -134,3 +134,127 @@ fn command_replies_are_checked() {
     assert!(parse_reply(json!({"commands": [{"params": {}}]})).is_err());
     assert!(parse_reply(json!(null)).unwrap().commands.is_empty());
 }
+
+mod install {
+    use std::io::Write;
+
+    use crate::install::{Repo, Version, parse_github_url, pick_asset, unpack};
+
+    fn repo(owner: &str, name: &str, version: Version) -> Repo {
+        Repo { owner: owner.into(), name: name.into(), version }
+    }
+
+    #[test]
+    fn github_addresses_are_read() {
+        for url in ["https://github.com/acme/fin-tools", "github.com/acme/fin-tools/", "http://www.github.com/acme/fin-tools.git", "acme/fin-tools"] {
+            assert_eq!(parse_github_url(url), Ok(repo("acme", "fin-tools", Version::Latest)), "{url}");
+        }
+        assert_eq!(parse_github_url("https://github.com/acme/fin/releases/tag/v1.2.0"), Ok(repo("acme", "fin", Version::Release("v1.2.0".into()))));
+        assert_eq!(parse_github_url("https://github.com/acme/fin/tree/feat/x"), Ok(repo("acme", "fin", Version::Tree("feat/x".into()))));
+        assert_eq!(parse_github_url("https://github.com/acme/fin/releases/latest"), Ok(repo("acme", "fin", Version::Latest)));
+        for bad in [
+            "",
+            "https://gitlab.com/acme/fin",
+            "https://github.com/acme",
+            "https://github.com/../fin",
+            "https://github.com/acme/fin/blob/main/x",
+            "https://github.com/acme/fin/tree/../../x",
+            "ftp://github.com/acme/fin",
+            "a/b/c",
+        ] {
+            assert!(parse_github_url(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_release_zip_for_this_platform_is_picked() {
+        let names: Vec<String> = [
+            "fin-1.0-linux-x86_64.zip",
+            "fin-1.0-macos-x86_64.zip",
+            "fin-1.0-macos-aarch64.zip",
+            "fin-1.0-windows-x64.zip",
+            "fin-1.0-macos-aarch64.tar.gz",
+            "checksums.txt",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(pick_asset(&names, "macos", "aarch64"), Some(2));
+        assert_eq!(pick_asset(&names, "macos", "x86_64"), Some(1));
+        assert_eq!(pick_asset(&names, "windows", "x86_64"), Some(3));
+        assert_eq!(pick_asset(&names, "linux", "aarch64"), None, "no build for it: install the source");
+        let universal: Vec<String> = ["fin-darwin-universal.zip", "fin-linux-amd64.zip"].map(String::from).to_vec();
+        assert_eq!(pick_asset(&universal, "macos", "aarch64"), Some(0));
+        let any: Vec<String> = ["fin-plugin.zip", "fin-linux-arm64.zip"].map(String::from).to_vec();
+        assert_eq!(pick_asset(&any, "macos", "aarch64"), Some(0), "a zip naming no platform suits every one");
+        assert_eq!(pick_asset(&any, "linux", "aarch64"), Some(1), "this platform's build beats the generic zip");
+        assert_eq!(pick_asset(&["darwin-tools-windows.zip".to_string()], "macos", "x86_64"), Some(0));
+        assert_eq!(pick_asset(&[], "macos", "aarch64"), None);
+    }
+
+    fn zip(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
+        let mut out = std::io::Cursor::new(Vec::new());
+        let mut w = zip::ZipWriter::new(&mut out);
+        for (name, data, mode) in files {
+            let opts = zip::write::SimpleFileOptions::default().unix_permissions(*mode);
+            w.start_file(*name, opts).unwrap();
+            w.write_all(data).unwrap();
+        }
+        w.finish().unwrap();
+        out.into_inner()
+    }
+
+    fn manifest(id: &str) -> Vec<u8> {
+        serde_json::json!({"id": id, "name": "Fin", "run": {"command": "./run.sh"}}).to_string().into_bytes()
+    }
+
+    #[test]
+    fn a_source_zip_unpacks_into_a_folder_named_after_the_plugin() {
+        let root = std::env::temp_dir().join(format!("gridcraft-unpack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let m = manifest("acme.fin");
+        let bytes = zip(&[
+            ("acme-fin-1a2b3c/README.md", b"readme", 0o644),
+            ("acme-fin-1a2b3c/plugin.json", &m, 0o644),
+            ("acme-fin-1a2b3c/run.sh", b"#!/bin/sh\n", 0o755),
+            ("acme-fin-1a2b3c/lib/util.py", b"x = 1\n", 0o644),
+            ("acme-fin-1a2b3c/examples/other/plugin.json", b"{}", 0o644),
+            ("elsewhere/secret.txt", b"not part of the plugin", 0o644),
+        ]);
+        let dir = unpack(&bytes, &root).unwrap();
+        assert_eq!(dir, root.join("acme.fin"));
+        assert!(dir.join("plugin.json").is_file() && dir.join("lib/util.py").is_file() && dir.join("examples/other/plugin.json").is_file());
+        assert!(!dir.join("elsewhere").exists() && !root.join("elsewhere").exists());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(dir.join("run.sh")).unwrap().permissions().mode() & 0o777, 0o755);
+            assert_eq!(std::fs::metadata(dir.join("README.md")).unwrap().permissions().mode() & 0o777, 0o644);
+        }
+        crate::load(&dir).unwrap();
+        assert!(crate::unload("acme.fin"));
+
+        // Installing again replaces the earlier copy, leftovers included.
+        std::fs::write(dir.join("stale.txt"), "old").unwrap();
+        let again = unpack(&zip(&[("plugin.json", &m, 0o644), ("run.sh", b"new", 0o755)]), &root).unwrap();
+        assert_eq!(again, dir);
+        assert!(!dir.join("stale.txt").exists() && !dir.join("lib").exists());
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), 1, "no staging folders left behind");
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn unsafe_or_foreign_zips_are_refused() {
+        let root = std::env::temp_dir().join(format!("gridcraft-unpack-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(unpack(b"not a zip", &root).unwrap_err().contains("not a zip"));
+        assert!(unpack(&zip(&[("README.md", b"hi", 0o644)]), &root).unwrap_err().contains("plugin.json"));
+        assert!(unpack(&zip(&[("plugin.json", &manifest(".."), 0o644)]), &root).is_err(), "an id can't climb out of the folder");
+        assert!(unpack(&zip(&[("plugin.json", b"{", 0o644)]), &root).is_err());
+        // Paths escaping the plugin folder are skipped, not written.
+        let m = manifest("acme.safe");
+        let dir = unpack(&zip(&[("plugin.json", &m, 0o644), ("../escaped.txt", b"x", 0o644), ("/abs.txt", b"x", 0o644)]), &root).unwrap();
+        assert!(!root.join("escaped.txt").exists() && !std::env::temp_dir().join("escaped.txt").exists());
+        assert!(dir.join("plugin.json").is_file());
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+}
