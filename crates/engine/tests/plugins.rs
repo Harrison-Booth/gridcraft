@@ -15,7 +15,8 @@ fn main() {
         serve();
         return;
     }
-    let tests: [(&str, fn()); 5] = [
+    let tests: [(&str, fn()); 6] = [
+        ("plugin_commands_see_sheets_and_names", plugin_commands_see_sheets_and_names),
         ("functions_recalculate_when_the_plugin_arrives_and_leaves", functions_recalculate_when_the_plugin_arrives_and_leaves),
         ("plugin_commands_are_one_undo_step", plugin_commands_are_one_undo_step),
         ("plugin_commands_see_the_selections_formulas", plugin_commands_see_the_selections_formulas),
@@ -47,7 +48,7 @@ fn serve() {
                 if p["command"] == "broken" {
                     cmds.push(json!({"command": "no.suchCommand"}));
                 }
-                json!({"commands": cmds, "message": "done", "result": {"saw": p["context"]["selection"], "formulas": p["context"]["formulas"]}})
+                json!({"commands": cmds, "message": "done", "result": {"saw": p["context"]["selection"], "formulas": p["context"]["formulas"], "sheets": p["context"]["sheets"], "names": p["context"]["names"]}})
             }
             _ => json!({}),
         };
@@ -122,6 +123,25 @@ fn plugin_commands_see_the_selections_formulas() {
     s.execute("selection.set", json!({"range": "B2:B4"})).unwrap();
     let r = s.execute("plugins.run", json!({"plugin": PLUGIN, "command": "fill"})).unwrap();
     assert_eq!(r["result"]["formulas"], json!([["=1+1"], [null], [null]]));
+    s.execute("plugins.unload", json!({"id": PLUGIN})).unwrap();
+}
+
+fn plugin_commands_see_sheets_and_names() {
+    let mut s = Session::new();
+    s.new_workbook();
+    load(&mut s);
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("sheet.hide", json!({"sheet": 1})).unwrap();
+    s.execute("sheet.activate", json!({"sheet": 0})).unwrap();
+    s.execute("cell.set", json!({"cell": "C4", "input": "5"})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=0.05"})).unwrap();
+    let r = s.execute("plugins.run", json!({"plugin": PLUGIN, "command": "fill"})).unwrap();
+    let sheets = r["result"]["sheets"].as_array().unwrap();
+    assert_eq!(sheets.len(), 2);
+    assert_eq!(sheets[0]["usedRange"], "C4");
+    assert_eq!(sheets[1]["visibility"], "Hidden");
+    let names = r["result"]["names"].as_array().unwrap();
+    assert!(names.iter().any(|n| n["name"] == "Rate" && n["refersTo"] == "=0.05" && n["hidden"] == false), "{names:?}");
     s.execute("plugins.unload", json!({"id": PLUGIN})).unwrap();
 }
 

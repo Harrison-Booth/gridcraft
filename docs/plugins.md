@@ -1,6 +1,6 @@
 # Plugins
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (commands see the selection's formulas; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (commands see the workbook's sheets and names; previously minor: commands see the selection's formulas) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -205,7 +205,10 @@ A call carries at most 1,000,000 cells, and a result may hold as many. Anything 
 ```
 
 `context.values` and `context.formulas` (each cell's formula text such as `"=B2*1.1"`, or `null`
-for a cell without a formula) are included for selections up to 100,000 cells. The plugin answers with engine
+for a cell without a formula) are included for selections up to 100,000 cells. Every command also gets
+`context.activeSheet`, `context.sheets` (`[{index, name, visibility, usedRange}]`, every sheet including
+hidden ones) and `context.names` (`[{name, scope, hidden, refersTo}]`, at most 10,000, with
+`namesTruncated: true` when there were more). The plugin answers with engine
 commands to run. They are the same commands the CLI, MCP and control channel use (see
 `gridcraft-cli commands`), except `plugins.*`. GridCraft runs them in order, as **one undoable
 step**: if any fails, the workbook goes back to how it was and the error is shown. `message` is
@@ -291,6 +294,7 @@ are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | `context.sheets` and `context.names`: commands see every sheet and the defined names |
 | 2026-10-14 | minor | `context.formulas`: commands see the selection's formula text, so plugins can tell inputs from calculations |
 | 2026-10-14 | minor | One plugin for several apps: `apps`, `uiFor`, `host.id` in `initialize`, `CRAFT_HOST`/`CRAFT_PLUGIN_DIR`; the shared protocol WordCraft speaks too; `.craft-source.json` |
 | 2026-10-13 | minor | Install from a GitHub repository (`plugins.install`, Options and Automate › Add-ins); wider add-in list |

@@ -11,6 +11,8 @@ use crate::{Result, Session, UiRequest};
 
 /// Most selected cells whose values a plugin command receives.
 const MAX_CONTEXT_CELLS: u64 = 100_000;
+/// Most defined names a plugin command receives (real models can carry tens of thousands).
+const MAX_CONTEXT_NAMES: usize = 10_000;
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -147,7 +149,8 @@ fn recalc_users(s: &mut Session, names: &[String]) {
 
 /// What a plugin command sees of the workbook: its title, the active sheet, the selection and,
 /// for a selection up to 100,000 cells, its values (rows of values, as functions get them) and
-/// formulas (rows of formula text, `null` where a cell has none).
+/// formulas (rows of formula text, `null` where a cell has none); plus every sheet (index, name,
+/// visibility, used range) and up to 10,000 defined names (name, scope, hidden, refersTo).
 fn context(s: &Session) -> Json {
     let Some(d) = s.active() else { return json!({}) };
     let sel = &d.selection;
@@ -187,6 +190,34 @@ fn context(s: &Session) -> Json {
             })
             .collect();
         ctx["formulas"] = Json::Array(formulas);
+    }
+    // The workbook's shape, as `document.inspect` reports it, so a plugin can act beyond the
+    // selection (unhide every sheet, list sheets, clean up names, trim used ranges).
+    let wb = &d.wb;
+    ctx["activeSheet"] = json!(wb.active_sheet);
+    ctx["sheets"] = Json::Array(
+        wb.sheets
+            .iter()
+            .enumerate()
+            .map(|(i, sh)| {
+                json!({
+                    "index": i,
+                    "name": sh.name,
+                    "visibility": format!("{:?}", sh.visibility),
+                    "usedRange": sh.used_range().map(|r| r.a1()),
+                })
+            })
+            .collect(),
+    );
+    ctx["names"] = Json::Array(
+        wb.names
+            .iter()
+            .take(MAX_CONTEXT_NAMES)
+            .map(|n| json!({"name": n.name, "scope": n.scope, "hidden": n.hidden, "refersTo": format!("={}", n.formula)}))
+            .collect(),
+    );
+    if wb.names.len() > MAX_CONTEXT_NAMES {
+        ctx["namesTruncated"] = json!(true);
     }
     ctx
 }
