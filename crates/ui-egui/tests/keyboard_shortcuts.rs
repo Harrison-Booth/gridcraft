@@ -345,3 +345,21 @@ fn typing_or_clearing_leaves_nothing_to_repeat() {
     assert!(!style(&h, "D4").font.bold);
     assert!(h.state().repeat.is_none());
 }
+
+#[test]
+fn insert_dialog_entire_row_then_f4_inserts_another_row() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(book("A2"));
+    // Ctrl+Shift+= opens Insert; choose Entire row and press OK.
+    key(&mut h, Key::Equals, CTRL_SHIFT);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("shift".into(), json!("row"));
+    h.run_steps(4);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(number(&h, "A3"), Some(3.0));
+    select(&mut h, "B4");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert_eq!(number(&h, "A4"), None);
+    assert_eq!(number(&h, "A5"), Some(5.0));
+}
