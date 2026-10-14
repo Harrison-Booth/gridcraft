@@ -10,13 +10,16 @@ use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::RwLock;
 
-use serde_json::{Value as Json, json};
+use serde_json::Value as Json;
+#[cfg(not(target_arch = "wasm32"))]
+use serde_json::json;
 
 use crate::{MANIFEST, Manifest};
 
 /// Written next to `plugin.json` in an installed plugin.
 pub const SOURCE_FILE: &str = ".craft-source.json";
 /// Largest download.
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_DOWNLOAD: u64 = 256 << 20;
 /// Largest unpacked plugin, and most files in it.
 const MAX_UNPACKED: u64 = 512 << 20;

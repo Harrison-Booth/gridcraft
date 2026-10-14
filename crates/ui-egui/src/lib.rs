@@ -12,6 +12,7 @@ mod cell_pictures;
 pub mod chartview;
 pub mod control;
 pub mod credits;
+pub mod developer_ui;
 pub mod dialogs;
 pub mod editor;
 pub mod fonts;
@@ -22,6 +23,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod office_pane;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -197,6 +199,8 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+    /// Desktop: the web view Office add-ins' task panes show in.
+    pub office: Option<Box<dyn office_pane::OfficeHost>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -227,6 +231,10 @@ pub struct SheetApp {
     pub printing: printing::State,
     /// Installing a plugin from GitHub (File › Options › Add-ins, Automate › Add-ins).
     pub plugin_install: plugin_ui::Install,
+    /// Office add-ins' open task panes.
+    pub office: office_pane::Panes,
+    /// The Developer tab's windows (Macros, Visual Basic, Macro Security).
+    pub dev: developer_ui::DevState,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -284,6 +292,8 @@ impl SheetApp {
             services,
             printing: Default::default(),
             plugin_install: Default::default(),
+            office: Default::default(),
+            dev: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
             control_rx: None,
@@ -708,6 +718,8 @@ impl SheetApp {
                         f(&u);
                     }
                 }
+                UiRequest::OfficePane { plugin, title, url, pane } => office_pane::open(self, plugin, title, url, pane),
+                UiRequest::OfficeFunction { plugin, url, function } => office_pane::run_function(self, plugin, url, function),
             }
         }
     }
@@ -718,6 +730,13 @@ impl SheetApp {
             return;
         }
         match name {
+            // The message bar's Enable Content (a workbook with macros).
+            "enableMacros" => {
+                self.run_or_alert("developer.enableMacros", json!({}));
+                self.notice = None;
+            }
+            "macrosVba" => developer_ui::open_macros(self),
+            "visualBasic" => developer_ui::open_editor(self, None),
             "open" => {
                 if let Some(start) = &self.services.open_async {
                     start();
@@ -1099,6 +1118,7 @@ impl SheetApp {
         let ctx = ui.ctx().clone();
         self.poll_printing(&ctx);
         plugin_ui::poll_install(self, &ctx);
+        office_pane::pump(self);
         if !self.fonts_ready || self.fonts_rebind {
             ctx.request_repaint();
             return;
@@ -1114,9 +1134,11 @@ impl SheetApp {
         ribbon::title_bar(self, ui);
         if self.backstage.is_some() {
             // File tab: the Backstage view replaces everything below the title bar.
+            office_pane::covered(self);
             backstage::show(self, ui);
         } else {
             ribbon::show(self, ui);
+            developer_ui::notice(self);
             widgets::notice_bar(self, ui);
             if self.session.prefs.formula_bar {
                 formula_bar::show(self, ui);
@@ -1126,6 +1148,7 @@ impl SheetApp {
             }
             tabs::sheet_tabs(self, ui);
             pivot_pane::show(self, ui);
+            office_pane::show(self, ui);
             panes::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
                 let g0 = now_ms();
@@ -1134,6 +1157,7 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        developer_ui::windows(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
         control::issue_screenshots(self, &ctx);
@@ -1155,7 +1179,7 @@ impl SheetApp {
             && self.editor.is_none()
             && self.text_box_editor.is_none()
             && now - self.grid.last_autosave > 2000.0
-            && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")))
+            && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx") || p.ends_with(".xlsm")))
         {
             self.grid.last_autosave = now;
             self.store_view_state();

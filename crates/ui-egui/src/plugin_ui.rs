@@ -26,7 +26,8 @@ pub fn extra_tabs() -> Vec<String> {
     let mut tabs: Vec<String> = Vec::new();
     for p in plugin::list().into_iter().filter(|p| p.enabled()) {
         for g in &p.manifest.ui.ribbon {
-            if !plugin::RIBBON_TABS.contains(&g.tab.as_str()) && !tabs.contains(&g.tab) {
+            let built_in = plugin::RIBBON_TABS.contains(&g.tab.as_str()) || (g.tab == "Developer" && crate::developer_ui::visible());
+            if !built_in && !tabs.contains(&g.tab) {
                 tabs.push(g.tab.clone());
             }
         }

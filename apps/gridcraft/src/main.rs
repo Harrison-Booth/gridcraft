@@ -16,6 +16,8 @@ mod graphics;
 mod logging;
 #[cfg(target_os = "macos")]
 mod native_menu;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+mod office_web;
 mod print;
 
 use std::cell::RefCell;
@@ -54,8 +56,13 @@ impl eframe::App for App {
             }
         }
     }
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.0.ui(ui);
+        // Office add-ins' task panes: their web views follow the panes drawn this frame.
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        office_web::flush(frame);
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        let _ = frame;
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
@@ -195,6 +202,8 @@ fn services() -> Services {
         open_url: Some(Box::new(|url: &str| open_with_system(url))),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        #[cfg(any(target_os = "macos", target_os = "windows"))]
+        office: Some(office_web::service()),
         ..Default::default()
     }
 }

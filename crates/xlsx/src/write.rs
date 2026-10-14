@@ -437,6 +437,12 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     root.add("officeDocument", "xl/workbook.xml");
     root.add("core-properties", "docProps/core.xml");
     root.add("extended-properties", "docProps/app.xml");
+    // The workbook's ribbon, unless the file kept a richer one of its own (both would clash).
+    let kept_ribbon = wb.preserved.as_deref().is_some_and(|p| p.package_rels.iter().any(|r| r.rel_type.ends_with("/ui/extensibility")));
+    if let Some(r) = wb.ribbon.as_ref().filter(|r| !r.is_empty() && !kept_ribbon) {
+        out.part(crate::custom_ui::PART_CUSTOM_UI14, None, crate::custom_ui::write(r).into_bytes());
+        root.add_uri(crate::custom_ui::REL_CUSTOM_UI14, crate::custom_ui::PART_CUSTOM_UI14);
+    }
     crate::passthrough::write_package_rels(&mut root, &mut out);
     out.part("_rels/.rels", None, root.xml().into_bytes());
 

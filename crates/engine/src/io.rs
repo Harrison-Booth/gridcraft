@@ -183,6 +183,23 @@ fn rename_first_sheet(wb: &mut Workbook, path: &str) {
     }
 }
 
+/// Where a workbook with macros goes instead of `path`: an `.xlsx` can't hold a VBA project, so
+/// it becomes an `.xlsm` (a template `.xltx`, an `.xltm`), as Excel's macro-enabled formats.
+/// `None` when `path` is fine as it is.
+pub fn macro_enabled_path(wb: &Workbook, path: &str) -> Option<String> {
+    wb.vba_project.as_ref()?;
+    let p = std::path::Path::new(path);
+    let ext = p.extension().and_then(|e| e.to_str())?;
+    let to = match ext.to_ascii_lowercase().as_str() {
+        "xlsx" => "xlsm",
+        "xltx" => "xltm",
+        _ => return None,
+    };
+    // The same case as the name had (BOOK.XLSX → BOOK.XLSM).
+    let to = if ext.chars().all(|c| c.is_ascii_uppercase()) { to.to_ascii_uppercase() } else { to.to_string() };
+    Some(p.with_extension(to).to_string_lossy().into_owned())
+}
+
 /// Encodes a workbook in the format chosen by `path`'s extension.
 pub fn save_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
     // An unknown or missing extension is refused rather than written as an XLSX under that name:
@@ -528,6 +545,12 @@ mod tests {
         assert!(has_macros("book.xltm"), "a macro-enabled template keeps the VBA project");
         assert!(!has_macros("book.xltx"), "a macro-free template never carries a VBA project");
         assert!(wb.vba_project.is_some(), "the open workbook keeps its macros");
+        assert_eq!(macro_enabled_path(&wb, "/tmp/Budget.xlsx").as_deref(), Some("/tmp/Budget.xlsm"));
+        assert_eq!(macro_enabled_path(&wb, "BOOK.XLSX").as_deref(), Some("BOOK.XLSM"));
+        assert_eq!(macro_enabled_path(&wb, "plan.xltx").as_deref(), Some("plan.xltm"));
+        assert_eq!(macro_enabled_path(&wb, "book.xlsm"), None);
+        assert_eq!(macro_enabled_path(&wb, "book.csv"), None, "exports have no macros to keep");
+        assert_eq!(macro_enabled_path(&Workbook::new(), "book.xlsx"), None, "no macros, no change");
     }
 
     #[test]
