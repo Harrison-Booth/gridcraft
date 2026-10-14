@@ -180,6 +180,19 @@ fn run(s: &mut Session, p: &Json) -> Result<Json> {
     let command = str_param(p, "command").ok_or_else(|| bad(ID, "missing `command`"))?;
     let params = p.get("params").cloned().unwrap_or_else(|| json!({}));
     let reply = gridcraft_plugin::run_command(plugin, command, params, context(s)).map_err(|e| bad(ID, e))?;
+    // An Office add-in's command opens its task pane or calls its function: nothing runs here.
+    if let Some(office) = reply.office {
+        let title = gridcraft_plugin::get(plugin).map(|p| p.manifest.name.clone()).unwrap_or_default();
+        s.ui_requests.push(match &office {
+            gridcraft_plugin::office::OfficeCommand::ShowTaskpane { url, taskpane_id } => {
+                UiRequest::OfficePane { plugin: plugin.to_string(), title, url: url.clone(), pane: taskpane_id.clone() }
+            }
+            gridcraft_plugin::office::OfficeCommand::ExecuteFunction { function, url } => {
+                UiRequest::OfficeFunction { plugin: plugin.to_string(), url: url.clone(), function: function.clone() }
+            }
+        });
+        return Ok(json!({"ran": 0, "office": office}));
+    }
     if let Some((id, _)) = reply.commands.iter().find(|(id, _)| id.starts_with("plugins.")) {
         return Err(bad(ID, format!("a plugin command can't run `{id}`")));
     }

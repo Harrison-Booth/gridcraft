@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (§21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-14 · **Change:** minor (§21: Office add-ins on top of the plugins; previously minor: §21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -154,7 +154,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   (out-of-process plugins over JSON-RPC: custom functions, commands, ribbon groups and tabs,
   right-click menu items, Automate › Add-ins, turning plugins off and on in File › Options,
   installing from a GitHub repository;
-  [plugins.md](plugins.md)). Missing: live data sources and streams (`STREAM()`, `RTD`, protocol 2),
+  [plugins.md](plugins.md)). Office add-ins (Office.js) run on top: manifests as plugins, task panes
+  in the system web view on macOS and Windows, GridCraft's own Office.js, ExcelApi 1.1–1.4 subset
+  ([officejs.md](officejs.md)). Missing: live data sources and streams (`STREAM()`, `RTD`, protocol 2),
   asynchronous functions, plugin functions in Insert Function and autocomplete. **Estimate:** 15–25 h.
 
 ### 22. AI features (F)
@@ -172,6 +174,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | §21: Office add-ins (Office.js) on top of the plugins: manifests, task panes, the `office.sync` bridge |
 | 2026-10-13 | minor | §21: plugins install from a GitHub repository |
 | 2026-10-13 | minor | §21: Options › Add-ins turns plugins off and on |
 | 2026-10-13 | minor | §21: plugins add ribbon groups, tabs and menu items |

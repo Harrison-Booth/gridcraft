@@ -1,6 +1,6 @@
 # Plugins
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (Office add-ins load as plugins, officejs.md; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -18,6 +18,9 @@ plugin can serve both: `apps` names the apps it's for, `uiFor` gives each app it
 menus, and `initialize` says which app started it (`host.id`). WordCraft plugins have commands
 only; functions are GridCraft's. A test plugin written in Python that works in both is
 [sirmmo/gridcraft-python-plugin](https://github.com/sirmmo/gridcraft-python-plugin).
+
+**Office add-ins** (Office.js web add-ins with an XML manifest) load as plugins too: their
+commands open their task pane in a web view; see [officejs.md](officejs.md).
 
 Live data from sources and streams (protocol 2) and co-editing come later; see
 [gaps.md](gaps.md) #16 and #21.
@@ -290,6 +293,7 @@ are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Office add-ins (`manifest.xml`) load as plugins whose commands open task panes ([officejs.md](officejs.md)) |
 | 2026-10-14 | minor | One plugin for several apps: `apps`, `uiFor`, `host.id` in `initialize`, `CRAFT_HOST`/`CRAFT_PLUGIN_DIR`; the shared protocol WordCraft speaks too; `.craft-source.json` |
 | 2026-10-13 | minor | Install from a GitHub repository (`plugins.install`, Options and Automate › Add-ins); wider add-in list |
 | 2026-10-13 | minor | Options › Add-ins: turn plugins off and on (remembered), `homepage` and `author`, `plugins.setEnabled`, `plugins.openHomepage` |

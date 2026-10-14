@@ -22,6 +22,7 @@ pub mod i18n;
 pub mod icons;
 pub mod keymap;
 pub mod keytips;
+pub mod office_pane;
 pub mod outline;
 pub mod panes;
 pub mod paper_view;
@@ -197,6 +198,8 @@ pub struct Services {
     /// Web: hand PDF bytes to the browser's print flow directly (no download,
     /// no intermediate file) — opens the system print dialog on that PDF.
     pub print: Option<Box<dyn Fn(&[u8])>>,
+    /// Desktop: the web view Office add-ins' task panes show in.
+    pub office: Option<Box<dyn office_pane::OfficeHost>>,
 }
 
 /// Shared queue of files read asynchronously (browser file picker, drag and drop).
@@ -227,6 +230,8 @@ pub struct SheetApp {
     pub printing: printing::State,
     /// Installing a plugin from GitHub (File › Options › Add-ins, Automate › Add-ins).
     pub plugin_install: plugin_ui::Install,
+    /// Office add-ins' open task panes.
+    pub office: office_pane::Panes,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -284,6 +289,7 @@ impl SheetApp {
             services,
             printing: Default::default(),
             plugin_install: Default::default(),
+            office: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
             control_rx: None,
@@ -708,6 +714,8 @@ impl SheetApp {
                         f(&u);
                     }
                 }
+                UiRequest::OfficePane { plugin, title, url, pane } => office_pane::open(self, plugin, title, url, pane),
+                UiRequest::OfficeFunction { plugin, url, function } => office_pane::run_function(self, plugin, url, function),
             }
         }
     }
@@ -1099,6 +1107,7 @@ impl SheetApp {
         let ctx = ui.ctx().clone();
         self.poll_printing(&ctx);
         plugin_ui::poll_install(self, &ctx);
+        office_pane::pump(self);
         if !self.fonts_ready || self.fonts_rebind {
             ctx.request_repaint();
             return;
@@ -1114,6 +1123,7 @@ impl SheetApp {
         ribbon::title_bar(self, ui);
         if self.backstage.is_some() {
             // File tab: the Backstage view replaces everything below the title bar.
+            office_pane::covered(self);
             backstage::show(self, ui);
         } else {
             ribbon::show(self, ui);
@@ -1126,6 +1136,7 @@ impl SheetApp {
             }
             tabs::sheet_tabs(self, ui);
             pivot_pane::show(self, ui);
+            office_pane::show(self, ui);
             panes::show(self, ui);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.grid_bg)).show(ui, |ui| {
                 let g0 = now_ms();

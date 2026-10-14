@@ -33,6 +33,9 @@ commands:
   version [set X.Y.Z[-pre]]
                   print or set the workspace version ([workspace.package] in Cargo.toml)
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
+  office-js       build Office add-ins' library (crates/office-js) for task panes into
+                  <target>/office-js: wasm32 release build, `wasm-bindgen --target no-modules`,
+                  and the bootstrap; the desktop app and packages pick it up from there
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";
@@ -49,6 +52,7 @@ fn main() -> ExitCode {
         Some("parity") => parity::run(&root(), &rest),
         Some("keytips") => keytips::run(&root(), &rest),
         Some("ico") => ico::run(&rest),
+        Some("office-js") => cmd_office_js(),
         Some("version") => version::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
@@ -89,6 +93,24 @@ pub fn metadata() -> Result<serde_json::Value, String> {
         return Err(format!("cargo metadata failed:\n{}", String::from_utf8_lossy(&out.stderr)));
     }
     serde_json::from_slice(&out.stdout).map_err(|e| format!("cargo metadata: bad JSON: {e}"))
+}
+
+/// `cargo xtask office-js`: the Office.js library task panes load (see `apps/gridcraft/src/office_web.rs`).
+fn cmd_office_js() -> Result<(), String> {
+    let target = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from).unwrap_or_else(|| root().join("target"));
+    let mut build = cargo();
+    build.args(["build", "--release", "-p", "gridcraft-office-js", "--target", "wasm32-unknown-unknown"]);
+    run(build, "cargo build --release -p gridcraft-office-js --target wasm32-unknown-unknown")?;
+    let out = target.join("office-js");
+    std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let wasm = target.join("wasm32-unknown-unknown/release/gridcraft_office_js.wasm");
+    let mut bindgen = Command::new("wasm-bindgen");
+    bindgen.args(["--target", "no-modules", "--no-typescript", "--out-name", "office_js", "--out-dir"]).arg(&out).arg(&wasm);
+    run(bindgen, "wasm-bindgen --target no-modules (install it with `cargo install wasm-bindgen-cli` at the version in Cargo.lock)")?;
+    let bootstrap = root().join("crates/office-js/bootstrap.js");
+    std::fs::copy(&bootstrap, out.join("bootstrap.js")).map_err(|e| format!("{}: {e}", bootstrap.display()))?;
+    println!("Office.js library: {}", out.display());
+    Ok(())
 }
 
 fn cmd_layers() -> Result<(), String> {

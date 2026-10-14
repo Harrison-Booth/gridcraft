@@ -12,6 +12,7 @@ pub mod format;
 pub mod formulas;
 pub mod insert;
 pub mod inspect;
+pub mod office;
 pub mod pivot;
 pub mod plugins;
 pub mod print;
@@ -146,6 +147,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(analysis::specs());
         v.extend(print::specs());
         v.extend(plugins::specs());
+        v.extend(office::specs());
         v
     })
 }

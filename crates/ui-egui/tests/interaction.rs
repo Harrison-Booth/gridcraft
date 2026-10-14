@@ -993,3 +993,90 @@ fn add_ins_dialog_lists_and_unloads_plugins() {
     assert!(gridcraft_engine::plugin::get("t.ui-addins").is_none());
     assert!(h.query_by_label("Dialog Test Plugin 1.0").is_none(), "the list refreshes after unloading");
 }
+
+/// What the fake web view host saw and what it hands back.
+#[derive(Default)]
+struct FakeWeb {
+    shown: Vec<(String, String)>,
+    hidden: Vec<String>,
+    closed: Vec<String>,
+    inbox: Vec<(String, String)>,
+    replies: Vec<(String, String)>,
+}
+
+struct FakeHost(std::rc::Rc<std::cell::RefCell<FakeWeb>>);
+
+impl gridcraft_ui_egui::office_pane::OfficeHost for FakeHost {
+    fn show(&mut self, key: &str, url: &str, _rect: egui::Rect, _ppp: f32) {
+        self.0.borrow_mut().shown.push((key.into(), url.into()));
+    }
+    fn hide(&mut self, key: &str) {
+        self.0.borrow_mut().hidden.push(key.into());
+    }
+    fn close(&mut self, key: &str) {
+        self.0.borrow_mut().closed.push(key.into());
+    }
+    fn run_function(&mut self, _key: &str, _url: &str, _function: &str) {}
+    fn take_messages(&mut self) -> Vec<(String, String)> {
+        std::mem::take(&mut self.0.borrow_mut().inbox)
+    }
+    fn reply(&mut self, key: &str, json: &str) {
+        self.0.borrow_mut().replies.push((key.into(), json.into()));
+    }
+}
+
+#[test]
+fn office_add_ins_open_a_task_pane_and_sync_through_the_web_view() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let xml = r#"<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="TaskPaneApp">
+      <Id>bbbbbbbb-0000-4000-8000-000000000001</Id><Version>1.0</Version><ProviderName>Tests</ProviderName><DefaultLocale>en-US</DefaultLocale>
+      <DisplayName DefaultValue="Pane Test"/><Hosts><Host Name="Workbook"/></Hosts>
+      <DefaultSettings><SourceLocation DefaultValue="https://tests.example/pane.html"/></DefaultSettings>
+      <Permissions>ReadWriteDocument</Permissions></OfficeApp>"#;
+    let m = gridcraft_engine::plugin::office::parse_manifest(xml, "gridcraft").unwrap();
+    let id = m.id.clone();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    let web = std::rc::Rc::new(std::cell::RefCell::new(FakeWeb::default()));
+    let services = gridcraft_ui_egui::Services { office: Some(Box::new(FakeHost(web.clone()))), ..Default::default() };
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        SheetApp::new(blank(), services),
+    );
+    h.run_steps(2);
+    h.state_mut().run_or_alert("plugins.run", json!({"plugin": id, "command": "taskpane"}));
+    h.run_steps(3);
+    assert!(h.query_by_label("Pane Test").is_some(), "the pane's title");
+    assert!(web.borrow().shown.iter().any(|(_, url)| url == "https://tests.example/pane.html"), "the page shows in the pane");
+    // The page's context.sync(): written to the sheet and answered with the same id.
+    let key = web.borrow().shown.last().map(|(k, _)| k.clone()).unwrap();
+    web.borrow_mut().inbox.push((
+        key.clone(),
+        json!({"id": 7, "actions": [
+            {"op": "set", "path": [{"p": "workbook"}, {"m": "getActiveCell"}], "prop": "values", "value": 42},
+            {"op": "load", "path": [{"p": "workbook"}, {"m": "getActiveCell"}], "props": ["address"]}
+        ]})
+        .to_string(),
+    ));
+    h.run_steps(2);
+    let (to, reply) = web.borrow().replies.last().cloned().unwrap();
+    assert_eq!(to, key);
+    let reply: serde_json::Value = serde_json::from_str(&reply).unwrap();
+    assert_eq!(reply["id"], 7);
+    assert_eq!(reply["results"][1]["address"], "Sheet1!A1");
+    let a1 = h.state().session.active().unwrap().wb.active().unwrap().value(CellRef::new(0, 0));
+    assert_eq!(a1, Value::Number(42.0));
+    // The File tab hides the page (a native web view would cover it); turning the add-in off closes it.
+    h.state_mut().run_or_alert("ui.backstage", json!({"page": "info"}));
+    h.run_steps(2);
+    assert!(web.borrow().hidden.contains(&key));
+    h.state_mut().backstage = None;
+    gridcraft_engine::plugin::set_enabled(&id, false).unwrap();
+    h.run_steps(2);
+    assert!(web.borrow().closed.contains(&key));
+    assert!(h.state().office.open.is_empty());
+    gridcraft_engine::plugin::unload(&id);
+}

@@ -229,6 +229,20 @@ pub enum UiRequest {
     /// Start editing the active cell (F2) with optional initial text.
     EditCell(Option<String>),
     OpenUrl(String),
+    /// Open an Office add-in's task pane (its `plugin` id, the pane's title and page). Panes with
+    /// the same `pane` id are one pane.
+    OfficePane {
+        plugin: String,
+        title: String,
+        url: String,
+        pane: Option<String>,
+    },
+    /// Call a function of an Office add-in's function file (a page with no pane).
+    OfficeFunction {
+        plugin: String,
+        url: String,
+        function: String,
+    },
 }
 
 #[derive(Default)]
