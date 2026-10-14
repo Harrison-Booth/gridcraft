@@ -86,6 +86,8 @@ mod native {
 
     pub struct Connection {
         id: String,
+        /// The plugin's last lines of standard error, for the message when it exits.
+        stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
         child: Child,
         to_plugin: Sender<Vec<u8>>,
         from_plugin: Receiver<Result<Json, String>>,
@@ -162,8 +164,10 @@ mod native {
                 }
             });
 
+            let stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
             if let Some(stderr) = child.stderr.take() {
                 let eid = id.clone();
+                let tail = stderr_tail.clone();
                 let _ = std::thread::Builder::new().name(format!("plugin-{id}-err")).spawn(move || {
                     let mut err = BufReader::new(stderr);
                     let mut line = Vec::new();
@@ -171,7 +175,18 @@ mod native {
                         line.clear();
                         match err.by_ref().take(MAX_STDERR_LINE).read_until(b'\n', &mut line) {
                             Ok(0) | Err(_) => break,
-                            Ok(_) => log::info!("plugin {eid}: {}", String::from_utf8_lossy(&line).trim_end()),
+                            Ok(_) => {
+                                let text = String::from_utf8_lossy(&line).trim_end().to_string();
+                                log::info!("plugin {eid}: {text}");
+                                let mut t = match tail.lock() {
+                                    Ok(g) => g,
+                                    Err(p) => p.into_inner(),
+                                };
+                                if t.len() >= 3 {
+                                    t.remove(0);
+                                }
+                                t.push(text.chars().take(300).collect());
+                            }
                         }
                     }
                 });
@@ -182,7 +197,7 @@ mod native {
                 let _ = child.wait();
                 return Err("can't start the plugin's I/O threads".into());
             }
-            Ok(Connection { id, child, to_plugin, from_plugin, next_id: 1 })
+            Ok(Connection { id, stderr_tail, child, to_plugin, from_plugin, next_id: 1 })
         }
 
         pub fn request(&mut self, method: &str, params: Json, timeout: Duration) -> Result<Json, RequestError> {
@@ -204,7 +219,7 @@ mod native {
                 let left = deadline.saturating_duration_since(Instant::now());
                 let msg = match self.from_plugin.recv_timeout(left) {
                     Ok(Ok(msg)) => msg,
-                    Ok(Err(e)) => return Err(RequestError::fatal(e)),
+                    Ok(Err(e)) => return Err(RequestError::fatal(self.with_stderr(e))),
                     Err(RecvTimeoutError::Timeout) => {
                         return Err(RequestError::fatal(format!("{method} took longer than {} ms", timeout.as_millis())));
                     }
@@ -235,6 +250,17 @@ mod native {
                 }
                 return Ok(msg.get("result").cloned().unwrap_or(Json::Null));
             }
+        }
+
+        /// `message`, then what the plugin last wrote to standard error (why it exited, say).
+        fn with_stderr(&self, message: String) -> String {
+            // Give the error reader a moment to catch the process's last words.
+            std::thread::sleep(Duration::from_millis(50));
+            let tail = match self.stderr_tail.lock() {
+                Ok(g) => g.join(" / "),
+                Err(p) => p.into_inner().join(" / "),
+            };
+            if tail.is_empty() { message } else { format!("{message}: {tail}") }
         }
 
         /// Asks the plugin to exit, then makes sure it has.
