@@ -173,7 +173,7 @@ fn rewritten(r: &PreservedRel) -> bool {
     !r.external && REWRITTEN.contains(&kind(&r.rel_type).to_ascii_lowercase().as_str())
 }
 
-fn rels_part_name(part: &str) -> String {
+pub(crate) fn rels_part_name(part: &str) -> String {
     let (dir, file) = package::split_dir(part);
     if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") }
 }
@@ -231,6 +231,8 @@ pub struct KeptReader {
     overrides: HashMap<String, String>,
     budget: usize,
     parts_left: usize,
+    /// Package-root relationships (by id) whose content the model took over (the ribbon).
+    pub modelled_roots: Vec<String>,
 }
 
 impl KeptReader {
@@ -242,6 +244,7 @@ impl KeptReader {
             overrides: HashMap::new(),
             budget: kept_total(),
             parts_left: MAX_KEPT_PARTS,
+            modelled_roots: Vec::new(),
         };
         if let Ok(root) = raw_rels(cx, "")
             && root.iter().any(|r| r.rel_type.starts_with("http://purl.oclc.org/"))
@@ -373,7 +376,8 @@ impl KeptReader {
         let mut seen = HashSet::new();
         // Package root: custom document properties, ribbon customisation, task panes.
         if let Ok(root) = raw_rels(cx, "") {
-            for r in root.iter().filter(|r| is_kind(r, PACKAGE_ROOTS)) {
+            let modelled = std::mem::take(&mut self.modelled_roots);
+            for r in root.iter().filter(|r| is_kind(r, PACKAGE_ROOTS) && !modelled.contains(&r.id)) {
                 let mut q = Preserved::default();
                 match self.keep(cx, &mut q, std::slice::from_ref(r), &mut seen) {
                     Ok(()) => {

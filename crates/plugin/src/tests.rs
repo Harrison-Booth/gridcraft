@@ -279,3 +279,152 @@ mod install {
         std::fs::remove_dir_all(&root).unwrap();
     }
 }
+
+mod office {
+    use crate::office::{Action, OfficeCommand, Permission, Step, parse_manifest};
+    use crate::{MenuKind, run_command};
+
+    /// An add-in manifest written for these tests from the public schema: a default task pane, a
+    /// button on the Home tab, a menu with a function command on a custom tab, and a cell menu item.
+    pub(super) const MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0" xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="TaskPaneApp">
+  <Id>0d5c7a1e-1111-4bcd-9eaf-0123456789ab</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Acme &amp; Sons</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Acme Prices"/>
+  <Description DefaultValue="Live prices in your sheet."/>
+  <IconUrl DefaultValue="https://acme.example/icon-32.png"/>
+  <SupportUrl DefaultValue="https://acme.example/help"/>
+  <AppDomains><AppDomain>https://login.acme.example</AppDomain></AppDomains>
+  <Hosts><Host Name="Workbook"/></Hosts>
+  <Requirements><Sets DefaultMinVersion="1.1"><Set Name="ExcelApi" MinVersion="1.3"/></Sets></Requirements>
+  <DefaultSettings><SourceLocation DefaultValue="https://acme.example/taskpane.html"/></DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Workbook">
+        <DesktopFormFactor>
+          <FunctionFile resid="Commands.Url"/>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="Acme.Group"><Label resid="Group.Label"/>
+                <Control xsi:type="Button" id="Acme.Taskpane">
+                  <Label resid="Button.Label"/>
+                  <Supertip><Title resid="Button.Label"/><Description resid="Button.Tip"/></Supertip>
+                  <Action xsi:type="ShowTaskpane"><TaskpaneId>Main</TaskpaneId><SourceLocation resid="Taskpane.Url"/></Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+            <CustomTab id="Acme.Tab"><Label resid="Tab.Label"/>
+              <Group id="Acme.Tools"><Label resid="Tools.Label"/>
+                <Control xsi:type="Menu" id="Acme.Menu"><Label resid="Menu.Label"/>
+                  <Items>
+                    <Item id="Acme.Refresh"><Label resid="Refresh.Label"/><Action xsi:type="ExecuteFunction"><FunctionName>refreshAll</FunctionName></Action></Item>
+                    <Item id="Acme.Bad"><Label resid="Refresh.Label"/><Action xsi:type="ShowTaskpane"><SourceLocation resid="Http.Url"/></Action></Item>
+                  </Items>
+                </Control>
+              </Group>
+            </CustomTab>
+          </ExtensionPoint>
+          <ExtensionPoint xsi:type="ContextMenu">
+            <OfficeMenu id="ContextMenuCell">
+              <Control xsi:type="Button" id="Acme.Cell"><Label resid="Cell.Label"/>
+                <Action xsi:type="ShowTaskpane"><SourceLocation resid="Taskpane.Url"/></Action>
+              </Control>
+            </OfficeMenu>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+    </Hosts>
+    <Resources>
+      <bt:Urls>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://acme.example/taskpane.html"/>
+        <bt:Url id="Commands.Url" DefaultValue="https://acme.example/commands.html"/>
+        <bt:Url id="Http.Url" DefaultValue="http://acme.example/insecure.html"/>
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="Group.Label" DefaultValue="Acme"/>
+        <bt:String id="Button.Label" DefaultValue="Show Prices"/>
+        <bt:String id="Tab.Label" DefaultValue="Acme"/>
+        <bt:String id="Tools.Label" DefaultValue="Tools"/>
+        <bt:String id="Menu.Label" DefaultValue="More"/>
+        <bt:String id="Refresh.Label" DefaultValue="Refresh All"/>
+        <bt:String id="Cell.Label" DefaultValue="Price This Cell"/>
+      </bt:ShortStrings>
+      <bt:LongStrings><bt:String id="Button.Tip" DefaultValue="Opens the prices pane."/></bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>"#;
+
+    #[test]
+    fn office_manifests_become_plugins() {
+        let m = parse_manifest(MANIFEST, "gridcraft").unwrap();
+        assert_eq!(m.id, "office.0d5c7a1e-1111-4bcd-9eaf-0123456789ab");
+        assert_eq!((m.name.as_str(), m.author.as_str(), m.homepage.as_str()), ("Acme Prices", "Acme & Sons", "https://acme.example/help"));
+        assert_eq!(m.apps, ["gridcraft"]);
+        let o = m.office.as_ref().unwrap();
+        assert_eq!(o.permissions, Permission::ReadWriteDocument);
+        assert_eq!(o.requirements, [("ExcelApi".to_string(), "1.3".to_string())]);
+        assert_eq!(o.app_domains, ["https://login.acme.example"]);
+        // The default pane, the Home button, the menu's function (the http:// item is dropped) and the cell item.
+        let ids: Vec<&str> = m.commands.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, ["taskpane", "Acme.Taskpane", "Acme.Refresh", "Acme.Cell"]);
+        assert_eq!(
+            o.commands["Acme.Taskpane"],
+            OfficeCommand::ShowTaskpane { url: "https://acme.example/taskpane.html".into(), taskpane_id: Some("Main".into()) }
+        );
+        assert_eq!(
+            o.commands["Acme.Refresh"],
+            OfficeCommand::ExecuteFunction { function: "refreshAll".into(), url: "https://acme.example/commands.html".into() }
+        );
+        assert_eq!(m.ui.ribbon.len(), 2);
+        assert_eq!((m.ui.ribbon[0].tab.as_str(), m.ui.ribbon[0].group.as_str()), ("Home", "Acme"));
+        assert_eq!(m.ui.ribbon[0].buttons[0].tooltip.as_deref(), Some("Opens the prices pane."));
+        assert_eq!((m.ui.ribbon[1].tab.as_str(), m.ui.ribbon[1].buttons[0].label.as_deref()), ("Acme", Some("Refresh All")));
+        assert_eq!(m.ui.menus.len(), 1);
+        assert_eq!(m.ui.menus[0].menu, MenuKind::Cell);
+    }
+
+    #[test]
+    fn office_commands_open_panes_instead_of_processes() {
+        let m = parse_manifest(MANIFEST, "gridcraft").unwrap();
+        let id = m.id.clone();
+        crate::install(m, std::env::temp_dir()).unwrap();
+        let r = run_command(&id, "Acme.Cell", serde_json::json!({}), serde_json::json!({})).unwrap();
+        assert!(matches!(r.office, Some(OfficeCommand::ShowTaskpane { .. })));
+        assert!(r.commands.is_empty());
+        assert_eq!(crate::get(&id).unwrap().status(), "ready", "no process was started");
+        assert_eq!(crate::get(&id).unwrap().info()["kind"], "office");
+        assert!(crate::unload(&id));
+    }
+
+    #[test]
+    fn foreign_or_broken_office_manifests_are_refused() {
+        assert!(parse_manifest(MANIFEST, "wordcraft").unwrap_err().contains("not this app"));
+        for bad in [
+            "<OfficeApp/>",
+            "not xml <<<",
+            "<Other/>",
+            &MANIFEST.replace("0d5c7a1e-1111-4bcd-9eaf-0123456789ab", "../../etc"),
+            &MANIFEST.replace("https://acme.example/", "http://acme.example/"),
+        ] {
+            assert!(parse_manifest(bad, "gridcraft").is_err(), "{bad:.40}");
+        }
+        let deep = format!("<OfficeApp>{}{}</OfficeApp>", "<a>".repeat(100), "</a>".repeat(100));
+        assert!(parse_manifest(&deep, "gridcraft").unwrap_err().contains("deeply"));
+    }
+
+    #[test]
+    fn sync_actions_read_as_json() {
+        let a: Vec<Action> = serde_json::from_str(
+            r#"[{"op":"load","path":[{"p":"workbook"},{"m":"getSelectedRange"}],"props":["values","address"]},
+                {"op":"set","path":[{"p":"workbook"},{"p":"worksheets"},{"m":"getItem","a":["Data"]},{"m":"getRange","a":["A1:B2"]}],"prop":"values","value":[[1,2],[3,4]]},
+                {"op":"call","path":[{"p":"workbook"},{"m":"getSelectedRange"}],"method":"clear","args":["Formats"]}]"#,
+        )
+        .unwrap();
+        assert!(matches!(&a[1], Action::Set { prop, .. } if prop == "values"));
+        assert!(matches!(&a[0], Action::Load { path, .. } if path[1] == Step::Method { m: "getSelectedRange".into(), a: vec![] }));
+    }
+}

@@ -17,6 +17,7 @@ mod chart;
 mod chartex;
 mod crypto;
 mod csv;
+pub mod custom_ui;
 mod drawing;
 mod feature_bags;
 mod fmla;

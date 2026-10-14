@@ -11,6 +11,7 @@ mod malformed;
 mod ods_tests;
 mod passthrough_tests;
 mod pivot_tests;
+mod ribbon_tests;
 mod richdata_tests;
 mod roundtrip;
 mod sheet_names;

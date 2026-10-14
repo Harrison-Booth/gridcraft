@@ -153,7 +153,36 @@ fn insert_function(s: &mut Session, p: &Json) -> Result<Json> {
     }
 }
 
+/// Every function a formula can call: the built-in ones, then the enabled add-ins' (category
+/// `Add-ins`), which come and go as add-ins are loaded, unloaded and turned off.
 pub fn function_list() -> Vec<Json> {
+    let mut v = builtin_function_list();
+    v.extend(plugin_functions());
+    v
+}
+
+/// The enabled add-ins' functions, as [`function_list`] lists them, plus the add-in's id and
+/// name. A function without a signature in its manifest shows as `NAME(…)`.
+pub fn plugin_functions() -> Vec<Json> {
+    let mut v = Vec::new();
+    for p in crate::plugin::list().into_iter().filter(|p| p.enabled()) {
+        let m = &p.manifest;
+        for f in &m.functions {
+            let signature = if f.signature.trim().is_empty() { format!("{}(…)", f.name) } else { f.signature.clone() };
+            let description = if f.description.trim().is_empty() {
+                format!("A function of the add-in {}.", m.name)
+            } else {
+                format!("{} ({})", f.description, m.name)
+            };
+            v.push(json!({"name": f.name, "category": "Add-ins", "signature": signature, "description": description, "plugin": m.id}));
+        }
+    }
+    v.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    v
+}
+
+/// The built-in functions (no add-ins'): fixed for the life of the process.
+pub fn builtin_function_list() -> Vec<Json> {
     let mut v: Vec<Json> = gridcraft_functions::all()
         .iter()
         .map(|f| json!({"name": f.name, "category": format!("{:?}", f.category), "signature": f.signature, "description": f.description}))
