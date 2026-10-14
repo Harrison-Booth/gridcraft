@@ -1,6 +1,6 @@
 # Plugins
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (Office add-ins load as plugins, officejs.md; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (protocol 1.1: host requests, macros and the Developer tab; previously minor: Office add-ins load as plugins, officejs.md; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -251,6 +251,48 @@ for line in sys.stdin:
  "functions": [{"name": "PY.TWICE", "minArgs": 1, "maxArgs": 1}]}
 ```
 
+## Protocol 1.1: asking the host, and macros
+
+**The plugin asks the host while it works.** While GridCraft waits for its answer to a request
+(`commands/run`, `macros/run`…), a plugin may send requests of its own on standard output — JSON-RPC
+requests with its own ids — and read GridCraft's answers on standard input before it goes on. Each
+answer starts the request's timeout again. Everything these requests change is part of the same
+undoable step, and is taken back if the plugin's answer is an error.
+
+| Request | Params | Answer |
+|---|---|---|
+| `host/sync` | `{actions}` | `{results}`, or an error whose `data` is `{code, message, action}`. The actions are the Office bridge's ([officejs.md](officejs.md#the-bridge-officesync)): paths from `workbook` to worksheets, ranges, formats; `load`, `set`, `call` |
+| `host/vbaProject/get` | `{}` | `{base64}`: the workbook's `vbaProject.bin`, or `null` |
+| `host/vbaProject/set` | `{base64}` | `{}`: replaces it (the workbook then saves as `.xlsm`); at most 64 MiB |
+| `host/message` | `{text, title?}` | `{result: 1}`: shows a message after the step (it doesn't wait for the user yet) |
+| `host/log` | `{text}` | `{}`: writes to GridCraft's log |
+
+A plugin calling the host can make GridCraft recalculate a formula that calls one of the plugin's
+own functions; that call fails (`#VALUE!`) instead of waiting for the busy plugin.
+
+**Macros.** A plugin that declares `"macros": {"language": "VBA"}` runs macros, and brings the
+**Developer** tab: Visual Basic (the workbook's code modules in an editor), Macros (run, edit,
+create), Record Macro, Macro Security and Add-ins. GridCraft draws all of it; the plugin owns the
+language. It answers:
+
+| Request | Params | Answer |
+|---|---|---|
+| `macros/list` | `{}` | `{macros: [{name: "Module1.Hello", module, procedure}]}` |
+| `macros/run` | `{name}` | `{}`, or an error (`Run-time error '13': Type mismatch`, with `data: {module, line}`) |
+| `macros/modules` | `{}` | `{modules: [{name, kind: standard\|class\|document, source}]}` |
+| `macros/saveModule` | `{name, source}` | `{}` |
+| `macros/deleteModule` | `{name}` | `{}` |
+| `macros/record` | `{steps: [{command, params}]}` | `{source}`: the recorded steps as a macro |
+
+Commands: `developer.macros`, `developer.runMacro {name}`, `developer.modules`,
+`developer.saveModule {name, source}`, `developer.deleteModule {name}`, `developer.recordMacro {stop?}`,
+`developer.recordToCode {steps}`, `developer.enableMacros`, `developer.macroSecurity {level}`.
+
+**Macro security** (Developer › Macro Security, `macroSecurity` in the preferences): `prompt`, the
+default, runs a workbook's macros once the user enabled them for it (the message bar's **Enable
+Content** on a workbook with macros, `developer.enableMacros`); `disable` runs none; `enable` runs
+all. A macro is a program: agents and the CLI are bound by the same setting.
+
 ## Publishing a plugin on GitHub
 
 Put `plugin.json` at the root of the repository (or in one folder of it). A plugin written in
@@ -293,6 +335,7 @@ are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Protocol 1.1: `host/*` requests while a plugin works (one undo step), macro plugins (`macros/*`), the Developer tab and Macro Security |
 | 2026-10-14 | minor | Office add-ins (`manifest.xml`) load as plugins whose commands open task panes ([officejs.md](officejs.md)) |
 | 2026-10-14 | minor | One plugin for several apps: `apps`, `uiFor`, `host.id` in `initialize`, `CRAFT_HOST`/`CRAFT_PLUGIN_DIR`; the shared protocol WordCraft speaks too; `.craft-source.json` |
 | 2026-10-13 | minor | Install from a GitHub repository (`plugins.install`, Options and Automate › Add-ins); wider add-in list |

@@ -28,7 +28,7 @@ use gridcraft_core::{CellError, Value};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value as Json, json};
 
-pub use process::{Connection, RequestError};
+pub use process::{Connection, HostError, HostHandler, RequestError};
 
 /// The protocol version this host speaks (sent in `initialize`).
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -89,9 +89,19 @@ pub struct Manifest {
     /// Per-app ribbon groups and menu items (`{"gridcraft": {…}, "wordcraft": {…}}`), as written.
     #[serde(default)]
     pub ui_for: std::collections::BTreeMap<String, Json>,
+    /// A scripting language the plugin runs macros in (protocol 1.1: `macros/*`), e.g. VBA.
+    #[serde(default)]
+    pub macros: Option<MacrosDecl>,
     /// An Office add-in (read from its `manifest.xml`): its task panes and permissions.
     #[serde(skip)]
     pub office: Option<office::OfficeInfo>,
+}
+
+/// A plugin that runs macros (`"macros": {"language": "VBA"}`): the Developer tab's Macros and
+/// Visual Basic use it.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct MacrosDecl {
+    pub language: String,
 }
 
 /// How to start the plugin. A `command` containing a path separator is relative to the plugin
@@ -372,6 +382,11 @@ pub struct Plugin {
     pub source: Option<Json>,
 }
 
+thread_local! {
+    /// Plugins this thread is waiting for (see [`Plugin::request_with`]).
+    static BUSY: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     match m.lock() {
         Ok(g) => g,
@@ -393,6 +408,28 @@ impl Plugin {
 
     /// Sends a request and waits for its result, starting the plugin when needed.
     fn request(&self, method: &str, params: Json, timeout: Duration) -> Result<Json, String> {
+        self.request_with(method, params, timeout, &mut |_, _| Err(HostError::unknown()))
+    }
+
+    /// [`Plugin::request`], answering the plugin's `host/…` requests with `host` meanwhile.
+    fn request_with(&self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, String> {
+        // A host request of this plugin's (a macro writing cells) can recalculate a formula that
+        // calls the plugin again: that waits for nobody, it fails (the cell shows #VALUE!).
+        if BUSY.with(|b| b.borrow().contains(&self.manifest.id)) {
+            return Err(format!("plugin {} is busy", self.manifest.id));
+        }
+        BUSY.with(|b| b.borrow_mut().push(self.manifest.id.clone()));
+        let r = self.request_inner(method, params, timeout, host);
+        BUSY.with(|b| {
+            let mut b = b.borrow_mut();
+            if let Some(i) = b.iter().rposition(|x| *x == self.manifest.id) {
+                b.remove(i);
+            }
+        });
+        r
+    }
+
+    fn request_inner(&self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, String> {
         if self.manifest.office.is_some() {
             return Err(format!("{} is an Office add-in: it runs in its task pane", self.manifest.id));
         }
@@ -421,7 +458,7 @@ impl Plugin {
             *state = State::Running(conn);
         }
         let State::Running(conn) = state else { return Err("plugin not running".into()) };
-        match conn.request(method, params, timeout) {
+        match conn.request_with(method, params, timeout, host) {
             Ok(v) => Ok(v),
             Err(e) if e.fatal => {
                 // The connection is gone or out of step: stop the process and start afresh next time.
@@ -713,6 +750,11 @@ pub const MAX_REPLY_COMMANDS: usize = 10_000;
 
 /// Runs one of a plugin's commands. `context` describes the workbook (sheet, selection, values).
 pub fn run_command(plugin_id: &str, command: &str, params: Json, context: Json) -> Result<CommandReply, String> {
+    run_command_with(plugin_id, command, params, context, &mut |_, _| Err(HostError::unknown()))
+}
+
+/// [`run_command`], answering the plugin's `host/…` requests with `host` while it runs.
+pub fn run_command_with(plugin_id: &str, command: &str, params: Json, context: Json, host: &mut HostHandler<'_>) -> Result<CommandReply, String> {
     let plugin = get(plugin_id).ok_or_else(|| format!("no plugin `{plugin_id}` is loaded"))?;
     if !plugin.enabled() {
         return Err(format!("plugin {plugin_id} is turned off (File › Options › Add-ins)"));
@@ -724,8 +766,30 @@ pub fn run_command(plugin_id: &str, command: &str, params: Json, context: Json) 
         let what = o.commands.get(command).cloned().ok_or_else(|| format!("plugin {plugin_id} has no command `{command}`"))?;
         return Ok(CommandReply { office: Some(what), ..Default::default() });
     }
-    let r = plugin.request("commands/run", json!({"command": command, "params": params, "context": context}), COMMAND_TIMEOUT)?;
+    let r = plugin.request_with("commands/run", json!({"command": command, "params": params, "context": context}), COMMAND_TIMEOUT, host)?;
     parse_reply(r)
+}
+
+/// Sends a macro plugin one of its `macros/…` requests (protocol 1.1), answering its `host/…`
+/// requests with `host` meanwhile.
+pub fn call_macros(plugin_id: &str, method: &str, params: Json, host: &mut HostHandler<'_>) -> Result<Json, String> {
+    let plugin = get(plugin_id).ok_or_else(|| format!("no plugin `{plugin_id}` is loaded"))?;
+    if !plugin.enabled() {
+        return Err(format!("plugin {plugin_id} is turned off (File › Options › Add-ins)"));
+    }
+    if plugin.manifest.macros.is_none() || !method.starts_with("macros/") {
+        return Err(format!("plugin {plugin_id} doesn't run macros"));
+    }
+    plugin.request_with(method, params, COMMAND_TIMEOUT, host)
+}
+
+/// The enabled plugins that run macros, with their language.
+pub fn macro_plugins() -> Vec<(String, String)> {
+    list()
+        .into_iter()
+        .filter(|p| p.enabled())
+        .filter_map(|p| p.manifest.macros.as_ref().map(|m| (p.manifest.id.clone(), m.language.clone())))
+        .collect()
 }
 
 fn parse_reply(r: Json) -> Result<CommandReply, String> {

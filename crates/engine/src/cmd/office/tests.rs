@@ -51,20 +51,23 @@ fn a_sync_writes_and_reads_ranges_as_one_undo_step() {
             {"op": "set", "path": range("Sheet1", "B2:C3"), "prop": "values", "value": [[1, 2], [3, "=B2+C2"]]},
             {"op": "set", "path": [{"p": "workbook"}, {"p": "worksheets"}, {"m": "getItem", "a": ["sheet1"]}, {"m": "getRange", "a": ["B2:C3"]}, {"p": "format"}, {"p": "font"}], "prop": "bold", "value": true},
             {"op": "set", "path": range("Sheet1", "D1"), "prop": "values", "value": "filled"},
+            {"op": "set", "path": [{"p": "workbook"}, {"p": "worksheets"}, {"m": "getItem", "a": ["Sheet1"]}, {"m": "getRange", "a": ["D1"]}, {"p": "format"}, {"p": "fill"}], "prop": "color", "value": "#FFFF00"},
             {"op": "set", "path": range("Sheet1", "B2"), "prop": "numberFormat", "value": "0.00"},
             {"op": "load", "path": range("Sheet1", "B2:C3"), "props": ["values", "formulas", "text", "address", "rowCount"]},
             {"op": "load", "path": [{"p": "workbook"}, {"p": "worksheets"}, {"m": "getItem", "a": ["Sheet1"]}, {"m": "getRange", "a": ["B2"]}, {"p": "format"}, {"p": "font"}], "props": ["bold", "name"]},
             {"op": "load", "path": [{"p": "workbook"}, {"p": "worksheets"}], "props": ["items"]},
+            {"op": "load", "path": [{"p": "workbook"}, {"p": "worksheets"}, {"m": "getItem", "a": ["Sheet1"]}, {"m": "getRange", "a": ["D1"]}, {"p": "format"}, {"p": "fill"}], "props": ["color"]},
         ]),
     );
     let r = &out["results"];
-    assert_eq!(r[4]["values"], json!([[1.0, 2.0], [3.0, 3.0]]), "{out}");
-    assert_eq!(r[4]["formulas"][1][1], "=B2+C2");
-    assert_eq!(r[4]["text"][0][0], "1.00");
-    assert_eq!(r[4]["address"], "Sheet1!B2:C3");
-    assert_eq!(r[4]["rowCount"], 2);
-    assert_eq!(r[5]["bold"], true);
-    assert_eq!(r[6]["items"][0]["name"], "Sheet1");
+    assert_eq!(r[5]["values"], json!([[1.0, 2.0], [3.0, 3.0]]), "{out}");
+    assert_eq!(r[5]["formulas"][1][1], "=B2+C2");
+    assert_eq!(r[5]["text"][0][0], "1.00");
+    assert_eq!(r[5]["address"], "Sheet1!B2:C3");
+    assert_eq!(r[5]["rowCount"], 2);
+    assert_eq!(r[6]["bold"], true);
+    assert_eq!(r[7]["items"][0]["name"], "Sheet1");
+    assert_eq!(r[8]["color"], "#FFFF00", "a fill colour reads back as #RRGGBB");
     assert_eq!(s.active().unwrap().undo.len(), undo + 1, "the whole sync is one undo step");
     s.execute("edit.undo", json!({})).unwrap();
     let back = sync(&mut s, &id, json!([{"op": "load", "path": range("Sheet1", "A1:B2"), "props": ["values"]}]));

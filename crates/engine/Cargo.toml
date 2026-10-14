@@ -33,3 +33,8 @@ zip = { workspace = true }
 [[test]]
 name = "plugins"
 harness = false
+
+# Runs without libtest: the test binary doubles as the macro add-in it starts.
+[[test]]
+name = "macros"
+harness = false

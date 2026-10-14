@@ -12,6 +12,7 @@ mod cell_pictures;
 pub mod chartview;
 pub mod control;
 pub mod credits;
+pub mod developer_ui;
 pub mod dialogs;
 pub mod editor;
 pub mod fonts;
@@ -232,6 +233,8 @@ pub struct SheetApp {
     pub plugin_install: plugin_ui::Install,
     /// Office add-ins' open task panes.
     pub office: office_pane::Panes,
+    /// The Developer tab's windows (Macros, Visual Basic, Macro Security).
+    pub dev: developer_ui::DevState,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per frame (drags need several frames).
     pub synthetic: std::collections::VecDeque<Vec<egui::Event>>,
@@ -290,6 +293,7 @@ impl SheetApp {
             printing: Default::default(),
             plugin_install: Default::default(),
             office: Default::default(),
+            dev: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
             control_rx: None,
@@ -726,6 +730,13 @@ impl SheetApp {
             return;
         }
         match name {
+            // The message bar's Enable Content (a workbook with macros).
+            "enableMacros" => {
+                self.run_or_alert("developer.enableMacros", json!({}));
+                self.notice = None;
+            }
+            "macrosVba" => developer_ui::open_macros(self),
+            "visualBasic" => developer_ui::open_editor(self, None),
             "open" => {
                 if let Some(start) = &self.services.open_async {
                     start();
@@ -1127,6 +1138,7 @@ impl SheetApp {
             backstage::show(self, ui);
         } else {
             ribbon::show(self, ui);
+            developer_ui::notice(self);
             widgets::notice_bar(self, ui);
             if self.session.prefs.formula_bar {
                 formula_bar::show(self, ui);
@@ -1145,6 +1157,7 @@ impl SheetApp {
             });
         }
         dialogs::show(self, &ctx);
+        developer_ui::windows(self, &ctx);
         widgets::message_box(self, &ctx);
         widgets::toast(self, &ctx);
         control::issue_screenshots(self, &ctx);

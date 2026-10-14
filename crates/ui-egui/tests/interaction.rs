@@ -756,6 +756,8 @@ fn macro_workbook_bytes() -> Vec<u8> {
 
 #[test]
 fn opening_a_macro_workbook_shows_a_notice() {
+    // A macro add-in loaded by another test would add its own bar (Developer › macros disabled).
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
     // The reader's "macros kept but not executed" warning must reach a dismissible info bar,
     // not be silently dropped (issue #6 follow-up: Excel-style message bar).
     let mut h = harness(blank());
@@ -1079,4 +1081,50 @@ fn office_add_ins_open_a_task_pane_and_sync_through_the_web_view() {
     assert!(web.borrow().closed.contains(&key));
     assert!(h.state().office.open.is_empty());
     gridcraft_engine::plugin::unload(&id);
+}
+
+#[test]
+fn a_macro_add_in_brings_the_developer_tab_and_macros_start_disabled() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-vba", "name": "VBA Test", "macros": {"language": "VBA"}, "run": {"command": "./not-started"}}"#,
+    )
+    .unwrap();
+    assert!(!gridcraft_ui_egui::developer_ui::visible());
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    // Unloaded however the test ends, so the other tests never see it.
+    struct Unload;
+    impl Drop for Unload {
+        fn drop(&mut self) {
+            gridcraft_engine::plugin::unload("t.ui-vba");
+        }
+    }
+    let _unload = Unload;
+    assert!(gridcraft_ui_egui::developer_ui::visible(), "an add-in that runs macros brings the Developer tab");
+    let mut session = blank();
+    std::sync::Arc::make_mut(&mut session.active_mut().unwrap().wb).vba_project = Some(b"project".to_vec());
+    let mut h = harness(session);
+    h.run_steps(2);
+    let notice = h.state().notice.as_ref().map(|n| n.text.clone()).unwrap_or_default();
+    assert!(notice.contains("Macros have been disabled"), "{notice}");
+    assert!(!gridcraft_engine::cmd::developer::macros_allowed(&h.state().session));
+    h.get_by_label("Enable Content").click();
+    h.run_steps(2);
+    assert!(gridcraft_engine::cmd::developer::macros_allowed(&h.state().session));
+    assert!(h.state().notice.is_none());
+    // Developer › Macro Security.
+    h.state_mut().ui.ribbon_tab = "Developer".into();
+    h.run_steps(2);
+    h.get_by_label("Macro Security").click();
+    h.run_steps(2);
+    h.get_by_label("Disable all macros").click();
+    h.run_steps(2);
+    assert_eq!(h.state().session.prefs.macro_security, "disable");
+    assert!(!gridcraft_engine::cmd::developer::macros_allowed(&h.state().session));
+    // The Macros window reports the add-in's failure to start instead of hanging.
+    gridcraft_ui_egui::developer_ui::open_macros(h.state_mut());
+    h.run_steps(2);
+    assert!(h.state().dev.macros.as_ref().and_then(|w| w.error.clone()).is_some_and(|e| e.contains("can't start")));
+    gridcraft_engine::plugin::unload("t.ui-vba");
+    assert!(!gridcraft_ui_egui::developer_ui::visible());
 }

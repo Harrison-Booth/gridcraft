@@ -17,6 +17,24 @@ pub struct RequestError {
     pub fatal: bool,
 }
 
+/// The host's answer to a plugin's request (protocol 1.1): `Ok(result)` or an error.
+pub type HostHandler<'a> = dyn FnMut(&str, &Json) -> Result<Json, HostError> + 'a;
+
+/// A JSON-RPC error the host answers a plugin's request with.
+#[derive(Debug)]
+pub struct HostError {
+    pub code: i64,
+    pub message: String,
+    pub data: Json,
+}
+
+impl HostError {
+    /// The plugin asked for a method the host doesn't have.
+    pub fn unknown() -> HostError {
+        HostError { code: -32601, message: "the host has no such method".into(), data: Json::Null }
+    }
+}
+
 impl RequestError {
     fn fatal(message: impl Into<String>) -> RequestError {
         RequestError { message: message.into(), fatal: true }
@@ -41,6 +59,9 @@ mod web {
             Err("plugins need the desktop app or the CLI".into())
         }
         pub fn request(&mut self, _method: &str, _params: Json, _timeout: Duration) -> Result<Json, RequestError> {
+            Err(RequestError::fatal("plugins need the desktop app or the CLI"))
+        }
+        pub fn request_with(&mut self, _method: &str, _params: Json, _timeout: Duration, _host: &mut HostHandler<'_>) -> Result<Json, RequestError> {
             Err(RequestError::fatal("plugins need the desktop app or the CLI"))
         }
         pub fn shutdown(self) {}
@@ -165,13 +186,20 @@ mod native {
         }
 
         pub fn request(&mut self, method: &str, params: Json, timeout: Duration) -> Result<Json, RequestError> {
+            self.request_with(method, params, timeout, &mut |_, _| Err(HostError::unknown()))
+        }
+
+        /// [`Connection::request`], answering the plugin's own requests (protocol 1.1: `host/…`)
+        /// with `host` while it works. Each answer starts the timeout again: a macro that keeps
+        /// calling the host is working, not hung.
+        pub fn request_with(&mut self, method: &str, params: Json, timeout: Duration, host: &mut HostHandler<'_>) -> Result<Json, RequestError> {
             let id = self.next_id;
             self.next_id = self.next_id.wrapping_add(1);
             let mut bytes = serde_json::to_vec(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))
                 .map_err(|e| RequestError::fatal(format!("encoding the request: {e}")))?;
             bytes.push(b'\n');
             self.to_plugin.send(bytes).map_err(|_| RequestError::fatal("the plugin stopped reading"))?;
-            let deadline = Instant::now() + timeout;
+            let mut deadline = Instant::now() + timeout;
             loop {
                 let left = deadline.saturating_duration_since(Instant::now());
                 let msg = match self.from_plugin.recv_timeout(left) {
@@ -182,8 +210,22 @@ mod native {
                     }
                     Err(RecvTimeoutError::Disconnected) => return Err(RequestError::fatal("the plugin exited")),
                 };
-                if msg.get("id").and_then(Json::as_u64) != Some(id) || msg.get("method").is_some() {
-                    // A notification or request from the plugin: not supported by protocol 1.
+                if let Some(call) = msg.get("method").and_then(Json::as_str) {
+                    // The plugin asks the host something while it works (or notifies it).
+                    let answer = host(call, msg.get("params").unwrap_or(&Json::Null));
+                    if let Some(rid) = msg.get("id") {
+                        let reply = match answer {
+                            Ok(result) => json!({"jsonrpc": "2.0", "id": rid, "result": result}),
+                            Err(e) => json!({"jsonrpc": "2.0", "id": rid, "error": {"code": e.code, "message": e.message, "data": e.data}}),
+                        };
+                        let mut bytes = serde_json::to_vec(&reply).map_err(|e| RequestError::fatal(format!("encoding an answer: {e}")))?;
+                        bytes.push(b'\n');
+                        self.to_plugin.send(bytes).map_err(|_| RequestError::fatal("the plugin stopped reading"))?;
+                    }
+                    deadline = Instant::now() + timeout;
+                    continue;
+                }
+                if msg.get("id").and_then(Json::as_u64) != Some(id) {
                     log::debug!("plugin {}: ignored message {msg}", self.id);
                     continue;
                 }

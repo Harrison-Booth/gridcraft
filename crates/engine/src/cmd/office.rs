@@ -87,17 +87,10 @@ fn sync(s: &mut Session, p: &Json) -> Result<Json> {
     // covers them), and if one fails the workbook goes back to how it was.
     let before = s.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone(), d.undo.len()));
     let journal_len = s.journal.len();
-    let mut results = Vec::with_capacity(actions.len());
-    let mut failure = None;
-    for (i, a) in actions.iter().enumerate() {
-        match run_action(s, addin, office.permissions, a) {
-            Ok(v) => results.push(v),
-            Err(OfficeError(code, message)) => {
-                failure = Some(json!({"code": code, "message": message, "action": i}));
-                break;
-            }
-        }
-    }
+    let (results, failure) = match run_actions(s, addin, office.permissions, &actions) {
+        Ok(r) => (r, None),
+        Err(e) => (Vec::new(), Some(e)),
+    };
     s.journal.truncate(journal_len);
     if let Some((uid, wb, sel, undo_len)) = before
         && let Some(d) = s.docs.iter_mut().find(|d| d.uid == uid)
@@ -114,6 +107,19 @@ fn sync(s: &mut Session, p: &Json) -> Result<Json> {
         Some(error) => Ok(json!({"error": error})),
         None => Ok(json!({"results": results})),
     }
+}
+
+/// Runs `actions` in order for the add-in or plugin `addin`: their results, or the first failure
+/// as `{code, message, action}`. The caller makes them one step (and takes them back on failure).
+pub(crate) fn run_actions(s: &mut Session, addin: &str, perm: Permission, actions: &[Action]) -> std::result::Result<Vec<Json>, Json> {
+    let mut results = Vec::with_capacity(actions.len());
+    for (i, a) in actions.iter().enumerate() {
+        match run_action(s, addin, perm, a) {
+            Ok(v) => results.push(v),
+            Err(OfficeError(code, message)) => return Err(json!({"code": code, "message": message, "action": i})),
+        }
+    }
+    Ok(results)
 }
 
 fn need_read(perm: Permission) -> R<()> {
@@ -302,6 +308,10 @@ fn style(s: &mut Session, sheet: usize, r: RangeRef) -> R<Json> {
 
 /// Excel's `#RRGGBB` for a colour as GridCraft writes it (`Auto` is the default).
 fn color(v: &Json, auto: &str) -> Json {
+    // The model's own form: `{"Rgb": 0xRRGGBB}`.
+    if let Some(n) = v.get("Rgb").and_then(Json::as_u64) {
+        return json!(format!("#{:06X}", n & 0xFF_FFFF));
+    }
     match v.as_str() {
         Some(c) if c.len() == 6 && c.chars().all(|x| x.is_ascii_hexdigit()) => json!(format!("#{}", c.to_ascii_uppercase())),
         Some(c) if c.starts_with('#') => json!(c.to_ascii_uppercase()),

@@ -113,6 +113,9 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// The user enabled this workbook's macros (the message bar's Enable Content, or Macro
+    /// Security set to enable all).
+    pub macros_enabled: bool,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -138,6 +141,7 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            macros_enabled: false,
         }
     }
     pub fn is_dirty(&self) -> bool {
@@ -202,6 +206,9 @@ pub struct Prefs {
     pub formula_bar: bool,
     /// Ids of the plugins turned off in File › Options › Add-ins.
     pub disabled_plugins: Vec<String>,
+    /// Developer › Macro Security: `disable` (no macros run), `prompt` (a workbook's macros run
+    /// once the user enables them for it; the default) or `enable` (all run).
+    pub macro_security: String,
 }
 
 impl Default for Prefs {
@@ -217,6 +224,7 @@ impl Default for Prefs {
             user_dictionary: vec![],
             formula_bar: true,
             disabled_plugins: vec![],
+            macro_security: "prompt".into(),
         }
     }
 }
