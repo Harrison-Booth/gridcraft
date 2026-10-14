@@ -10,10 +10,12 @@
 //! that text, without `@`, and gives every other formula dynamic-array metadata.
 //!
 //! A range is harmless in SUM, but not in SQRT or arithmetic: `SUM(A1:A3*B1:B3)` intersects both
-//! operands. Legacy array-aware parameters such as SUMPRODUCT's evaluate everything inside as
-//! arrays, so nothing there is intersected. This is file-format policy, not a second evaluator:
-//! unknown results are never calculated.
+//! operands. Legacy array-aware parameters such as SUMPRODUCT's evaluate what is inside as
+//! arrays, so nothing there is intersected, except IF's condition and IFERROR's and IFNA's
+//! arguments ([`Param::Single`]). This is file-format policy, not a second evaluator: unknown
+//! results are never calculated.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gridcraft_core::CellRef;
@@ -58,11 +60,11 @@ enum Ctx {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Param {
     Value,
-    /// IF's condition: one value even inside array evaluation. Legacy Excel's IF does not
-    /// evaluate its condition as an array inside SUMPRODUCT unless the formula is a
-    /// Ctrl+Shift+Enter array, which this analysis never sees. A name's definition is still
+    /// One value even inside array evaluation: IF's condition and IFERROR's and IFNA's
+    /// arguments. Legacy Excel evaluates them as arrays inside SUMPRODUCT only in a
+    /// Ctrl+Shift+Enter formula, which this analysis never sees. A name's definition is still
     /// evaluated as an array throughout ([`Legacy::kind_of`]).
-    Condition,
+    Single,
     Ref,
     Array,
     /// The parameter is evaluated like the call itself (IF's and CHOOSE's results).
@@ -90,23 +92,25 @@ pub(crate) fn export(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula
     let Some(expr) = formula.expr_arc() else { return Export::Unchanged };
     let mut explicit = false;
     expr.walk(&mut |e| explicit |= matches!(e, Expr::Unary(UnOp::At, _)));
-    let plain = if explicit {
-        match strip(&expr) {
-            Some(plain) => plain,
-            None => return Export::Dynamic,
-        }
-    } else {
-        expr.as_ref().clone()
-    };
     let mut legacy = Legacy::new(wb, at, functions);
-    let read_back = legacy.formula(plain.clone(), sheet);
-    if !legacy.certain {
-        return Export::Dynamic;
-    }
     if !explicit {
-        return if legacy.inserted { Export::Dynamic } else { Export::Unchanged };
+        legacy.formula(expr.as_ref().clone(), sheet);
+        return if !legacy.certain {
+            Export::Dynamic
+        } else if !legacy.complete || legacy.inserted == 0 {
+            // An analysis that stopped at its limits leaves a legacy formula as it was read;
+            // saving it keeps it legacy.
+            Export::Unchanged
+        } else {
+            Export::Dynamic
+        };
     }
-    if gridcraft_formula::print(&read_back) == gridcraft_formula::print(&expr) { Export::Legacy(plain) } else { Export::Dynamic }
+    let Some(plain) = strip(&expr) else { return Export::Dynamic };
+    // The formula is the legacy reading of `plain` when every `@` in it is one the analysis of
+    // `plain` inserts, or one of a single value, and the analysis inserts no other.
+    legacy.explicit = true;
+    legacy.formula(expr.as_ref().clone(), sheet);
+    if legacy.certain && legacy.complete && !legacy.foreign && legacy.inserted == 0 { Export::Legacy(plain) } else { Export::Dynamic }
 }
 
 /// Rewrites the legacy cell formulas at `cells` (model sheet index, positions) to their
@@ -143,7 +147,7 @@ fn legacy(wb: &Workbook, sheet: usize, at: CellRef, formula: &Formula, functions
     let out = legacy.formula(expr.as_ref().clone(), sheet);
     // Text round trip: the stored expression is exactly what the text parses to. An analysis
     // that stopped early leaves the formula as it was read.
-    (legacy.inserted && legacy.certain).then(|| Formula::new(&gridcraft_formula::print(&out)))
+    (legacy.inserted > 0 && legacy.certain && legacy.complete).then(|| Formula::new(&gridcraft_formula::print(&out)))
 }
 
 /// `e` without its `@`, when its text (the printer writes only the parentheses the expression
@@ -158,23 +162,33 @@ fn strip(e: &Expr) -> Option<Expr> {
 /// Removes every `@` and the parentheses [`at`] adds.
 fn remove_at(e: Expr) -> Expr {
     e.map(&mut |x| match x {
-        Expr::Unary(UnOp::At, inner) => match *inner {
-            Expr::Paren(p) if !atomic(&p) => *p,
-            other => other,
-        },
+        Expr::Unary(UnOp::At, inner) => unwrap_at(*inner),
         other => other,
     })
 }
 
-/// `@e`, parenthesized unless `e` prints as one operand.
+/// The operand of an `@` without the parentheses [`at`] adds.
+fn unwrap_at(e: Expr) -> Expr {
+    match e {
+        Expr::Paren(p) if !atomic(&p) => *p,
+        other => other,
+    }
+}
+
+/// `@e`, parenthesized unless `e` prints as one operand. An operand already in parentheses (the
+/// file's own) gets a second pair, so [`remove_at`] can tell them from the ones added here.
 fn at(e: Expr) -> Expr {
     let e = if atomic(&e) { e } else { Expr::Paren(Box::new(e)) };
     Expr::Unary(UnOp::At, Box::new(e))
 }
 
 fn atomic(e: &Expr) -> bool {
-    matches!(e, Expr::Ref(_) | Expr::Name(_) | Expr::Struct(_) | Expr::Call(..) | Expr::Paren(_) | Expr::Array(_))
+    matches!(e, Expr::Ref(_) | Expr::Name(_) | Expr::Struct(_) | Expr::Call(..) | Expr::Array(_))
 }
+
+/// Nesting the analysis follows: Excel allows 64 levels of nested functions, and parentheses
+/// and names add levels. Operator chains do not count (see [`Legacy::binary`]).
+const MAX_DEPTH: usize = 128;
 
 struct Legacy<'a> {
     wb: &'a Workbook,
@@ -182,51 +196,99 @@ struct Legacy<'a> {
     functions: FunctionInfo,
     remaining: usize,
     locals: Vec<(String, Kind)>,
-    /// An `@` was inserted.
-    inserted: bool,
-    /// The analysis finished and covered only established legacy semantics.
+    /// Kinds of the names analysed so far, by upper-case name and scope; `None` while a name's
+    /// definition is being analysed (a cycle).
+    names: HashMap<(String, usize), Option<Kind>>,
+    /// How many `@` were inserted.
+    inserted: usize,
+    /// The analysis covered only established legacy semantics.
     certain: bool,
+    /// The analysis finished within its nesting and size limits.
+    complete: bool,
+    /// Analysing a formula that has its own `@` (see [`Legacy::explicit_at`]).
+    explicit: bool,
+    /// An explicit `@` is neither implied by legacy evaluation nor of a single value.
+    foreign: bool,
     /// Analysing an expression whose rewrite is discarded (see [`Legacy::kind_of`]).
     discarded: bool,
 }
 
 impl<'a> Legacy<'a> {
     fn new(wb: &'a Workbook, at: CellRef, functions: FunctionInfo) -> Self {
-        Legacy { wb, at, functions, remaining: 4096, locals: Vec::new(), inserted: false, certain: true, discarded: false }
+        Legacy {
+            wb,
+            at,
+            functions,
+            remaining: 16384,
+            locals: Vec::new(),
+            names: HashMap::new(),
+            inserted: 0,
+            certain: true,
+            complete: true,
+            explicit: false,
+            foreign: false,
+            discarded: false,
+        }
     }
 
     /// The kind of an expression analysed only for its kind (a name's definition, INDIRECT's
     /// text), evaluated as legacy Excel evaluates a name: as an array throughout, IF's condition
     /// included. Its rewrite is discarded, so it inserts no `@` into the formula.
     fn kind_of(&mut self, e: Expr, sheet: usize, depth: usize) -> Kind {
-        let outer = (std::mem::replace(&mut self.discarded, true), self.inserted);
+        let outer = (std::mem::replace(&mut self.discarded, true), std::mem::replace(&mut self.explicit, false), self.inserted);
         let (_, kind) = self.expr(e, sheet, Ctx::Array, depth);
-        (self.discarded, self.inserted) = outer;
+        (self.discarded, self.explicit, self.inserted) = outer;
         kind
     }
 
     /// The whole cell formula: a multi-valued result shows its top-left value.
     fn formula(&mut self, e: Expr, sheet: usize) -> Expr {
+        let e = match e {
+            Expr::Unary(UnOp::At, x) if self.explicit => return self.explicit_at(*x, sheet, Ctx::Value, 0, true).0,
+            e => e,
+        };
         let (e, kind) = self.expr(e, sheet, Ctx::Value, 0);
         if kind == Kind::Array && self.certain {
-            self.inserted = true;
+            self.inserted += 1;
             at(e)
         } else {
             e
         }
     }
 
+    /// An `@` already in the formula, at a position the analysis reads in `ctx`: analysed as its
+    /// operand alone. The `@` is the one legacy evaluation implies when the analysis puts it back
+    /// (that insertion is then not counted), or redundant when the operand is a single value;
+    /// any other `@` makes the formula a dynamic-array one (`foreign`).
+    fn explicit_at(&mut self, x: Expr, sheet: usize, ctx: Ctx, depth: usize, top: bool) -> (Expr, Kind) {
+        let operand = unwrap_at(x);
+        let nested = matches!(operand, Expr::Unary(UnOp::At, _));
+        let before = self.inserted;
+        let (y, kind) = self.expr(operand, sheet, ctx, depth + 1);
+        if !nested && self.inserted > before && matches!(y, Expr::Unary(UnOp::At, _)) {
+            self.inserted -= 1;
+            return (y, Kind::Scalar);
+        }
+        if top && kind == Kind::Array {
+            return (at(y), Kind::Scalar);
+        }
+        if kind != Kind::Scalar {
+            self.foreign = true;
+        }
+        (Expr::Unary(UnOp::At, Box::new(y)), Kind::Scalar)
+    }
+
     fn expr(&mut self, e: Expr, sheet: usize, ctx: Ctx, depth: usize) -> (Expr, Kind) {
-        // Names can be cyclic, and a short chain of repeated names can expand exponentially.
-        // Operator chains do not count towards the depth (see [`Legacy::binary`]).
-        if depth >= 64 || self.remaining == 0 {
-            self.certain = false;
+        // Names can be cyclic or nest deeply; their kinds are remembered, so repeated names
+        // cost one analysis each.
+        if depth >= MAX_DEPTH || self.remaining == 0 {
+            self.complete = false;
             return (e, Kind::Array);
         }
         self.remaining -= 1;
         let (e, kind) = self.node(e, sheet, ctx, depth);
         if ctx == Ctx::Value && kind == Kind::Ref {
-            self.inserted = true;
+            self.inserted += 1;
             (at(e), Kind::Scalar)
         } else {
             (e, kind)
@@ -266,6 +328,7 @@ impl<'a> Legacy<'a> {
                 let (x, kind) = self.expr(*x, sheet, ctx, depth + 1);
                 (Expr::Paren(Box::new(x)), kind)
             }
+            Expr::Unary(UnOp::At, x) if self.explicit => self.explicit_at(*x, sheet, ctx, depth, false),
             Expr::Unary(UnOp::At, x) => {
                 let (x, _) = self.expr(*x, sheet, inner(Ctx::Ref), depth + 1);
                 (Expr::Unary(UnOp::At, Box::new(x)), Kind::Scalar)
@@ -298,11 +361,23 @@ impl<'a> Legacy<'a> {
             None => (sheet, n),
         };
         if let Some(def) = self.wb.name(bare, scope) {
+            let key = (bare.to_ascii_uppercase(), scope);
+            match self.names.get(&key) {
+                Some(Some(kind)) => return *kind,
+                Some(None) => {
+                    // A name defined in terms of itself has no legacy value to keep.
+                    self.certain = false;
+                    return Kind::Array;
+                }
+                None => {}
+            }
             let Ok(expr) = gridcraft_formula::parse(def.formula.trim_start_matches('=')) else { return Kind::Array };
+            self.names.insert(key.clone(), None);
             // A name's own formula does not see the formula's LET variables.
             let locals = std::mem::take(&mut self.locals);
             let kind = self.kind_of(expr, def.scope.unwrap_or(scope), depth + 1);
             self.locals = locals;
+            self.names.insert(key, Some(kind));
             return kind;
         }
         if self.wb.table(bare).is_some() { Kind::Ref } else { Kind::Scalar }
@@ -326,7 +401,7 @@ impl<'a> Legacy<'a> {
         for (i, arg) in args.into_iter().enumerate() {
             let param = param(&name, i, self.functions);
             let arg_ctx = match param {
-                Param::Value | Param::Condition => Ctx::Value,
+                Param::Value | Param::Single => Ctx::Value,
                 Param::Ref | Param::First => Ctx::Ref,
                 Param::Pass => ctx,
                 Param::Array => Ctx::Array,
@@ -335,11 +410,11 @@ impl<'a> Legacy<'a> {
                     Ctx::Array
                 }
             };
-            let arg_ctx = if ctx == Ctx::Array && (param != Param::Condition || self.discarded) { Ctx::Array } else { arg_ctx };
+            let arg_ctx = if ctx == Ctx::Array && (param != Param::Single || self.discarded) { Ctx::Array } else { arg_ctx };
             let (arg, kind) = self.expr(arg, sheet, arg_ctx, depth);
             // A value parameter given several values evaluates the function once per value.
             lifted |= match param {
-                Param::Value | Param::Condition => kind == Kind::Array || (kind == Kind::Ref && arg_ctx == Ctx::Array),
+                Param::Value | Param::Single => kind == Kind::Array || (kind == Kind::Ref && arg_ctx == Ctx::Array),
                 Param::First => kind != Kind::Scalar,
                 _ => false,
             };
@@ -356,7 +431,7 @@ impl<'a> Legacy<'a> {
                     Kind::Array
                 } else {
                     // Outside array evaluation, ROW and COLUMN of a range give its first row or column.
-                    self.inserted = true;
+                    self.inserted += 1;
                     return (at(Expr::Call(name, out)), Kind::Scalar);
                 }
             }
@@ -435,7 +510,7 @@ impl<'a> Legacy<'a> {
             if !spine.is_empty() {
                 // The caller's `expr` counted the outermost operation.
                 if self.remaining == 0 {
-                    self.certain = false;
+                    self.complete = false;
                 } else {
                     self.remaining -= 1;
                 }
@@ -457,7 +532,7 @@ impl<'a> Legacy<'a> {
             };
             // An inner operation is an operand: `expr` would intersect it there.
             (acc, kind) = if i > 0 && node_ctx == Ctx::Value && k == Kind::Ref {
-                self.inserted = true;
+                self.inserted += 1;
                 (at(node), Kind::Scalar)
             } else {
                 (node, k)
@@ -559,7 +634,8 @@ fn user_function(name: &str, functions: FunctionInfo) -> bool {
 
 fn param(name: &str, i: usize, functions: FunctionInfo) -> Param {
     match name {
-        "IF" if i == 0 => Param::Condition,
+        "IF" if i == 0 => Param::Single,
+        "IFERROR" | "IFNA" => Param::Single,
         "CHOOSE" if i == 0 => Param::Value,
         "IF" | "CHOOSE" => Param::Pass,
         "SUMPRODUCT" | "MMULT" | "MINVERSE" | "MDETERM" | "TRANSPOSE" | "FREQUENCY" | "LINEST" | "LOGEST" | "TREND" | "GROWTH" => Param::Array,
