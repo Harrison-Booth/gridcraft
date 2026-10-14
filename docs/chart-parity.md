@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** trivial (chart sheets are kept on save, still not editable (#727); previously minor: trendlines: model, XLSX round-trip, drawing, Add Chart Element) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (chart style, colour and user-shape parts are kept on XLSX save (#330); previously trivial: chart sheets are kept on save, still not editable (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -47,7 +47,7 @@ open PRs #158, #161, and issue #190.
 | Up/down bars, high-low lines, drop lines, series lines | yes | **missing** |
 | Data table under the chart | yes | **missing** |
 | Per-series / per-point fill, line, marker, effects | Format pane for every element | series colour only; Format Chart pane covers chart-level options |
-| Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes |
+| Chart styles and colour palettes | ~16 styles × colour sets | style number stored, own palettes; a file's chart style and colour set parts are kept on save until the chart's type or style is changed in GridCraft (#330) |
 | Chart sheets | yes | **kept, not editable**: not shown, and written back unchanged in their place on save (#727); left out when a sheet they plot is deleted or renamed. No F11 / Move Chart > New sheet |
 | Chart templates (`.crtx`) | yes | **missing** |
 | Recommended Charts | yes | dialog with recommendations from the data's shape (own heuristic) and an All Charts list, live previews (#215) |
@@ -66,6 +66,17 @@ extensions) is lost when GridCraft saves a workbook it opened. That is the main 
 **~30% ready**: a user who opens an Excel workbook with charts and saves it gets simpler charts
 back.
 
+The chart's separate parts are kept (#330): its style part (the Chart Styles gallery choice) and
+colour part (the Change Colors set) are written back with their original bytes, for chart and
+chartex parts alike, and dropped once the chart's type or style number changes in GridCraft (a new
+chartex chart gets GridCraft's own). Text boxes, shapes and pictures drawn inside a chart (its
+user-shape part, `c:userShapes`) are written back too, unless they refer to content GridCraft
+rewrites (a chart inside the chart). They are not shown or editable in GridCraft. Observed in
+Excel: a column, line or bar chart's Chart Styles and Change Colors selection comes back only when
+the chart's own formatting (`c:spPr`) is in the chart part too, which GridCraft does not yet write,
+so Excel still reports the default style for those charts after a GridCraft save; chartex charts
+(waterfall, histogram…) show the original style and colours.
+
 ## Work (40–60 h)
 
 1. Kinds survive XLSX round-trip (merge PRs #158, #161): 2–4 h. Chart resizing (#190): 1–2 h.
@@ -80,6 +91,7 @@ back.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Chart style, colour and user-shape parts are kept on XLSX save (#330) |
 | 2026-10-12 | trivial | chart sheets are kept on save, still not editable (#727) |
 | 2026-10-11 | minor | Trendlines: all six types modelled, round-tripped through `c:trendline`, drawn with forecast and equation/R² labels; `chart.addElement` `trendline` |
 | 2026-10-11 | minor | PivotCharts (`insert.pivotChart`) |

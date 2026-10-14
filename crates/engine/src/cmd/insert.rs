@@ -761,6 +761,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         source: Some(format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), r.a1())),
         by_rows,
         pivot: None,
+        kept: None,
     };
     Ok((sheet, chart))
 }
