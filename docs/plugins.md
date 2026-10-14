@@ -1,6 +1,6 @@
 # Plugins
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-13 · **Change:** minor (install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -12,6 +12,12 @@ XLL and COM add-ins). VBA stays out of scope.
 Because a plugin runs in its own process, a crash, a hang or a bad answer costs a cell an error
 value, never the workbook. The host's code is `crates/plugin`; the reference plugin is
 `crates/plugin/src/bin/example_plugin.rs`.
+
+**One plugin, several apps.** The manifest and the protocol are shared with WordCraft, so one
+plugin can serve both: `apps` names the apps it's for, `uiFor` gives each app its own ribbon and
+menus, and `initialize` says which app started it (`host.id`). WordCraft plugins have commands
+only; functions are GridCraft's. A test plugin written in Python that works in both is
+[sirmmo/gridcraft-python-plugin](https://github.com/sirmmo/gridcraft-python-plugin).
 
 Live data from sources and streams (protocol 2) and co-editing come later; see
 [gaps.md](gaps.md) #16 and #21.
@@ -35,7 +41,7 @@ From a release, GridCraft takes the `.zip` asset built for this computer when th
 plugin is the folder in the zip that holds `plugin.json` (the shallowest one). Downloads are
 limited to 256 MiB and 512 MiB unpacked; paths that would leave the plugin's folder and symbolic
 links are skipped. GitHub allows 60 anonymous requests an hour per address; private repositories
-can't be installed. `.gridcraft-source.json` in the plugin's folder records where it came from,
+can't be installed. `.craft-source.json` in the plugin's folder records where it came from,
 and Options shows the repository.
 
 **From a folder.** A plugin is a folder holding a `plugin.json` manifest and whatever the plugin
@@ -94,6 +100,7 @@ Install plugins only from people you trust. GridCraft doesn't sandbox them.
   "description": "Prices and rates",
   "author": "Example Corp",
   "homepage": "https://example.org/finance-plugin",
+  "apps": ["gridcraft"],
   "run": {"command": "python3", "args": ["main.py"]},
   "functions": [
     {
@@ -128,13 +135,15 @@ Install plugins only from people you trust. GridCraft doesn't sandbox them.
 | Field | Meaning |
 |---|---|
 | `id` | Unique id: 1–128 letters, digits, `.`, `-`, `_`. Reverse-domain style is recommended |
+| `apps` | The apps the plugin is for (`gridcraft`, `wordcraft`; any case). Left out: any app. A plugin made only for other apps isn't loaded |
 | `author`, `homepage` | Shown in Options › Add-ins. `homepage` is an `http://` or `https://` link to the plugin's documentation |
-| `run.command`, `run.args` | The program to start. A command containing `/` or `\` is relative to the plugin folder; a bare name is looked up on `PATH`. It runs in the plugin folder, with `GRIDCRAFT_PLUGIN_DIR` and `GRIDCRAFT_VERSION` set |
+| `run.command`, `run.args` | The program to start. A command containing `/` or `\` is relative to the plugin folder; a bare name is looked up on `PATH`. It runs in the plugin folder, with `GRIDCRAFT_PLUGIN_DIR`, `CRAFT_PLUGIN_DIR` (the folder), `CRAFT_HOST` (`gridcraft`) and `GRIDCRAFT_VERSION` set |
 | `functions[].name` | The name formulas use (case-insensitive). It starts with a letter and holds letters, digits, `.` and `_`. It can't be a built-in function or another plugin's function. Prefix it with your own namespace (`FIN.`) |
 | `minArgs`, `maxArgs` | Argument count (default 0 and 255). Other counts give `#VALUE!` without calling the plugin |
 | `volatile` | Recalculate on every recalculation, like `RAND`. Otherwise a result is reused for the same arguments while the plugin is loaded (up to 10,000 results), and the cell is recalculated only when its precedents change |
 | `timeoutMs` | How long a call may take: default 2,000, at most 30,000 |
 | `commands[]` | `id` (unique in the plugin), `label`, `description`, `params` (documentation) |
+| `uiFor.<app>` | Ribbon groups and menu items for one app: `uiFor.gridcraft` is used instead of `ui` when it's there |
 | `ui.ribbon[]` | A group of buttons: `tab`, `group`, `buttons`. A built-in tab's English name (`Home`, `Insert`, `Draw`, `Page Layout`, `Formulas`, `Data`, `Review`, `View`, `Automate`) adds the group at the end of that tab; any other name makes a new tab after Automate, shared by the plugins that name it |
 | `buttons[]` | `command` (one of the plugin's `commands[].id`), `label` and `tooltip` (default: the command's label and description), `icon`, `size` (`large`, the default, or `small`: stacked three high), `params` (passed to the command) |
 | `ui.menus[]` | A right-click menu item: `menu` (`cell`, the default; `row` or `column` for the headers; `sheetTab`), `command`, `label`, `params`. Items go at the end of the menu, after a separator. A `sheetTab` item also gets `sheet` (the tab's index) in its params |
@@ -163,7 +172,7 @@ Sent once, after the process starts. Answer within 10 s with any result, for exa
 `{"protocolVersion": 1}`.
 
 ```json
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"host":{"name":"GridCraft","version":"0.5.0"},"plugin":{"id":"org.example.finance","dir":"/home/me/plugins/finance"}}}
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1,"host":{"id":"gridcraft","name":"GridCraft","version":"0.6.1"},"plugin":{"id":"org.example.finance","dir":"/home/me/plugins/finance"}}}
 ```
 
 ### `functions/call`
@@ -281,6 +290,7 @@ are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | One plugin for several apps: `apps`, `uiFor`, `host.id` in `initialize`, `CRAFT_HOST`/`CRAFT_PLUGIN_DIR`; the shared protocol WordCraft speaks too; `.craft-source.json` |
 | 2026-10-13 | minor | Install from a GitHub repository (`plugins.install`, Options and Automate › Add-ins); wider add-in list |
 | 2026-10-13 | minor | Options › Add-ins: turn plugins off and on (remembered), `homepage` and `author`, `plugins.setEnabled`, `plugins.openHomepage` |
 | 2026-10-13 | minor | `ui` in the manifest: ribbon groups on built-in or new tabs, items in the cell, row, column and sheet-tab menus |

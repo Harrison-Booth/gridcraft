@@ -31,6 +31,10 @@ pub use process::{Connection, RequestError};
 
 /// The protocol version this host speaks (sent in `initialize`).
 pub const PROTOCOL_VERSION: u32 = 1;
+/// This app's id in a manifest's `apps` and `uiFor`, and in `initialize`'s `host.id`. The
+/// manifest and protocol are shared with the other craft apps (WordCraft), so one plugin can
+/// serve several.
+pub const HOST_ID: &str = "gridcraft";
 /// The manifest's file name inside a plugin folder.
 pub const MANIFEST: &str = "plugin.json";
 /// Environment variable listing extra plugin folders (the platform's path-list separator).
@@ -67,14 +71,21 @@ pub struct Manifest {
     pub homepage: String,
     #[serde(default)]
     pub author: String,
+    /// The apps the plugin is made for (`gridcraft`, `wordcraft`, …); empty: any.
+    #[serde(default)]
+    pub apps: Vec<String>,
     pub run: RunSpec,
     #[serde(default)]
     pub functions: Vec<FunctionDecl>,
     #[serde(default)]
     pub commands: Vec<CommandDecl>,
-    /// Ribbon groups and menu items that run the plugin's commands.
+    /// Ribbon groups and menu items that run the plugin's commands: `uiFor.gridcraft` when the
+    /// manifest has one, else `ui`.
     #[serde(default)]
     pub ui: UiDecl,
+    /// Per-app ribbon groups and menu items (`{"gridcraft": {…}, "wordcraft": {…}}`), as written.
+    #[serde(default)]
+    pub ui_for: std::collections::BTreeMap<String, Json>,
 }
 
 /// How to start the plugin. A `command` containing a path separator is relative to the plugin
@@ -226,12 +237,28 @@ fn valid_function_name(s: &str) -> bool {
 impl Manifest {
     /// Parses and validates a manifest.
     pub fn parse(text: &str) -> Result<Manifest, String> {
-        let mut m: Manifest = serde_json::from_str(text).map_err(|e| format!("{MANIFEST}: {e}"))?;
+        let mut raw: Json = serde_json::from_str(text).map_err(|e| format!("{MANIFEST}: {e}"))?;
+        // This app's own ribbon and menus replace `ui`; another app's `ui` (WordCraft's text menu)
+        // would mean nothing here.
+        if let Some(obj) = raw.as_object_mut()
+            && let Some(own) = obj.get("uiFor").and_then(|u| u.get(HOST_ID)).cloned()
+        {
+            obj.insert("ui".into(), own);
+        }
+        let mut m: Manifest = serde_json::from_value(raw).map_err(|e| format!("{MANIFEST}: {e}"))?;
+        if !m.for_this_app() {
+            return Err(format!("{MANIFEST}: plugin {} is made for {}, not GridCraft", m.id, m.apps.join(", ")));
+        }
         m.validate()?;
         for f in &mut m.functions {
             f.name = f.name.to_ascii_uppercase();
         }
         Ok(m)
+    }
+
+    /// Whether `apps` names this app (or nothing).
+    pub fn for_this_app(&self) -> bool {
+        self.apps.is_empty() || self.apps.iter().any(|a| a.eq_ignore_ascii_case(HOST_ID))
     }
 
     fn validate(&self) -> Result<(), String> {
@@ -330,7 +357,7 @@ pub struct Plugin {
     cache: Mutex<HashMap<String, Value>>,
     /// Off: listed, but its functions, commands and ribbon and menu items are gone.
     enabled: std::sync::atomic::AtomicBool,
-    /// Where it was installed from (`.gridcraft-source.json`), for plugins installed from GitHub.
+    /// Where it was installed from (`.craft-source.json`), for plugins installed from GitHub.
     pub source: Option<Json>,
 }
 
@@ -368,7 +395,7 @@ impl Plugin {
             let mut conn = Connection::start(&self.manifest, &self.dir)?;
             let init = json!({
                 "protocolVersion": PROTOCOL_VERSION,
-                "host": {"name": "GridCraft", "version": env!("CARGO_PKG_VERSION")},
+                "host": {"id": HOST_ID, "name": "GridCraft", "version": env!("CARGO_PKG_VERSION")},
                 "plugin": {"id": self.manifest.id, "dir": self.dir.display().to_string()},
             });
             if let Err(e) = conn.request("initialize", init, INIT_TIMEOUT) {
@@ -453,6 +480,7 @@ impl Plugin {
             "description": m.description,
             "homepage": m.homepage,
             "author": m.author,
+            "apps": m.apps,
             "enabled": self.enabled(),
             "dir": self.dir.display().to_string(),
             "source": self.source.clone().unwrap_or(Json::Null),

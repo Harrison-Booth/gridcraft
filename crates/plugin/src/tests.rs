@@ -28,6 +28,27 @@ fn manifests_are_validated() {
 }
 
 #[test]
+fn one_manifest_serves_several_apps() {
+    // WordCraft's text menu means nothing here; `uiFor.gridcraft` replaces `ui`.
+    let both = json!({
+        "id": "t.both", "name": "Both", "run": {"command": "true"}, "apps": ["wordcraft", "GridCraft"],
+        "functions": [{"name": "T.TWICE", "minArgs": 1, "maxArgs": 1}],
+        "commands": [{"id": "tidy", "label": "Tidy"}],
+        "ui": {"menus": [{"menu": "text", "command": "tidy"}]},
+        "uiFor": {"gridcraft": {"menus": [{"menu": "row", "command": "tidy"}]}, "wordcraft": {"menus": [{"menu": "picture", "command": "tidy"}]}}
+    });
+    let m = Manifest::parse(&both.to_string()).unwrap();
+    assert_eq!(m.ui.menus.len(), 1);
+    assert_eq!(m.ui.menus[0].menu, crate::MenuKind::Row);
+    assert!(m.for_this_app());
+    let only_word = json!({"id": "t.word", "name": "Word", "run": {"command": "true"}, "apps": ["wordcraft"]});
+    assert!(Manifest::parse(&only_word.to_string()).unwrap_err().contains("not GridCraft"));
+    // Without `uiFor.gridcraft`, `ui` is this app's: another app's menu names are an error.
+    let plain = json!({"id": "t.p", "name": "P", "run": {"command": "true"}, "commands": [{"id": "go", "label": "Go"}], "ui": {"menus": [{"menu": "text", "command": "go"}]}});
+    assert!(Manifest::parse(&plain.to_string()).is_err());
+}
+
+#[test]
 fn ui_declarations_must_name_the_plugins_commands() {
     let with_ui = |ui: serde_json::Value| {
         json!({"id": "t.ui", "name": "T", "run": {"command": "true"},

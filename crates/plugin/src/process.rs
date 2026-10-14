@@ -79,6 +79,8 @@ mod native {
                 .args(&m.run.args)
                 .current_dir(dir)
                 .env("GRIDCRAFT_PLUGIN_DIR", dir)
+                .env("CRAFT_PLUGIN_DIR", dir)
+                .env("CRAFT_HOST", crate::HOST_ID)
                 .env("GRIDCRAFT_VERSION", env!("CARGO_PKG_VERSION"))
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())

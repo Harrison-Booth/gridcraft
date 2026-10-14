@@ -4,7 +4,7 @@
 //! the release asset built for this platform (`…-macos-aarch64.zip`), else the release's source,
 //! else the source of the default branch (or the named one). The folder holding `plugin.json` in
 //! the zip is unpacked into the plugins folder as `<plugin id>/`, replacing an earlier install, with
-//! `.gridcraft-source.json` recording where it came from. Loading it is the caller's job.
+//! `.craft-source.json` recording where it came from. Loading it is the caller's job.
 
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
@@ -15,7 +15,7 @@ use serde_json::{Value as Json, json};
 use crate::{MANIFEST, Manifest};
 
 /// Written next to `plugin.json` in an installed plugin.
-pub const SOURCE_FILE: &str = ".gridcraft-source.json";
+pub const SOURCE_FILE: &str = ".craft-source.json";
 /// Largest download.
 const MAX_DOWNLOAD: u64 = 256 << 20;
 /// Largest unpacked plugin, and most files in it.
@@ -236,7 +236,7 @@ pub fn unpack(zip_bytes: &[u8], root: &Path) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-/// Where an installed plugin came from (its `.gridcraft-source.json`), if it was installed.
+/// Where an installed plugin came from (its `.craft-source.json`), if it was installed.
 pub fn read_source(dir: &Path) -> Option<Json> {
     let f = std::fs::File::open(dir.join(SOURCE_FILE)).ok()?;
     let mut text = String::new();
