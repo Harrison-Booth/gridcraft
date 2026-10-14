@@ -1,6 +1,6 @@
 # Plugins
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (protocol 1.1: host requests, macros and the Developer tab; previously minor: Office add-ins load as plugins, officejs.md; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, macros and the Developer tab; previously minor: Office add-ins load as plugins, officejs.md; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -278,7 +278,7 @@ language. It answers:
 | Request | Params | Answer |
 |---|---|---|
 | `macros/list` | `{}` | `{macros: [{name: "Module1.Hello", module, procedure}]}` |
-| `macros/run` | `{name}` | `{}`, or an error (`Run-time error '13': Type mismatch`, with `data: {module, line}`) |
+| `macros/run` | `{name, control?: {id, tag}}` | `{}`, or an error (`Run-time error '13': Type mismatch`, with `data: {module, line}`) |
 | `macros/modules` | `{}` | `{modules: [{name, kind: standard\|class\|document, source}]}` |
 | `macros/saveModule` | `{name, source}` | `{}` |
 | `macros/deleteModule` | `{name}` | `{}` |
@@ -287,6 +287,22 @@ language. It answers:
 Commands: `developer.macros`, `developer.runMacro {name}`, `developer.modules`,
 `developer.saveModule {name, source}`, `developer.deleteModule {name}`, `developer.recordMacro {stop?}`,
 `developer.recordToCode {steps}`, `developer.enableMacros`, `developer.macroSecurity {level}`.
+
+**Ribbon buttons** (Developer › Ribbon Buttons, or Add to Ribbon in the Macros window): buttons
+that run the workbook's macros, on a built-in tab or one of the workbook's own. They are saved
+with the workbook as Excel's ribbon part (`customUI/customUI14.xml`), so Excel shows them too, and
+a workbook made in Excel brings its buttons along. A ribbon that holds more than tabs, groups and
+buttons (pictures of its own, menus, `onLoad`) is kept unchanged: its buttons show and run but
+can't be edited. A button runs its macro as Excel does, with the button: `macros/run` gets
+`control: {id, tag}`, which a VBA add-in passes as the `IRibbonControl` argument
+(`Sub Go(control As IRibbonControl)`); a macro without parameters runs as it is. Commands:
+`developer.ribbon`, `developer.addRibbonButton {macro, label?, tab?, group?, image?, large?}`,
+`developer.editRibbonButton {id, …}`, `developer.removeRibbonButton {id}`,
+`developer.pressRibbonButton {id}`.
+
+**Saving:** a workbook with macros is saved as `.xlsm` (a template `.xltx` as `.xltm`) when it is
+saved under an `.xlsx` name, because an `.xlsx` can't hold macros; `file.save` reports the name it
+used (`renamedFrom` holds the one asked for) and the message says so. The `.xlsx` isn't written.
 
 **Macro security** (Developer › Macro Security, `macroSecurity` in the preferences): `prompt`, the
 default, runs a workbook's macros once the user enabled them for it (the message bar's **Enable
@@ -335,6 +351,7 @@ are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Ribbon buttons that run macros, saved as the workbook's `customUI14.xml`; `macros/run` gets `control`; a workbook with macros saves as `.xlsm` |
 | 2026-10-14 | minor | Protocol 1.1: `host/*` requests while a plugin works (one undo step), macro plugins (`macros/*`), the Developer tab and Macro Security |
 | 2026-10-14 | minor | Office add-ins (`manifest.xml`) load as plugins whose commands open task panes ([officejs.md](officejs.md)) |
 | 2026-10-14 | minor | One plugin for several apps: `apps`, `uiFor`, `host.id` in `initialize`, `CRAFT_HOST`/`CRAFT_PLUGIN_DIR`; the shared protocol WordCraft speaks too; `.craft-source.json` |

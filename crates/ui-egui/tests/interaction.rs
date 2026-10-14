@@ -1128,3 +1128,51 @@ fn a_macro_add_in_brings_the_developer_tab_and_macros_start_disabled() {
     gridcraft_engine::plugin::unload("t.ui-vba");
     assert!(!gridcraft_ui_egui::developer_ui::visible());
 }
+
+#[test]
+fn a_workbooks_ribbon_buttons_show_on_their_tabs_and_run_their_macros() {
+    use gridcraft_engine::model::{Ribbon, RibbonButton, RibbonGroup, RibbonTab};
+    // No macro add-in loaded meanwhile: the buttons show without one.
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let button = |id: &str, label: &str| RibbonButton {
+        id: id.into(),
+        label: label.into(),
+        on_action: format!("Module1.{label}"),
+        large: true,
+        ..Default::default()
+    };
+    let group = |b| vec![RibbonGroup { id: "g".into(), label: "G".into(), buttons: vec![b] }];
+    let mut session = blank();
+    std::sync::Arc::make_mut(&mut session.active_mut().unwrap().wb).ribbon = Some(Ribbon {
+        tabs: vec![
+            RibbonTab { id: "tTools".into(), label: "Tools".into(), groups: group(button("b1", "Go")), ..Default::default() },
+            RibbonTab { builtin: Some("TabHome".into()), groups: group(button("b2", "Hello")), ..Default::default() },
+        ],
+    });
+    let mut h = harness(session);
+    h.run_steps(2);
+    // On Home, after Home's own groups.
+    assert!(h.query_by_label("Hello").is_some(), "the workbook's button on Home");
+    assert!(h.query_by_label("Go").is_none());
+    h.state_mut().ui.ribbon_tab = "Tools".into();
+    h.run_steps(2);
+    h.get_by_label("Go").click();
+    h.run_steps(2);
+    // Macros start disabled: the click says so instead of running.
+    let said = h.state().message.as_ref().map(|(_, m)| m.clone()).unwrap_or_default();
+    assert!(said.contains("disabled"), "{said}");
+    // Developer › Ribbon Buttons adds one more, saved in the workbook.
+    h.state_mut().message = None;
+    gridcraft_ui_egui::developer_ui::open_buttons(h.state_mut(), Some("Module1.Report"));
+    h.run_steps(2);
+    h.get_by_label("Add").click();
+    h.run_steps(2);
+    let ribbon = h.state().session.active().unwrap().wb.ribbon.clone().unwrap();
+    let added = ribbon.tabs.iter().find(|t| t.label == "Macros").and_then(|t| t.groups.first()).and_then(|g| g.buttons.first()).cloned();
+    assert_eq!(added.map(|b| (b.label, b.on_action, b.image)), Some(("Report".into(), "Module1.Report".into(), Some("MacroPlay".into()))));
+    // Its tab joins the tab row: open it and the button is there.
+    h.state_mut().dev.buttons = None;
+    h.state_mut().ui.ribbon_tab = "Macros".into();
+    h.run_steps(2);
+    assert!(h.query_by_label("Report").is_some());
+}

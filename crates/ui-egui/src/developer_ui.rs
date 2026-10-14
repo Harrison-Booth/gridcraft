@@ -4,9 +4,16 @@
 //! Macro Security and Add-ins. Everything goes through the `developer.*` commands; the add-in
 //! owns the language, GridCraft the interface. A workbook with macros opens with them disabled
 //! and a message bar to enable them (Macro Security: prompt).
+//!
+//! The workbook's own ribbon buttons (Developer › Ribbon Buttons, `developer.*RibbonButton`) run
+//! its macros. They show on the tab they name, a built-in one or their own, whether or not a
+//! macro add-in is loaded (without one, a click says to install one), and are saved with the
+//! workbook so Excel shows them too.
 
 use egui::{RichText, Ui, vec2};
 use serde_json::{Value as Json, json};
+
+use gridcraft_engine::model::RibbonGroup;
 
 use crate::SheetApp;
 use crate::icons::Icon;
@@ -18,6 +25,9 @@ pub struct DevState {
     pub macros: Option<MacrosWindow>,
     pub editor: Option<Editor>,
     pub security: bool,
+    pub buttons: Option<ButtonsWindow>,
+    /// The workbook's ribbon as last read: (workbook uid, workbook pointer, tabs, editable).
+    book: Option<(u64, usize, std::rc::Rc<Vec<(String, Vec<RibbonGroup>)>>, bool)>,
     /// Workbooks whose "macros disabled" bar was shown (once per workbook).
     notice_seen: std::collections::HashSet<u64>,
 }
@@ -27,6 +37,19 @@ pub struct MacrosWindow {
     pub list: Vec<Json>,
     pub selected: usize,
     pub new_name: String,
+    pub error: Option<String>,
+}
+
+/// Developer › Ribbon Buttons: the workbook's buttons, and the form adding one.
+#[derive(Default)]
+pub struct ButtonsWindow {
+    pub macros: Vec<String>,
+    pub macro_name: String,
+    pub label: String,
+    pub tab: String,
+    pub group: String,
+    pub image: String,
+    pub small: bool,
     pub error: Option<String>,
 }
 
@@ -83,9 +106,242 @@ pub fn ribbon(app: &mut SheetApp, ui: &mut Ui) {
             app.dev.security = true;
         }
     });
+    if named(big_button(ui, Icon::Plus, "Ribbon\nButtons", "Buttons on the ribbon that run this workbook's macros", false), "Ribbon Buttons")
+        .clicked()
+    {
+        open_buttons(app, None);
+    }
     crate::ribbon::sep(ui);
     if named(big_button(ui, Icon::Script, "Add-ins", "Plugins and Office add-ins", false), "Add-ins").clicked() {
         app.open_dialog("addIns", json!({}));
+    }
+}
+
+/// The workbook's ribbon tabs (GridCraft tab name, groups), read again when the workbook changed.
+fn book(app: &mut SheetApp) -> (std::rc::Rc<Vec<(String, Vec<RibbonGroup>)>>, bool) {
+    let Some(d) = app.session.active() else { return Default::default() };
+    let key = (d.uid, std::sync::Arc::as_ptr(&d.wb) as usize);
+    if let Some((uid, ptr, tabs, editable)) = &app.dev.book
+        && (*uid, *ptr) == key
+    {
+        return (tabs.clone(), *editable);
+    }
+    let (r, editable) = gridcraft_engine::cmd::developer::current_ribbon(&app.session);
+    let mut tabs: Vec<(String, Vec<RibbonGroup>)> = Vec::new();
+    for t in r.tabs {
+        let name = gridcraft_engine::cmd::developer::tab_name(&t);
+        match tabs.iter_mut().find(|(n, _)| n.eq_ignore_ascii_case(&name)) {
+            Some((_, groups)) => groups.extend(t.groups),
+            None => tabs.push((name, t.groups)),
+        }
+    }
+    let tabs = std::rc::Rc::new(tabs);
+    app.dev.book = Some((key.0, key.1, tabs.clone(), editable));
+    (tabs, editable)
+}
+
+/// The workbook's own tabs (not GridCraft's or a plugin's), for the tab row.
+pub fn book_tabs(app: &mut SheetApp, shown: &[&str]) -> Vec<String> {
+    book(app).0.iter().map(|(n, _)| n.clone()).filter(|n| !shown.iter().any(|s| s.eq_ignore_ascii_case(n)) && n != "Developer").collect()
+}
+
+/// Whether the workbook has groups on `tab`.
+pub fn has_book_groups(app: &mut SheetApp, tab: &str) -> bool {
+    book(app).0.iter().any(|(n, g)| n.eq_ignore_ascii_case(tab) && !g.is_empty())
+}
+
+/// The picture names offered for a button (Excel's `imageMso` names) and the icon GridCraft draws.
+const PICTURES: &[(&str, Icon)] = &[
+    ("MacroPlay", Icon::Script),
+    ("HappyFace", Icon::Check),
+    ("FileSave", Icon::Save),
+    ("FilePrint", Icon::Print),
+    ("Copy", Icon::Copy),
+    ("Paste", Icon::Paste),
+    ("Cut", Icon::Cut),
+    ("Undo", Icon::Undo),
+    ("Redo", Icon::Redo),
+];
+
+fn picture(name: Option<&str>) -> Icon {
+    let Some(name) = name else { return Icon::Script };
+    PICTURES
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case(name))
+        .map(|(_, i)| *i)
+        .or_else(|| crate::plugin_ui::icon_named(name))
+        .unwrap_or(Icon::Script)
+}
+
+/// Draws the workbook's groups on `tab` (after its own groups, separated when there are any).
+pub fn book_ribbon_groups(app: &mut SheetApp, ui: &mut Ui, tab: &str, separate_first: bool) {
+    let (tabs, _) = book(app);
+    let groups: Vec<&RibbonGroup> = tabs.iter().filter(|(n, _)| n.eq_ignore_ascii_case(tab)).flat_map(|(_, g)| g).collect();
+    let mut press = None;
+    for (i, g) in groups.iter().enumerate() {
+        if separate_first || i > 0 {
+            crate::ribbon::sep(ui);
+        }
+        let mut k = 0;
+        while let Some(b) = g.buttons.get(k) {
+            let tip = b.screentip.clone().unwrap_or_else(|| format!("Runs {}", b.on_action));
+            if b.large {
+                if named(big_button(ui, picture(b.image.as_deref()), &b.label, &tip, false), &b.label).clicked() {
+                    press = Some(b.id.clone());
+                }
+                k += 1;
+                continue;
+            }
+            let column: Vec<_> = g.buttons.iter().skip(k).take_while(|b| !b.large).take(3).collect();
+            k += column.len();
+            ui.vertical(|ui| {
+                for b in column {
+                    let tip = b.screentip.clone().unwrap_or_else(|| format!("Runs {}", b.on_action));
+                    if named(small_button(ui, picture(b.image.as_deref()), &b.label, &tip, false), &b.label).clicked() {
+                        press = Some(b.id.clone());
+                    }
+                }
+            });
+        }
+    }
+    if let Some(id) = press {
+        if let Err(e) = app.session.run("developer.pressRibbonButton", json!({"id": id})) {
+            app.message = Some(("Run Macro".into(), e));
+        }
+        app.after_engine();
+    }
+}
+
+/// Opens Developer › Ribbon Buttons, with `macro_name` filled in.
+pub fn open_buttons(app: &mut SheetApp, macro_name: Option<&str>) {
+    let mut w = ButtonsWindow { tab: "Macros".into(), group: "Macros".into(), image: "MacroPlay".into(), ..Default::default() };
+    if let Ok(r) = app.session.run("developer.macros", json!({})) {
+        w.macros = r
+            .get("macros")
+            .and_then(Json::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|m| m.get("name").and_then(Json::as_str))
+            .map(str::to_string)
+            .collect();
+    }
+    app.after_engine();
+    w.macro_name = macro_name.map(str::to_string).or_else(|| w.macros.first().cloned()).unwrap_or_default();
+    app.dev.buttons = Some(w);
+}
+
+fn buttons_window(app: &mut SheetApp, ctx: &egui::Context) {
+    let Some(mut w) = app.dev.buttons.take() else { return };
+    let mut open = true;
+    let mut close = false;
+    let (tabs, editable) = book(app);
+    let mut remove = None;
+    egui::Window::new(app.ui.language.tr("Ribbon Buttons"))
+        .id(egui::Id::new("dev_buttons"))
+        .collapsible(false)
+        .resizable(false)
+        .default_width(480.0)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            ui.weak("Buttons that run this workbook's macros. They are saved with the workbook, and Excel shows them too.");
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.set_min_width(440.0);
+                egui::ScrollArea::vertical().max_height(160.0).show(ui, |ui| {
+                    if tabs.iter().all(|(_, g)| g.is_empty()) {
+                        ui.weak("No buttons yet.");
+                    }
+                    for (tab, groups) in tabs.iter() {
+                        for g in groups {
+                            for b in &g.buttons {
+                                ui.horizontal(|ui| {
+                                    ui.label(format!("{tab} › {} › {}", g.label, b.label));
+                                    ui.weak(format!("runs {}", b.on_action));
+                                    if editable && ui.small_button("Remove").clicked() {
+                                        remove = Some(b.id.clone());
+                                    }
+                                });
+                            }
+                        }
+                    }
+                });
+            });
+            if !editable {
+                ui.label(RichText::new("This workbook's ribbon came from another program with more than buttons: its buttons run, but GridCraft doesn't change it.").weak());
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+                return;
+            }
+            ui.add_space(4.0);
+            ui.strong("New button");
+            egui::Grid::new("dev_button_form").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
+                ui.label("Macro:");
+                egui::ComboBox::from_id_salt("dev_button_macro").selected_text(w.macro_name.clone()).width(260.0).show_ui(ui, |ui| {
+                    for m in &w.macros {
+                        ui.selectable_value(&mut w.macro_name, m.clone(), m);
+                    }
+                });
+                ui.end_row();
+                ui.label("");
+                ui.add(egui::TextEdit::singleline(&mut w.macro_name).hint_text("or type a name: Module1.Go").desired_width(260.0));
+                ui.end_row();
+                ui.label("Label:");
+                ui.add(egui::TextEdit::singleline(&mut w.label).hint_text("the macro's name").desired_width(260.0));
+                ui.end_row();
+                ui.label("Tab:");
+                egui::ComboBox::from_id_salt("dev_button_tab").selected_text(w.tab.clone()).width(260.0).show_ui(ui, |ui| {
+                    for t in ["Macros", "Home", "Insert", "Page Layout", "Formulas", "Data", "Review", "View", "Developer"] {
+                        ui.selectable_value(&mut w.tab, t.to_string(), app.ui.language.tr(t));
+                    }
+                });
+                ui.end_row();
+                ui.label("");
+                ui.add(egui::TextEdit::singleline(&mut w.tab).hint_text("or a new tab's name").desired_width(260.0));
+                ui.end_row();
+                ui.label("Group:");
+                ui.add(egui::TextEdit::singleline(&mut w.group).desired_width(260.0));
+                ui.end_row();
+                ui.label("Picture:");
+                ui.horizontal(|ui| {
+                    for (name, icon) in PICTURES {
+                        let on = w.image == *name;
+                        if crate::widgets::toggle_button(ui, *icon, on, name).clicked() {
+                            w.image = name.to_string();
+                        }
+                    }
+                });
+                ui.end_row();
+                ui.label("");
+                ui.checkbox(&mut w.small, "Small button (three to a column)");
+                ui.end_row();
+            });
+            ui.horizontal(|ui| {
+                if ui.add_enabled(!w.macro_name.trim().is_empty(), egui::Button::new("Add")).clicked() {
+                    let params = json!({"macro": w.macro_name.trim(), "label": w.label.trim(), "tab": w.tab.trim(), "group": w.group.trim(), "image": w.image, "large": !w.small});
+                    match app.session.run("developer.addRibbonButton", params) {
+                        Ok(_) => {
+                            w.error = None;
+                            w.label.clear();
+                        }
+                        Err(e) => w.error = Some(e),
+                    }
+                }
+                if ui.button("Close").clicked() {
+                    close = true;
+                }
+            });
+            if let Some(e) = &w.error {
+                ui.label(RichText::new(e).color(ui.visuals().error_fg_color));
+            }
+        });
+    if let Some(id) = remove
+        && let Err(e) = app.session.run("developer.removeRibbonButton", json!({"id": id}))
+    {
+        w.error = Some(e);
+    }
+    app.after_engine();
+    if open && !close {
+        app.dev.buttons = Some(w);
     }
 }
 
@@ -146,6 +402,7 @@ pub fn windows(app: &mut SheetApp, ctx: &egui::Context) {
     macros_window(app, ctx);
     editor_window(app, ctx);
     security_window(app, ctx);
+    buttons_window(app, ctx);
 }
 
 fn macros_window(app: &mut SheetApp, ctx: &egui::Context) {
@@ -153,6 +410,7 @@ fn macros_window(app: &mut SheetApp, ctx: &egui::Context) {
     let mut open = true;
     let mut close = false;
     let mut edit: Option<String> = None;
+    let mut to_ribbon: Option<String> = None;
     let enabled = gridcraft_engine::cmd::developer::macros_allowed(&app.session);
     egui::Window::new(app.ui.language.tr("Macros"))
         .id(egui::Id::new("dev_macros"))
@@ -198,6 +456,9 @@ fn macros_window(app: &mut SheetApp, ctx: &egui::Context) {
                 {
                     edit = m.get("module").and_then(Json::as_str).map(str::to_string);
                 }
+                if ui.add_enabled(chosen.is_some(), egui::Button::new("Add to Ribbon…")).clicked() {
+                    to_ribbon = chosen.clone();
+                }
                 let name = w.new_name.trim().to_string();
                 let valid = !name.is_empty()
                     && name.chars().all(|c| c.is_alphanumeric() || c == '_')
@@ -223,6 +484,10 @@ fn macros_window(app: &mut SheetApp, ctx: &egui::Context) {
     app.after_engine();
     if let Some(module) = edit {
         open_editor(app, Some(&module));
+        return;
+    }
+    if let Some(name) = to_ribbon {
+        open_buttons(app, Some(&name));
         return;
     }
     if open && !close {

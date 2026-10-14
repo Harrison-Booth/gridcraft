@@ -6,7 +6,13 @@
 //! Macro security (`prefs.macro_security`): `disable` runs nothing; `prompt` (the default) runs
 //! a workbook's macros once the user enabled them for it (`developer.enableMacros`, the message
 //! bar's Enable Content); `enable` runs all.
+//!
+//! The workbook's ribbon (`developer.ribbon`, `addRibbonButton`…): tabs, groups and buttons that
+//! run its macros, saved with it (`customUI14.xml`) so Excel shows them too. A button runs its
+//! macro as Excel does, with the button as the argument (`Sub Go(control As IRibbonControl)`).
 
+use gridcraft_model::ribbon::{MAX_RIBBON_ITEMS, builtin_tab_id, builtin_tab_name};
+use gridcraft_model::{Ribbon, RibbonButton, RibbonGroup, RibbonTab};
 use gridcraft_plugin::office::{Action, Permission};
 use gridcraft_plugin::{HostError, call_macros, macro_plugins};
 use serde_json::{Value as Json, json};
@@ -49,6 +55,43 @@ pub fn specs() -> Vec<CommandSpec> {
             "{stop?: bool, module?: \"Module1\"} → {recording} or, when stopping, {module, source}. Records what you do as a macro in the module",
             always,
             record_macro
+        ),
+        cmd!(
+            query "developer.ribbon",
+            "Ribbon Buttons",
+            ["Developer", "Code"],
+            None,
+            "{} → {tabs: [{tab, id, builtin, label, groups: [{id, label, buttons: [{id, label, macro, image, large, screentip, tag}]}]}], editable}. The workbook's own ribbon buttons",
+            always,
+            ribbon
+        ),
+        cmd!(
+            "developer.addRibbonButton",
+            "Add Ribbon Button",
+            ["Developer", "Code"],
+            None,
+            "{macro, label?, tab?: \"Macros\"|Home|Data…, group?: \"Macros\", image?, large?, screentip?, tag?} → {id}. A button that runs the macro, saved with the workbook",
+            always,
+            add_ribbon_button
+        ),
+        cmd!(
+            "developer.editRibbonButton",
+            "Edit Ribbon Button",
+            ["Developer", "Code"],
+            None,
+            "{id, macro?, label?, image?, large?, screentip?, tag?} → {id}",
+            always,
+            edit_ribbon_button
+        ),
+        cmd!("developer.removeRibbonButton", "Remove Ribbon Button", ["Developer", "Code"], None, "{id} → {}", always, remove_ribbon_button),
+        cmd!(
+            "developer.pressRibbonButton",
+            "Press Ribbon Button",
+            ["Developer", "Code"],
+            None,
+            "{id} → {ran}. Runs the button's macro, as clicking it does",
+            always,
+            press_ribbon_button
         ),
         cmd!(noundo "developer.enableMacros", "Enable Content", ["Developer", "Code"], None, "{on?: bool} → {enabled}. Lets this workbook's macros run (until it closes)", always, enable_macros),
         cmd!(
@@ -179,8 +222,221 @@ fn run_macro(s: &mut Session, p: &Json) -> Result<Json> {
         ));
     }
     let (plugin, _) = macro_plugin(ID, p)?;
-    call(s, ID, &plugin, "macros/run", json!({"name": name}))?;
+    let mut params = json!({"name": name});
+    // A ribbon button's macro gets the button (`control.Id`, `control.Tag`).
+    if let Some(c) = p.get("control").filter(|c| c.is_object()) {
+        params["control"] = json!({"id": c.get("id").cloned().unwrap_or(json!("")), "tag": c.get("tag").cloned().unwrap_or(json!(""))});
+    }
+    call(s, ID, &plugin, "macros/run", params)?;
     Ok(json!({"ran": name}))
+}
+
+/// The workbook's ribbon: its own (editable), or the buttons of a richer one kept from the file.
+pub fn current_ribbon(s: &Session) -> (Ribbon, bool) {
+    let Some(wb) = s.active().map(|d| &d.wb) else { return (Ribbon::default(), false) };
+    if let Some(p) = wb.preserved.as_deref() {
+        let parts: Vec<&[u8]> = p
+            .package_rels
+            .iter()
+            .filter(|r| r.rel_type.ends_with("/ui/extensibility") && !r.external)
+            .filter_map(|r| p.parts.iter().find(|q| q.name.eq_ignore_ascii_case(&r.target)))
+            .map(|q| &q.data[..])
+            .collect();
+        if let Some(data) = parts.iter().find(|d| gridcraft_xlsx::custom_ui::is_v14(d)).or(parts.first()) {
+            return (gridcraft_xlsx::custom_ui::parse_buttons(data), false);
+        }
+    }
+    (wb.ribbon.clone().unwrap_or_default(), true)
+}
+
+/// The GridCraft tab a ribbon tab shows on.
+pub fn tab_name(t: &RibbonTab) -> String {
+    match &t.builtin {
+        Some(mso) => builtin_tab_name(mso).map(str::to_string).unwrap_or_else(|| mso.trim_start_matches("Tab").to_string()),
+        None if !t.label.trim().is_empty() => t.label.clone(),
+        None => t.id.clone(),
+    }
+}
+
+fn ribbon(s: &mut Session, _p: &Json) -> Result<Json> {
+    let (r, editable) = current_ribbon(s);
+    let tabs: Vec<Json> = r
+        .tabs
+        .iter()
+        .map(|t| {
+            let groups: Vec<Json> = t
+                .groups
+                .iter()
+                .map(|g| {
+                    let buttons: Vec<Json> = g
+                        .buttons
+                        .iter()
+                        .map(|b| {
+                            json!({"id": b.id, "label": b.label, "macro": b.on_action, "image": b.image, "large": b.large, "screentip": b.screentip, "tag": b.tag})
+                        })
+                        .collect();
+                    json!({"id": g.id, "label": g.label, "buttons": buttons})
+                })
+                .collect();
+            json!({"tab": tab_name(t), "id": t.id, "builtin": t.builtin, "label": t.label, "groups": groups})
+        })
+        .collect();
+    Ok(json!({"tabs": tabs, "editable": editable}))
+}
+
+/// Text for a ribbon attribute: trimmed, at most 1024 characters (RibbonX's limit for labels is 1024).
+fn text(p: &Json, key: &str) -> Option<String> {
+    str_param(p, key).map(|v| v.trim().chars().take(1024).collect())
+}
+
+/// The workbook's editable ribbon, for a change.
+fn ribbon_mut<'a>(s: &'a mut Session, id: &str) -> Result<&'a mut Ribbon> {
+    if !current_ribbon(s).1 {
+        return Err(EngineError::Disabled(
+            id.into(),
+            "this workbook's ribbon came from another program with more than buttons: GridCraft runs it but doesn't change it".into(),
+        ));
+    }
+    let d = s.active_mut().ok_or_else(|| bad(id, "no workbook is open"))?;
+    Ok(std::sync::Arc::make_mut(&mut d.wb).ribbon.get_or_insert_with(Ribbon::default))
+}
+
+/// A macro name a button may run: `Module1.Go`, `Go`, or Excel's `'Book1.xlsm'!Module1.Go`.
+fn macro_name(id: &str, p: &Json) -> Result<Option<String>> {
+    let Some(m) = text(p, "macro") else { return Ok(None) };
+    let ok = !m.is_empty() && m.len() <= 255 && m.chars().all(|c| c.is_alphanumeric() || "_.!'[] -".contains(c));
+    if !ok {
+        return Err(bad(id, "`macro` is a macro's name, like Module1.Hello"));
+    }
+    Ok(Some(m))
+}
+
+fn image(id: &str, p: &Json) -> Result<Option<Option<String>>> {
+    match p.get("image") {
+        None => Ok(None),
+        Some(Json::Null) => Ok(Some(None)),
+        Some(Json::String(v)) if v.is_empty() => Ok(Some(None)),
+        Some(Json::String(v)) if v.len() <= 64 && v.chars().all(|c| c.is_ascii_alphanumeric()) => Ok(Some(Some(v.clone()))),
+        Some(_) => Err(bad(id, "`image` is a built-in picture's name, like HappyFace")),
+    }
+}
+
+fn add_ribbon_button(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "developer.addRibbonButton";
+    let on_action = macro_name(ID, p)?.ok_or_else(|| bad(ID, "missing `macro`"))?;
+    let image = image(ID, p)?.flatten();
+    let label = text(p, "label").filter(|l| !l.is_empty()).unwrap_or_else(|| on_action.rsplit(['.', '!']).next().unwrap_or(&on_action).to_string());
+    let tab = text(p, "tab").filter(|t| !t.is_empty()).unwrap_or_else(|| "Macros".into());
+    let group = text(p, "group").filter(|g| !g.is_empty()).unwrap_or_else(|| "Macros".into());
+    let r = ribbon_mut(s, ID)?;
+    let builtin = builtin_tab_id(&tab);
+    let ti = match r.tabs.iter().position(|t| match builtin {
+        Some(mso) => t.builtin.as_deref().is_some_and(|b| b.eq_ignore_ascii_case(mso)),
+        None => t.builtin.is_none() && tab_name(t).eq_ignore_ascii_case(&tab),
+    }) {
+        Some(i) => i,
+        None => {
+            if r.tabs.len() >= MAX_RIBBON_ITEMS {
+                return Err(bad(ID, "the ribbon has too many tabs"));
+            }
+            let id = if builtin.is_some() { String::new() } else { r.fresh_id("craftTab") };
+            r.tabs.push(RibbonTab {
+                id,
+                builtin: builtin.map(str::to_string),
+                label: if builtin.is_some() { String::new() } else { tab.clone() },
+                groups: vec![],
+            });
+            r.tabs.len() - 1
+        }
+    };
+    let group_id = r.fresh_id("craftGroup");
+    let button_id = r.fresh_id("craftButton");
+    let Some(t) = r.tabs.get_mut(ti) else { return Err(bad(ID, "no such tab")) };
+    let gi = match t.groups.iter().position(|g| g.label.eq_ignore_ascii_case(&group)) {
+        Some(i) => i,
+        None => {
+            if t.groups.len() >= MAX_RIBBON_ITEMS {
+                return Err(bad(ID, "the tab has too many groups"));
+            }
+            t.groups.push(RibbonGroup { id: group_id, label: group, buttons: vec![] });
+            t.groups.len() - 1
+        }
+    };
+    let Some(g) = t.groups.get_mut(gi) else { return Err(bad(ID, "no such group")) };
+    if g.buttons.len() >= MAX_RIBBON_ITEMS {
+        return Err(bad(ID, "the group has too many buttons"));
+    }
+    g.buttons.push(RibbonButton {
+        id: button_id.clone(),
+        label,
+        on_action,
+        image,
+        large: p.get("large").and_then(Json::as_bool).unwrap_or(true),
+        screentip: text(p, "screentip").filter(|t| !t.is_empty()),
+        supertip: None,
+        tag: text(p, "tag").filter(|t| !t.is_empty()),
+    });
+    Ok(json!({"id": button_id}))
+}
+
+fn edit_ribbon_button(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "developer.editRibbonButton";
+    let id = str_param(p, "id").ok_or_else(|| bad(ID, "missing `id`"))?.to_string();
+    let on_action = macro_name(ID, p)?;
+    let image = image(ID, p)?;
+    let r = ribbon_mut(s, ID)?;
+    let b = r
+        .tabs
+        .iter_mut()
+        .flat_map(|t| &mut t.groups)
+        .flat_map(|g| &mut g.buttons)
+        .find(|b| b.id == id)
+        .ok_or_else(|| bad(ID, format!("no ribbon button `{id}`")))?;
+    if let Some(m) = on_action {
+        b.on_action = m;
+    }
+    if let Some(l) = text(p, "label").filter(|l| !l.is_empty()) {
+        b.label = l;
+    }
+    if let Some(i) = image {
+        b.image = i;
+    }
+    if let Some(l) = p.get("large").and_then(Json::as_bool) {
+        b.large = l;
+    }
+    if let Some(t) = text(p, "screentip") {
+        b.screentip = Some(t).filter(|t| !t.is_empty());
+    }
+    if let Some(t) = text(p, "tag") {
+        b.tag = Some(t).filter(|t| !t.is_empty());
+    }
+    Ok(json!({"id": id}))
+}
+
+fn remove_ribbon_button(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "developer.removeRibbonButton";
+    let id = str_param(p, "id").ok_or_else(|| bad(ID, "missing `id`"))?.to_string();
+    let r = ribbon_mut(s, ID)?;
+    if !r.remove_button(&id) {
+        return Err(bad(ID, format!("no ribbon button `{id}`")));
+    }
+    // A workbook left without buttons has no ribbon part.
+    if r.is_empty()
+        && let Some(d) = s.active_mut()
+    {
+        std::sync::Arc::make_mut(&mut d.wb).ribbon = None;
+    }
+    Ok(json!({}))
+}
+
+fn press_ribbon_button(s: &mut Session, p: &Json) -> Result<Json> {
+    const ID: &str = "developer.pressRibbonButton";
+    let id = str_param(p, "id").ok_or_else(|| bad(ID, "missing `id`"))?;
+    let (r, _) = current_ribbon(s);
+    let b = r.button(id).ok_or_else(|| bad(ID, format!("no ribbon button `{id}`")))?;
+    // Excel's form `'Book1.xlsm'!Module1.Go` names this workbook's macro.
+    let name = b.on_action.rsplit('!').next().unwrap_or(&b.on_action).to_string();
+    run_macro(s, &json!({"name": name, "control": {"id": b.id, "tag": b.tag.clone().unwrap_or_default()}}))
 }
 
 fn modules(s: &mut Session, p: &Json) -> Result<Json> {

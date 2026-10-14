@@ -184,6 +184,9 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     }
                     let plugin_tabs = crate::plugin_ui::extra_tabs();
                     tabs.extend(plugin_tabs.iter().map(String::as_str));
+                    // The workbook's own tabs (its ribbon buttons that run macros).
+                    let book_tabs = crate::developer_ui::book_tabs(app, &tabs);
+                    tabs.extend(book_tabs.iter().map(String::as_str));
                     let ctx_tabs = contextual_tabs(app);
                     tabs.extend(ctx_tabs.iter());
                     for tab in tabs {
@@ -256,10 +259,15 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                             crate::paper_view::TAB => crate::paper_view::ribbon_tab(app, ui),
                             // A tab a plugin added (or one whose plugin was just unloaded).
                             other if !crate::plugin_ui::groups(other).is_empty() => {}
+                            other if crate::developer_ui::has_book_groups(app, other) => {}
                             _ => home(app, ui),
                         }
                         // Plugin groups: at the end of a built-in tab, or the whole of a plugin's own tab.
-                        crate::plugin_ui::ribbon_groups(app, ui, &tab, TABS.contains(&tab.as_str()));
+                        let built_in = TABS.contains(&tab.as_str()) || tab == "Developer";
+                        crate::plugin_ui::ribbon_groups(app, ui, &tab, built_in);
+                        // Then the workbook's own buttons.
+                        let after = built_in || !crate::plugin_ui::groups(&tab).is_empty();
+                        crate::developer_ui::book_ribbon_groups(app, ui, &tab, after);
                     });
                 });
             });

@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-14 · **Change:** minor (§21: VBA through a macro add-in and the Developer tab; previously minor: Office add-ins on top of the plugins; previously minor: §21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-14 · **Change:** minor (§21: ribbon buttons that run macros; previously minor: §21: VBA through a macro add-in and the Developer tab; previously minor: Office add-ins on top of the plugins; previously minor: §21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -157,7 +157,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   [plugins.md](plugins.md)). Office add-ins (Office.js) run on top: manifests as plugins, task panes
   in the system web view on macOS and Windows, GridCraft's own Office.js, ExcelApi 1.1–1.4 subset
   ([officejs.md](officejs.md)). VBA runs through a macro add-in (craft-vba, out of process) and
-  the Developer tab: Visual Basic editor, Macros, Record Macro, Macro Security (protocol 1.1,
+  the Developer tab: Visual Basic editor, Macros, Record Macro, Macro Security, ribbon buttons that
+  run macros (saved as `customUI14.xml`, shown by Excel too) (protocol 1.1,
   [plugins.md](plugins.md#protocol-11-asking-the-host-and-macros)). Missing: live data sources and streams (`STREAM()`, `RTD`, protocol 2),
   asynchronous functions, plugin functions in Insert Function and autocomplete. **Estimate:** 15–25 h.
 
@@ -176,6 +177,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | §21: ribbon buttons that run the workbook's macros (Excel's `customUI14.xml`); macros save as `.xlsm` |
 | 2026-10-14 | minor | §21: VBA macros through an external add-in (protocol 1.1 host requests, the Developer tab, Macro Security) |
 | 2026-10-14 | minor | §21: Office add-ins (Office.js) on top of the plugins: manifests, task panes, the `office.sync` bridge |
 | 2026-10-13 | minor | §21: plugins install from a GitHub repository |

@@ -16,11 +16,12 @@ fn main() {
         serve();
         return;
     }
-    let tests: [(&str, fn()); 4] = [
+    let tests: [(&str, fn()); 5] = [
         ("macros_run_as_one_undo_step_and_call_the_host", macros_run_as_one_undo_step_and_call_the_host),
         ("a_failing_macro_changes_nothing", a_failing_macro_changes_nothing),
         ("macro_security_gates_running", macro_security_gates_running),
         ("modules_live_in_the_workbooks_vba_project", modules_live_in_the_workbooks_vba_project),
+        ("ribbon_buttons_run_their_macro_and_are_saved", ribbon_buttons_run_their_macro_and_are_saved),
     ];
     for (name, t) in tests {
         t();
@@ -64,6 +65,12 @@ fn serve() {
                 let x = r["result"]["results"][0]["values"][0][0].as_f64().unwrap_or(0.0);
                 host(&mut out, &mut lines, "host/sync", json!({"actions": [{"op": "set", "path": b1, "prop": "values", "value": x * 2.0}]}));
                 host(&mut out, &mut lines, "host/message", json!({"text": format!("doubled {x}")}));
+                json!({"result": {}})
+            }
+            // A ribbon button's callback: writes which button called it.
+            Some("macros/run") if p["name"] == "Module1.Pressed" => {
+                let text = format!("{}/{}", p["control"]["id"].as_str().unwrap_or("none"), p["control"]["tag"].as_str().unwrap_or(""));
+                host(&mut out, &mut lines, "host/sync", json!({"actions": [{"op": "set", "path": b1, "prop": "values", "value": text}]}));
                 json!({"result": {}})
             }
             Some("macros/run") if p["name"] == "Module1.Broken" => {
@@ -173,7 +180,67 @@ fn modules_live_in_the_workbooks_vba_project() {
     // Saving a module is undoable, like any change to the workbook.
     s.execute("edit.undo", json!({})).unwrap();
     assert!(s.active().unwrap().wb.vba_project.is_none());
+    s.execute("edit.redo", json!({})).unwrap();
+    // A workbook with macros saves as .xlsm, never as an .xlsx that would lose them.
+    let dir = std::env::temp_dir().join(format!("gridcraft-engine-macros-save-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let asked = dir.join("Budget.xlsx");
+    let r = s.execute("file.save", json!({"path": asked})).unwrap();
+    let saved = dir.join("Budget.xlsm");
+    assert_eq!(r["path"], json!(saved.to_string_lossy()), "{r}");
+    assert_eq!(r["renamedFrom"], json!(asked.to_string_lossy()));
+    assert!(saved.exists() && !asked.exists());
+    assert!(s.take_ui_requests().iter().any(|q| matches!(q, gridcraft_engine::UiRequest::Message(m) if m.contains("Budget.xlsm"))));
+    assert_eq!(s.active().unwrap().path.as_deref(), Some(saved.to_string_lossy().as_ref()), "the document is the .xlsm now");
+    let (back, _) = gridcraft_xlsx::read_xlsx(&std::fs::read(&saved).unwrap()).unwrap();
+    assert!(back.vba_project.is_some());
+    let _ = std::fs::remove_dir_all(&dir);
     let code = s.execute("developer.recordToCode", json!({"steps": [{"command": "cell.set", "params": {"cell": "A1", "input": "5"}}]})).unwrap();
     assert!(code["source"].as_str().unwrap().contains("1 steps"));
+    assert!(gridcraft_engine::plugin::unload(PLUGIN));
+}
+
+fn ribbon_buttons_run_their_macro_and_are_saved() {
+    let mut s = session();
+    assert_eq!(s.execute("developer.ribbon", json!({})).unwrap(), json!({"tabs": [], "editable": true}));
+    let id = s.execute("developer.addRibbonButton", json!({"macro": "Module1.Pressed", "label": "Go", "tab": "data", "tag": "north"})).unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    s.execute("developer.addRibbonButton", json!({"macro": "Module1.Fill", "large": false})).unwrap();
+    let r = s.execute("developer.ribbon", json!({})).unwrap();
+    assert_eq!((r["tabs"][0]["tab"].as_str(), r["tabs"][0]["builtin"].as_str()), (Some("Data"), Some("TabData")), "{r}");
+    assert_eq!(r["tabs"][0]["groups"][0]["buttons"][0]["label"], "Go");
+    assert_eq!(r["tabs"][1]["tab"], "Macros", "a tab of its own by default");
+    assert_eq!(r["tabs"][1]["groups"][0]["buttons"][0]["label"], "Fill", "labelled after the macro");
+
+    // Pressing it runs the macro with the button, under Macro Security like any macro.
+    assert!(s.execute("developer.pressRibbonButton", json!({"id": id})).unwrap_err().to_string().contains("disabled"));
+    s.execute("developer.enableMacros", json!({})).unwrap();
+    s.execute("developer.pressRibbonButton", json!({"id": id})).unwrap();
+    assert_eq!(value(&s, "B1"), Value::Text(format!("{id}/north").into()));
+    assert!(s.execute("developer.pressRibbonButton", json!({"id": "nope"})).is_err());
+
+    // Saved with the workbook as Excel's ribbon part, and read back.
+    let wb = s.active().unwrap().wb.clone();
+    let bytes = gridcraft_xlsx::write_xlsx(&wb).unwrap();
+    let (back, _) = gridcraft_xlsx::read_xlsx(&bytes).unwrap();
+    assert_eq!(back.ribbon, wb.ribbon);
+
+    // Edits and removals are undoable; the last button gone, the workbook has no ribbon.
+    s.execute("developer.editRibbonButton", json!({"id": id, "label": "Run it", "image": "HappyFace"})).unwrap();
+    assert_eq!(s.active().unwrap().wb.ribbon.as_ref().unwrap().button(&id).unwrap().label, "Run it");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().wb.ribbon.as_ref().unwrap().button(&id).unwrap().label, "Go");
+    assert!(s.execute("developer.editRibbonButton", json!({"id": id, "image": "<img>"})).is_err());
+    assert!(s.execute("developer.addRibbonButton", json!({"macro": "x\"/><evil"})).is_err());
+    let all: Vec<String> =
+        s.active().unwrap().wb.ribbon.as_ref().unwrap().ids().map(str::to_string).filter(|i| i.starts_with("craftButton")).collect();
+    for b in &all {
+        s.execute("developer.removeRibbonButton", json!({"id": b})).unwrap();
+    }
+    assert!(s.active().unwrap().wb.ribbon.is_none());
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.active().unwrap().wb.ribbon.as_ref().is_some_and(|r| r.button(&all[all.len() - 1]).is_some()));
     assert!(gridcraft_engine::plugin::unload(PLUGIN));
 }
