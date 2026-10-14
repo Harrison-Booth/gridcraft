@@ -177,6 +177,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
+                ("edit.repeat", "Repeat", "{} runs the last repeatable action a person took again on the selection (F4)"),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 ("view.darkMode", "Dark Mode", ""),
                 ("view.theme", "Display Theme", ""),

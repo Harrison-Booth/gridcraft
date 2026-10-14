@@ -2679,7 +2679,6 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         app.open_dialog("macros", json!({}));
                     }
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
-                    Key::F4 if !cmd => {}
                     _ if cmd => crate::ribbon::shortcut(app, key, m),
                     _ => {}
                 }

@@ -39,6 +39,9 @@ pub enum Shortcut {
     DropDown,
     /// Ctrl+Alt+= / Ctrl+Alt+-: zoom in / out.
     Zoom(i32),
+    /// F4 outside the editor: repeat the last action on the selection (the editor keeps F4 for
+    /// cycling `$` anchors).
+    Repeat,
 }
 
 fn run(id: &'static str) -> Shortcut {
@@ -151,6 +154,7 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         F3 if cmd => Shortcut::Dialog("nameManager", json!({})),
         F3 if plain && s => Shortcut::Dialog("insertFunction", json!({})),
         F4 if cmd && !s => run("file.close"),
+        F4 if plain && !s => Shortcut::Repeat,
         F5 if plain && s => Shortcut::Dialog("find", json!({})),
         F5 if plain => Shortcut::Dialog("goTo", json!({})),
         F7 if plain && !s => Shortcut::Dialog("spelling", json!({})),
@@ -230,6 +234,7 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
             let percent = (i32::from(sh.zoom).saturating_add(step)).clamp(10, 400);
             app.run_or_alert("view.zoom", json!({"percent": percent}));
         }
+        Shortcut::Repeat => app.repeat_last(),
     }
     true
 }
