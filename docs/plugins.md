@@ -1,6 +1,6 @@
 # Plugins
 
-> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, macros and the Developer tab; previously minor: Office add-ins load as plugins, officejs.md; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (plugin functions in autocomplete and Insert Function; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, macros and the Developer tab; previously minor: Office add-ins load as plugins, officejs.md; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -199,6 +199,11 @@ Arguments arrive evaluated. A reference arrives as the array of its values. Valu
 A call carries at most 1,000,000 cells, and a result may hold as many. Anything larger gives
 `#VALUE!` (arguments) or `#NUM!` (result).
 
+While a formula is typed, plugin functions are suggested with the built-in ones, with their
+`signature` as the argument hint and their `description` beside the list; Insert Function and
+`formulas.functions` list them under the category **Add-ins**. A function without
+a `signature` shows as `NAME(…)`. Turning a plugin off takes its functions out of all of these.
+
 ### `commands/run`
 
 ```json
@@ -338,7 +343,6 @@ are kept.
   Asynchronous functions (`#GETTING_DATA` until the answer arrives) come with protocol 2.
 - Protocol 2 (planned): data sources and streams pushed by the plugin (`STREAM()`, `RTD`), with
   targeted recalculation of the cells that use them.
-- Plugin functions don't appear in Insert Function or formula autocomplete yet.
 - Installed plugins aren't updated automatically; install again to update. There's no
   Uninstall button yet: unload the plugin and delete its folder.
 - Ribbon groups go at the end of a tab; plugins can't place them between built-in groups, add
@@ -351,6 +355,7 @@ are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Plugin functions are suggested while typing (signature hint, description) and listed in Insert Function and `formulas.functions` (category Add-ins) |
 | 2026-10-14 | minor | Ribbon buttons that run macros, saved as the workbook's `customUI14.xml`; `macros/run` gets `control`; a workbook with macros saves as `.xlsm` |
 | 2026-10-14 | minor | Protocol 1.1: `host/*` requests while a plugin works (one undo step), macro plugins (`macros/*`), the Developer tab and Macro Security |
 | 2026-10-14 | minor | Office add-ins (`manifest.xml`) load as plugins whose commands open task panes ([officejs.md](officejs.md)) |

@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-14 · **Change:** minor (§21: ribbon buttons that run macros; previously minor: §21: VBA through a macro add-in and the Developer tab; previously minor: Office add-ins on top of the plugins; previously minor: §21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-13 · **Last updated:** 2026-10-14 · **Change:** minor (§21: plugin functions in autocomplete and Insert Function; previously minor: §21: ribbon buttons that run macros; previously minor: §21: VBA through a macro add-in and the Developer tab; previously minor: Office add-ins on top of the plugins; previously minor: §21: install plugins from GitHub) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -160,7 +160,8 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   the Developer tab: Visual Basic editor, Macros, Record Macro, Macro Security, ribbon buttons that
   run macros (saved as `customUI14.xml`, shown by Excel too) (protocol 1.1,
   [plugins.md](plugins.md#protocol-11-asking-the-host-and-macros)). Missing: live data sources and streams (`STREAM()`, `RTD`, protocol 2),
-  asynchronous functions, plugin functions in Insert Function and autocomplete. **Estimate:** 15–25 h.
+  asynchronous functions. Plugin functions are suggested while typing and listed in Insert Function
+  (category Add-ins). **Estimate:** 15–25 h.
 
 ### 22. AI features (F)
 - No in-app assistant, natural-language formulas or Analyze Data; agent control via MCP is
@@ -177,6 +178,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | §21: plugin functions are suggested while typing a formula (with their signature hint and description) and listed in Insert Function under Add-ins |
 | 2026-10-14 | minor | §21: ribbon buttons that run the workbook's macros (Excel's `customUI14.xml`); macros save as `.xlsm` |
 | 2026-10-14 | minor | §21: VBA macros through an external add-in (protocol 1.1 host requests, the Developer tab, Macro Security) |
 | 2026-10-14 | minor | §21: Office add-ins (Office.js) on top of the plugins: manifests, task panes, the `office.sync` bridge |

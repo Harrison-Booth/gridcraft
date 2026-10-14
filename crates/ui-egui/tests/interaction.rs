@@ -1176,3 +1176,53 @@ fn a_workbooks_ribbon_buttons_show_on_their_tabs_and_run_their_macros() {
     h.run_steps(2);
     assert!(h.query_by_label("Report").is_some());
 }
+
+#[test]
+fn add_in_functions_are_suggested_while_typing_with_their_hint() {
+    let _one_at_a_time = PLUGINS.lock().unwrap_or_else(|e| e.into_inner());
+    let m = gridcraft_engine::plugin::Manifest::parse(
+        r#"{"id": "t.ui-fx", "name": "Prices", "run": {"command": "./not-started"},
+            "functions": [{"name": "ACME.PRICE", "signature": "ACME.PRICE(ticker, [date])", "description": "Price of a share", "minArgs": 1, "maxArgs": 2},
+                          {"name": "ACME.RATE", "maxArgs": 0}]}"#,
+    )
+    .unwrap();
+    gridcraft_engine::plugin::install(m, std::env::temp_dir()).unwrap();
+    struct Unload;
+    impl Drop for Unload {
+        fn drop(&mut self) {
+            gridcraft_engine::plugin::unload("t.ui-fx");
+        }
+    }
+    let _unload = Unload;
+    // Insert Function and agents see them too, in their own category.
+    let list = gridcraft_engine::cmd::formulas::function_list();
+    let price = list.iter().find(|f| f["name"] == "ACME.PRICE").expect("listed");
+    assert_eq!((price["category"].as_str(), price["plugin"].as_str()), (Some("Add-ins"), Some("t.ui-fx")));
+    assert_eq!(list.iter().find(|f| f["name"] == "ACME.RATE").unwrap()["signature"], "ACME.RATE(…)");
+    let mut h = harness(blank());
+    h.run_steps(2);
+    h.state_mut().begin_edit(Some("=AC".into()), true);
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::Text("M".into()));
+    h.run_steps(3);
+    let suggested = h.state().editor.as_ref().unwrap().autocomplete.clone();
+    assert!(suggested.contains(&"ACME.PRICE".to_string()) && suggested.contains(&"ACME.RATE".to_string()), "{suggested:?}");
+    assert!(h.query_by_label_contains("Price of a share").is_some(), "the highlighted function's description");
+    // Accepting it opens the call, and the argument hint is the add-in's signature.
+    let ed = h.state_mut().editor.as_mut().unwrap();
+    ed.ac_index = ed.autocomplete.iter().position(|n| n == "ACME.PRICE").unwrap();
+    assert!(ed.accept_autocomplete());
+    assert_eq!(ed.text, "=ACME.PRICE(");
+    assert_eq!(gridcraft_ui_egui::formula_bar::function_signature("acme.price").as_deref(), Some("ACME.PRICE(ticker, [date])"));
+    h.run_steps(3);
+    assert!(h.query_by_label_contains("ticker").is_some(), "the argument hint");
+    h.state_mut().cancel_edit();
+    // Turned off, they're no longer suggested.
+    gridcraft_engine::plugin::set_enabled("t.ui-fx", false).unwrap();
+    h.state_mut().begin_edit(Some("=AC".into()), true);
+    h.run_steps(2);
+    h.input_mut().events.push(egui::Event::Text("M".into()));
+    h.run_steps(3);
+    assert!(!h.state().editor.as_ref().unwrap().autocomplete.iter().any(|n| n.starts_with("ACME.")));
+    h.state_mut().cancel_edit();
+}

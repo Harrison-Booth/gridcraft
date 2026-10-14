@@ -452,19 +452,32 @@ fn cycle_anchor(ed: &mut crate::editor::EditState) {
     }
 }
 
+/// The names autocomplete suggests: the built-in functions (read once) and the enabled add-ins'
+/// functions (read each time: add-ins come and go while the app runs), in alphabetical order.
 fn function_names() -> Vec<String> {
     static NAMES: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
-    NAMES
-        .get_or_init(|| gridcraft_engine::cmd::formulas::function_list().iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect())
-        .clone()
+    let builtin = NAMES.get_or_init(|| {
+        gridcraft_engine::cmd::formulas::builtin_function_list().iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect()
+    });
+    let added: Vec<String> =
+        gridcraft_engine::cmd::formulas::plugin_functions().iter().filter_map(|f| f["name"].as_str().map(str::to_string)).collect();
+    if added.is_empty() {
+        return builtin.clone();
+    }
+    let mut all: Vec<String> = builtin.iter().filter(|n| !added.contains(n)).cloned().collect();
+    all.extend(added);
+    all.sort();
+    all
 }
 
 fn function_info(name: &str) -> Option<serde_json::Value> {
     static LIST: std::sync::OnceLock<Vec<serde_json::Value>> = std::sync::OnceLock::new();
-    LIST.get_or_init(gridcraft_engine::cmd::formulas::function_list)
+    let matches = |f: &&serde_json::Value| f["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(name));
+    LIST.get_or_init(gridcraft_engine::cmd::formulas::builtin_function_list)
         .iter()
-        .find(|f| f["name"].as_str().is_some_and(|n| n.eq_ignore_ascii_case(name)))
+        .find(matches)
         .cloned()
+        .or_else(|| gridcraft_engine::cmd::formulas::plugin_functions().iter().find(matches).cloned())
 }
 
 pub fn function_signature(name: &str) -> Option<String> {
