@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (USDOLLAR added as a compatibility function; MIRR, COUNTIF and INDIRECT edge cases match Excel 365) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (RATE follows Excel's iteration: last iterate near -100% for a zero future value, #NUM! where Excel's solver gives up) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -91,8 +91,12 @@ PIVOTBY, REGEXTEST…) are all present.
 assertions each, but there is no conformance suite against Excel-computed results, and user
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
 (#137), ROUND at 15 digits and DATE(1900,2,29) (fixed 10-09), SUMIF sum-range sizing (fixed
-10-09). Statistical distributions and financial functions with iterative solvers (RATE, IRR,
-XIRR, YIELD) are the highest-risk for last-digit differences.
+10-09). Statistical distributions and financial functions with iterative solvers (IRR, XIRR,
+YIELD) are the highest-risk for last-digit differences. RATE follows Excel's own iteration,
+reconstructed from observation (secant from the guess and the guess ± 0.001, at most 200 steps,
+stop within 1e-7 by step and value, a looser 1e-4 check after 200 steps), so it returns the same
+iterate as Excel where convergence is slow (about -100% for `RATE(n,0,-pv,0)`) and `#NUM!` where
+Excel's solver gives up (very large rates); roots at 0% differ only by rounding noise (under 1e-7).
 
 TEXT() and cell display share `crates/numfmt`; checked against Excel-cached results in
 number- and text-format test workbooks (352 TEXT cells), all match:
@@ -108,6 +112,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | RATE follows Excel's iteration (secant, 200 steps, 1e-7 by step and value): `RATE(5,0,-100,0)` is -0.999999409145182 like Excel instead of `#NUM!`, `RATE(4,0,-0.0001,100)` is `#NUM!` like Excel instead of 30.62 |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |
 | 2026-10-11 | minor | TEXT / number formats fixed against Excel-cached results: fraction literals and zero fractions, `0` denominators zero padded, `?` pads the thousands separator, booleans use the text section (226 mismatches → 0 in 352 TEXT cells) |
 | 2026-10-11 | minor | Iterative calculation: circular references iterate up to Maximum Iterations / Maximum Change when enabled |
