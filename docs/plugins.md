@@ -1,6 +1,7 @@
 # Plugins
 
 > **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (commands see the selection's formulas; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-14 · **Last updated:** 2026-10-14 · **Change:** minor (plugin functions in autocomplete and Insert Function; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, macros and the Developer tab; previously minor: Office add-ins load as plugins, officejs.md; previously minor: one plugin for several apps: `apps`, `uiFor`, `host.id`; previously minor: install plugins from a GitHub repository) · **Target:** Microsoft Excel (Microsoft 365)
 
 A plugin adds **functions** that formulas call and **commands** the user (or an agent) runs,
 and can put its commands on the ribbon (a group on a built-in tab, or a tab of its own) and in
@@ -18,6 +19,9 @@ plugin can serve both: `apps` names the apps it's for, `uiFor` gives each app it
 menus, and `initialize` says which app started it (`host.id`). WordCraft plugins have commands
 only; functions are GridCraft's. A test plugin written in Python that works in both is
 [sirmmo/gridcraft-python-plugin](https://github.com/sirmmo/gridcraft-python-plugin).
+
+**Office add-ins** (Office.js web add-ins with an XML manifest) load as plugins too: their
+commands open their task pane in a web view; see [officejs.md](officejs.md).
 
 Live data from sources and streams (protocol 2) and co-editing come later; see
 [gaps.md](gaps.md) #16 and #21.
@@ -196,6 +200,11 @@ Arguments arrive evaluated. A reference arrives as the array of its values. Valu
 A call carries at most 1,000,000 cells, and a result may hold as many. Anything larger gives
 `#VALUE!` (arguments) or `#NUM!` (result).
 
+While a formula is typed, plugin functions are suggested with the built-in ones, with their
+`signature` as the argument hint and their `description` beside the list; Insert Function and
+`formulas.functions` list them under the category **Add-ins**. A function without
+a `signature` shows as `NAME(…)`. Turning a plugin off takes its functions out of all of these.
+
 ### `commands/run`
 
 ```json
@@ -249,6 +258,64 @@ for line in sys.stdin:
  "functions": [{"name": "PY.TWICE", "minArgs": 1, "maxArgs": 1}]}
 ```
 
+## Protocol 1.1: asking the host, and macros
+
+**The plugin asks the host while it works.** While GridCraft waits for its answer to a request
+(`commands/run`, `macros/run`…), a plugin may send requests of its own on standard output — JSON-RPC
+requests with its own ids — and read GridCraft's answers on standard input before it goes on. Each
+answer starts the request's timeout again. Everything these requests change is part of the same
+undoable step, and is taken back if the plugin's answer is an error.
+
+| Request | Params | Answer |
+|---|---|---|
+| `host/sync` | `{actions}` | `{results}`, or an error whose `data` is `{code, message, action}`. The actions are the Office bridge's ([officejs.md](officejs.md#the-bridge-officesync)): paths from `workbook` to worksheets, ranges, formats; `load`, `set`, `call` |
+| `host/vbaProject/get` | `{}` | `{base64}`: the workbook's `vbaProject.bin`, or `null` |
+| `host/vbaProject/set` | `{base64}` | `{}`: replaces it (the workbook then saves as `.xlsm`); at most 64 MiB |
+| `host/message` | `{text, title?}` | `{result: 1}`: shows a message after the step (it doesn't wait for the user yet) |
+| `host/log` | `{text}` | `{}`: writes to GridCraft's log |
+
+A plugin calling the host can make GridCraft recalculate a formula that calls one of the plugin's
+own functions; that call fails (`#VALUE!`) instead of waiting for the busy plugin.
+
+**Macros.** A plugin that declares `"macros": {"language": "VBA"}` runs macros, and brings the
+**Developer** tab: Visual Basic (the workbook's code modules in an editor), Macros (run, edit,
+create), Record Macro, Macro Security and Add-ins. GridCraft draws all of it; the plugin owns the
+language. It answers:
+
+| Request | Params | Answer |
+|---|---|---|
+| `macros/list` | `{}` | `{macros: [{name: "Module1.Hello", module, procedure}]}` |
+| `macros/run` | `{name, control?: {id, tag}}` | `{}`, or an error (`Run-time error '13': Type mismatch`, with `data: {module, line}`) |
+| `macros/modules` | `{}` | `{modules: [{name, kind: standard\|class\|document, source}]}` |
+| `macros/saveModule` | `{name, source}` | `{}` |
+| `macros/deleteModule` | `{name}` | `{}` |
+| `macros/record` | `{steps: [{command, params}]}` | `{source}`: the recorded steps as a macro |
+
+Commands: `developer.macros`, `developer.runMacro {name}`, `developer.modules`,
+`developer.saveModule {name, source}`, `developer.deleteModule {name}`, `developer.recordMacro {stop?}`,
+`developer.recordToCode {steps}`, `developer.enableMacros`, `developer.macroSecurity {level}`.
+
+**Ribbon buttons** (Developer › Ribbon Buttons, or Add to Ribbon in the Macros window): buttons
+that run the workbook's macros, on a built-in tab or one of the workbook's own. They are saved
+with the workbook as Excel's ribbon part (`customUI/customUI14.xml`), so Excel shows them too, and
+a workbook made in Excel brings its buttons along. A ribbon that holds more than tabs, groups and
+buttons (pictures of its own, menus, `onLoad`) is kept unchanged: its buttons show and run but
+can't be edited. A button runs its macro as Excel does, with the button: `macros/run` gets
+`control: {id, tag}`, which a VBA add-in passes as the `IRibbonControl` argument
+(`Sub Go(control As IRibbonControl)`); a macro without parameters runs as it is. Commands:
+`developer.ribbon`, `developer.addRibbonButton {macro, label?, tab?, group?, image?, large?}`,
+`developer.editRibbonButton {id, …}`, `developer.removeRibbonButton {id}`,
+`developer.pressRibbonButton {id}`.
+
+**Saving:** a workbook with macros is saved as `.xlsm` (a template `.xltx` as `.xltm`) when it is
+saved under an `.xlsx` name, because an `.xlsx` can't hold macros; `file.save` reports the name it
+used (`renamedFrom` holds the one asked for) and the message says so. The `.xlsx` isn't written.
+
+**Macro security** (Developer › Macro Security, `macroSecurity` in the preferences): `prompt`, the
+default, runs a workbook's macros once the user enabled them for it (the message bar's **Enable
+Content** on a workbook with macros, `developer.enableMacros`); `disable` runs none; `enable` runs
+all. A macro is a program: agents and the CLI are bound by the same setting.
+
 ## Publishing a plugin on GitHub
 
 Put `plugin.json` at the root of the repository (or in one folder of it). A plugin written in
@@ -278,7 +345,6 @@ are kept.
   Asynchronous functions (`#GETTING_DATA` until the answer arrives) come with protocol 2.
 - Protocol 2 (planned): data sources and streams pushed by the plugin (`STREAM()`, `RTD`), with
   targeted recalculation of the cells that use them.
-- Plugin functions don't appear in Insert Function or formula autocomplete yet.
 - Installed plugins aren't updated automatically; install again to update. There's no
   Uninstall button yet: unload the plugin and delete its folder.
 - Ribbon groups go at the end of a tab; plugins can't place them between built-in groups, add
@@ -292,6 +358,10 @@ are kept.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-14 | minor | `context.formulas`: commands see the selection's formula text, so plugins can tell inputs from calculations |
+| 2026-10-14 | minor | Plugin functions are suggested while typing (signature hint, description) and listed in Insert Function and `formulas.functions` (category Add-ins) |
+| 2026-10-14 | minor | Ribbon buttons that run macros, saved as the workbook's `customUI14.xml`; `macros/run` gets `control`; a workbook with macros saves as `.xlsm` |
+| 2026-10-14 | minor | Protocol 1.1: `host/*` requests while a plugin works (one undo step), macro plugins (`macros/*`), the Developer tab and Macro Security |
+| 2026-10-14 | minor | Office add-ins (`manifest.xml`) load as plugins whose commands open task panes ([officejs.md](officejs.md)) |
 | 2026-10-14 | minor | One plugin for several apps: `apps`, `uiFor`, `host.id` in `initialize`, `CRAFT_HOST`/`CRAFT_PLUGIN_DIR`; the shared protocol WordCraft speaks too; `.craft-source.json` |
 | 2026-10-13 | minor | Install from a GitHub repository (`plugins.install`, Options and Automate › Add-ins); wider add-in list |
 | 2026-10-13 | minor | Options › Add-ins: turn plugins off and on (remembered), `homepage` and `author`, `plugins.setEnabled`, `plugins.openHomepage` |
