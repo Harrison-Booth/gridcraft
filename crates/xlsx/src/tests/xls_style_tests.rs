@@ -320,3 +320,75 @@ fn hostile_formatting_records_never_panic() {
         let _ = read_xls(&compound("Workbook", &stream[..cut]));
     }
 }
+
+/// CondFmt + CF (cell value > 5, solid fill), CFEx (priority, top 3 template), a DXF record in
+/// the globals naming number format 14, CondFmt12 + CF12 (a data bar) and a list validation:
+/// read from .xls, and kept through an .xlsx round trip.
+#[test]
+fn reads_conditional_formats_and_validation() {
+    use gridcraft_model::{CfOperator, CfRule, CfValueKind, NumFmt, ValidationKind};
+    let mut f = default_fonts();
+    f.push(xf(0, 0, STYLE, plain()));
+    f.push(xf(0, 0, CELL, plain()));
+    // DXF: number format 14 is "0.00%" for differential formats (XFProp 0x29 and 0x26).
+    let code: Vec<u16> = "0.00%".encode_utf16().collect();
+    let mut dxf = vec![0x8D, 0x08, 0, 0];
+    dxf.extend([0; 8]);
+    dxf.extend(u16s(&[0, 0, 2, 0x29, 6, 14, 0x26, 4 + 2 + 2 * code.len() as u16, code.len() as u16]));
+    dxf.extend(u16s(&code));
+    f.push(rec(0x088D, &dxf));
+    // A DXFN setting a solid yellow (13) fill and number format 14.
+    let flags: u32 = 0xFFFF | (1 << 16) | (1 << 17) | (1 << 20) | (1 << 25) | (1 << 29);
+    let dxfn = [flags.to_le_bytes().to_vec(), u16s(&[0x8002]), vec![0, 14], u16s(&[0, 0x40 | (13 << 7)])].concat();
+    let condfmt = [u16s(&[1, 1 << 1, 0, 9, 0, 0, 1, 0, 9, 0, 0])].concat();
+    let cf = [vec![1u8, 5], u16s(&[3, 0]), dxfn, vec![0x1E, 5, 0]].concat();
+    let mut cfex = vec![0x7B, 0x08, 1, 0];
+    cfex.extend([0; 8]);
+    cfex.extend([0, 0, 0, 0]);
+    cfex.extend(u16s(&[1, 0]));
+    cfex.extend([5, 0, 2, 0, 3, 0, 16, 1, 3, 0]);
+    cfex.extend([0; 13]);
+    let condfmt12 = [vec![0x79, 0x08, 1, 0], vec![0; 8], u16s(&[1, 2 << 1, 0, 9, 1, 1, 1, 0, 9, 1, 1])].concat();
+    let mut cf12 = vec![0x7A, 0x08, 0, 0];
+    cf12.extend([0; 8]);
+    cf12.extend([4, 0, 0, 0, 0, 0]);
+    cf12.extend([0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    cf12.extend(u16s(&[1, 3]));
+    cf12.push(16);
+    cf12.extend([0; 16]);
+    cf12.extend([0, 0, 0, 0, 0, 100]);
+    cf12.extend([&2u32.to_le_bytes()[..], &[0x63, 0x8E, 0xC6, 0xFF], &[0; 8]].concat());
+    cf12.extend([2, 0, 0, 3, 0, 0]);
+    let mut dv = (3u32 | 0x80 | 0x100 | 0x4_0000 | 0x8_0000).to_le_bytes().to_vec();
+    for _ in 0..4 {
+        dv.extend([1, 0, 0, 0]);
+    }
+    dv.extend(u16s(&[6, 0]));
+    dv.extend([0x17, 3, 0, b'a', 0, b'b']);
+    dv.extend(u16s(&[0, 0, 1, 0, 4, 2, 2]));
+    let sheet = [
+        rec(0x01B0, &condfmt),
+        rec(0x01B1, &cf),
+        rec(0x0879, &condfmt12),
+        rec(0x087A, &cf12),
+        rec(0x087B, &cfex),
+        rec(0x01B2, &[0; 18]),
+        rec(0x01BE, &dv),
+    ];
+    let book = workbook(&f, &sheet);
+    let (wb, report) = read_xls(&compound("Workbook", &book)).unwrap();
+    assert_eq!(report.warnings.len(), 1, "only the overview: {:?}", report.warnings);
+    let sh = &wb.sheets[0];
+    let style = Style { num_fmt: NumFmt::new("0.00%"), fill: Fill::solid(Color::Rgb(0xFFFF00)), ..Style::default() };
+    assert_eq!(sh.cond_formats.len(), 2);
+    assert_eq!((sh.cond_formats[0].priority, sh.cond_formats[0].stop_if_true), (2, true));
+    assert_eq!(sh.cond_formats[0].rule, CfRule::CellIs { op: CfOperator::Greater, a: "5".into(), b: None, style: Box::new(style) });
+    assert_eq!(
+        (sh.cond_formats[1].priority, &sh.cond_formats[1].rule),
+        (1, &CfRule::DataBar { min: CfValueKind::Min, max: CfValueKind::Max, color: Color::Rgb(0x638EC6), gradient: true, show_value: true })
+    );
+    assert_eq!((sh.validations.len(), sh.validations[0].kind, sh.validations[0].f1.as_str()), (1, ValidationKind::List, "\"a,b\""));
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].cond_formats, sh.cond_formats);
+    assert_eq!(back.sheets[0].validations, sh.validations);
+}

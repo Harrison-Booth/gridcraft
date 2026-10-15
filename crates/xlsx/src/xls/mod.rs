@@ -5,15 +5,16 @@
 //! Read: worksheets, shared strings, cell values, formulas (text and cached results, including
 //! shared and array formulas), cell formatting (number formats, fonts, fills, borders,
 //! alignment, protection, the colour palette and user-defined cell styles), the 1904 date
-//! system, merged cells, column widths, row heights, defined names, print areas, print titles
-//! and the calculation settings (mode, iteration, precision as displayed). Everything else
-//! (charts, pictures, comments, conditional formats, validation, macros) is skipped with a
+//! system, merged cells, column widths, row heights, defined names, print areas, print titles,
+//! the calculation settings (mode, iteration, precision as displayed), conditional formats and
+//! data validation. Everything else (charts, pictures, comments, macros) is skipped with a
 //! warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
 
 mod formula;
 mod ftab;
 mod records;
+mod rules;
 mod styles;
 
 use std::collections::HashMap;
@@ -124,6 +125,8 @@ struct Globals {
     date1904: bool,
     formats: HashMap<u16, String>,
     styles: styles::StyleRecords,
+    /// Number formats defined by DXF records (conditional formats).
+    dxf_formats: HashMap<u16, String>,
     sst: Vec<Arc<str>>,
     links: Links,
     names: Vec<Lbl>,
@@ -194,7 +197,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, merged cells, column widths, row heights and defined names were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, conditional formats, data validation, merged cells, column widths, row heights and defined names were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
@@ -268,6 +271,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
             0x0031 => g.styles.font(&mut c),
             0x0092 => g.styles.palette(&mut c),
             0x0293 => g.styles.style(&mut c),
+            0x088D => rules::dxf_format(&mut c, &mut g.dxf_formats),
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
             0x01AE => {
                 let _ctab = c.u16()?;
@@ -408,6 +412,7 @@ struct SheetState<'g> {
     dropped: usize,
     unsupported: Vec<&'static str>,
     calc: CalcSettings,
+    rules: rules::SheetRules,
 }
 
 impl SheetState<'_> {
@@ -499,6 +504,7 @@ fn worksheet(
         dropped: 0,
         unsupported: vec![],
         calc: CalcSettings::default(),
+        rules: rules::SheetRules::default(),
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -545,6 +551,7 @@ fn worksheet(
             st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style });
         }
     }
+    std::mem::take(&mut st.rules).finish(&g.links, &mut st.sheet, report);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
     }
@@ -734,8 +741,10 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         }
         0x001C => report.warn("Cell comments in .xls files are not imported yet."),
         0x00EC => report.warn("Pictures, charts and shapes in .xls files are not imported yet."),
-        0x01B0 | 0x0879 => report.warn("Conditional formatting in .xls files is not imported yet."),
-        0x01B2 => report.warn("Data validation in .xls files is not imported yet."),
+        rules::CONDFMT | rules::CF | rules::CONDFMT12 | rules::CF12 | rules::CFEX | rules::DV => {
+            let formats = rules::Formats { dxf: &st.g.dxf_formats, cells: &st.g.formats };
+            st.rules.record(rec.id, &mut c, &st.g.styles.color_table(), &formats, budget)?;
+        }
         0x01B8 => report.warn("Hyperlinks in .xls files are not imported yet."),
         0x00B0 => report.warn("PivotTables in .xls files are not imported yet; their values were kept."),
         _ => {}

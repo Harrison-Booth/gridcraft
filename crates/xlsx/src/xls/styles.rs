@@ -164,7 +164,7 @@ impl StyleRecords {
     }
 
     /// The 64-entry colour table: the built-in eight, then the palette (or the default one).
-    fn color_table(&self) -> [u32; 64] {
+    pub(super) fn color_table(&self) -> [u32; 64] {
         let mut table = INDEXED;
         if let Some(p) = &self.palette {
             for (slot, c) in table.iter_mut().skip(8).zip(p.iter()) {
@@ -214,7 +214,7 @@ fn read_font(c: &mut Cursor<'_, '_>) -> Option<(Font, u16)> {
 
 /// A colour index in an XF (IcvXF) or Font (IcvFont): 0-63 from the colour table, the system
 /// and automatic colours as automatic.
-fn color(icv: u16, table: &[u32; 64]) -> Color {
+pub(super) fn color(icv: u16, table: &[u32; 64]) -> Color {
     match icv {
         ICV_DEFAULT_FG | ICV_DEFAULT_BG | ICV_FONT_AUTO => Color::Auto,
         _ => table.get(usize::from(icv)).map_or(Color::Auto, |c| Color::Rgb(*c)),
@@ -240,7 +240,7 @@ fn border_style(dg: u32) -> BorderStyle {
     }
 }
 
-fn pattern(fls: u16) -> PatternType {
+pub(super) fn pattern(fls: u16) -> PatternType {
     match fls {
         0x01 => PatternType::Solid,
         0x02 => PatternType::Gray50,
@@ -264,7 +264,7 @@ fn pattern(fls: u16) -> PatternType {
     }
 }
 
-fn line(dg: u32, icv: u32, table: &[u32; 64]) -> BorderLine {
+pub(super) fn line(dg: u32, icv: u32, table: &[u32; 64]) -> BorderLine {
     let style = border_style(dg);
     if style == BorderStyle::None {
         return BorderLine::default();
@@ -284,7 +284,7 @@ fn xf_font(ifnt: u16, fonts: &[Font]) -> Font {
     fonts.get(i).or_else(|| fonts.first()).cloned().unwrap_or_default()
 }
 
-fn num_fmt(ifmt: u16, formats: &HashMap<u16, String>) -> NumFmt {
+pub(super) fn num_fmt(ifmt: u16, formats: &HashMap<u16, String>) -> NumFmt {
     let code = formats.get(&ifmt).map(String::as_str).or_else(|| builtin_format(u32::from(ifmt))).unwrap_or("General");
     if code.eq_ignore_ascii_case("General") { NumFmt::default() } else { NumFmt::new(code) }
 }
