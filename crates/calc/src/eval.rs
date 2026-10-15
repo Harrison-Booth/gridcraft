@@ -172,9 +172,11 @@ impl<'h> Evaluator<'h> {
             return self.host.cell_value(a.sheet, a.range.start);
         }
         // A reference keeps its size, so the array has its shape and its blanks count
-        // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`).
+        // (`=A1:A10`, `SUMPRODUCT(--(A1:A10=""))`). A single whole row (`5:5`) is exactly
+        // `FULL_SIZE_CELLS` cells, but like `A:A` or `1:2` it stops at the used range: read at full
+        // size, a whole-row lookup value runs 16,384 lookups over 16,384 cells for each formula.
         let cells = u64::from(a.range.height()) * u64::from(a.range.width());
-        let range = if cells > FULL_SIZE_CELLS { self.trim(a) } else { a.range };
+        let range = if cells > FULL_SIZE_CELLS || a.range.is_full_rows() { self.trim(a) } else { a.range };
         let (h, w) = (range.height() as usize, range.width() as usize);
         if (h as u64) * (w as u64) > MAX_CELLS {
             return Value::Error(CellError::Num);
