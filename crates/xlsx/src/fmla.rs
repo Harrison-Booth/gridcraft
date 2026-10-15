@@ -82,9 +82,6 @@ fn expr_to_file(e: Expr) -> String {
         Expr::Unary(gridcraft_formula::UnOp::Spill, r) => Expr::Call("_xlfn.ANCHORARRAY".into(), vec![*r]),
         // Nor an `@` operator: Excel writes `@x` as `_xlfn.SINGLE(x)`.
         Expr::Unary(gridcraft_formula::UnOp::At, x) => Expr::Call("_xlfn.SINGLE".into(), vec![*x]),
-        // Nor the `[@Col]` shorthand: files spell it `[[#This Row],[Col]]`, or Excel repairs
-        // the file and drops the table. Carried as a name, which prints verbatim.
-        Expr::Struct(st) => Expr::Name(gridcraft_formula::printer::struct_ref_file(&st)),
         // Nor trim-reference operators: written as the equivalent `TRIMRANGE(range,n,n)`, which
         // every Excel with trim references reads. (Excel's own file spelling of `A1:.E10` is
         // not publicly documented; the `_xlfn._TRO_*` call forms are accepted on read.)
@@ -94,7 +91,10 @@ fn expr_to_file(e: Expr) -> String {
         }
         other => other,
     });
-    gridcraft_formula::print(&e)
+    // Nor the `[@Col]` shorthand: files spell it `[[#This Row],[Col]]`, or Excel repairs the
+    // file and drops the table. The file printer spells it so; a structured reference is never
+    // carried as a name, whose `!` would read as a sheet prefix (`Sales[x!y]` → `'Sales[x'!y]`).
+    gridcraft_formula::printer::print_file(&e)
 }
 
 /// `_xlpm.x` → `x` (any case, as the parser upper-cases function names).
@@ -167,6 +167,30 @@ mod tests {
             assert!(!file.contains("[@"), "{file}");
             assert_eq!(from_file(&file), f);
         }
+    }
+
+    #[test]
+    fn column_names_with_special_characters() {
+        // Found by the command-sequence fuzzer (ft-3ir.10.17): a column named `#REF!` (a header
+        // that held an error value) came back as `'Sales[''#REF'!]`, a sheet-qualified name,
+        // because the `!` was read as a sheet prefix on the way out. Excel writes these as
+        // typed: `'` escapes only `'`, `[`, `]` and `#`; `!` and `@` are written as they are.
+        for (model, file) in [
+            ("SUM(Sales[x!y])", "SUM(Sales[x!y])"),
+            ("SUBTOTAL(101,Sales['#REF!])", "SUBTOTAL(101,Sales['#REF!])"),
+            ("SUM(Table1['#REF!5])", "SUM(Table1['#REF!5])"),
+            ("SUBTOTAL(101,Sales['#DIV/0!])", "SUBTOTAL(101,Sales['#DIV/0!])"),
+            ("Sales[@['#SPILL!]]", "Sales[[#This Row],['#SPILL!]]"),
+            ("SUM(T[[#Headers],['#REF!]])", "SUM(T[[#Headers],['#REF!]])"),
+            ("SUM(T[[#Data],[x!y]:[ok]])", "SUM(T[[#Data],[x!y]:[ok]])"),
+            ("SUM(T[a''b])+SUM(T[c'[d']])+SUM(T[e'#f])", "SUM(T[a''b])+SUM(T[c'[d']])+SUM(T[e'#f])"),
+            ("SUM(Sheet1!A1,'My Sheet'!B2)", "SUM(Sheet1!A1,'My Sheet'!B2)"),
+            ("SUM('My Sheet'!Total)", "SUM('My Sheet'!Total)"),
+        ] {
+            assert_eq!(to_file(&Formula::new(model)), file, "{model}");
+            assert_eq!(from_file(file), model, "{file}");
+        }
+        assert_eq!(text_to_file("=Sales['#REF!]*2"), "Sales['#REF!]*2");
     }
 
     #[test]

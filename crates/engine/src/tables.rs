@@ -284,6 +284,66 @@ mod tests {
         assert_eq!(sh.value(gridcraft_core::CellRef::new(0, 2)), Value::from("5"));
     }
 
+    /// Every formula of every sheet, as text, before and after an XLSX save and reopen.
+    fn formulas_after_xlsx_roundtrip(s: &Session) -> (Vec<String>, Vec<String>) {
+        let wb = &s.doc().unwrap().wb;
+        let bytes = crate::io::save_bytes(wb, "book.xlsx").unwrap();
+        let (back, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
+        let all = |wb: &gridcraft_model::Workbook| {
+            wb.sheets
+                .iter()
+                .flat_map(|sh| {
+                    sh.cells.iter().filter_map(|(c, x)| x.formula.as_ref().map(|f| format!("{}!{c}={}", sh.name, f.text))).collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        (all(wb), all(&back))
+    }
+
+    /// ft-3ir.10.17: a column whose name holds `!` (a header that took an error value, or typed
+    /// text) kept its structured references only until the file was saved: they reopened as
+    /// `'Sales[''#REF'!]`, a reference to another sheet.
+    #[test]
+    fn column_names_with_bang_survive_an_xlsx_roundtrip() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("range.setValues", json!({"range": "A1", "values": [["x!y", "#REF!", "a'b", "c[d]"], [1, 2, 3, 4], [5, 6, 7, 8]]})).unwrap();
+        s.execute("insert.table", json!({"range": "A1:D3", "header": true})).unwrap();
+        for (cell, f) in [
+            ("F1", "=SUM(Table1[x!y])"),
+            ("F2", "=Table1[@['#REF!]]"),
+            ("F3", "=SUBTOTAL(101,Table1['#REF!])+SUM(Table1[a''b])+SUM(Table1[c'[d']])"),
+            ("F4", "=SUM(Table1[[#Data],[x!y]:['#REF!]])"),
+        ] {
+            s.execute("cell.set", json!({"cell": cell, "input": f})).unwrap();
+        }
+        let names: Vec<String> = s.doc().unwrap().wb.sheet(0).unwrap().tables[0].columns.iter().map(|c| c.name.clone()).collect();
+        assert_eq!(names, ["x!y", "#REF!", "a'b", "c[d]"]);
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap();
+        assert_eq!(get(&mut s, "F1")["value"], json!(6.0));
+        assert_eq!(get(&mut s, "F2")["value"], json!(2.0));
+        assert_eq!(get(&mut s, "F3")["value"], json!(4.0 + 10.0 + 12.0));
+        let (before, after) = formulas_after_xlsx_roundtrip(&s);
+        assert_eq!(before, after);
+        let wb = &s.doc().unwrap().wb;
+        let bytes = crate::io::save_bytes(wb, "book.xlsx").unwrap();
+        let (back, _) = crate::io::open_bytes("book.xlsx", &bytes).unwrap();
+        let back_names: Vec<String> = back.sheet(0).unwrap().tables[0].columns.iter().map(|c| c.name.clone()).collect();
+        assert_eq!(back_names, names);
+    }
+
+    /// The bead's organic route: deletes over the sample's table leave a `#REF!` column name.
+    #[test]
+    fn deletes_over_a_table_header_survive_an_xlsx_roundtrip() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"sample": "sales"})).unwrap();
+        let _ = s.execute("home.deleteColumns", json!({"cols": "C:D"}));
+        let _ = s.execute("home.deleteRows", json!({"rows": "4:5"}));
+        let (before, after) = formulas_after_xlsx_roundtrip(&s);
+        assert!(before.iter().any(|f| f.contains("'#REF!]")), "{before:?}");
+        assert_eq!(before, after);
+    }
+
     #[test]
     fn go_to_a_table_selects_its_data() {
         let mut s = Session::new();

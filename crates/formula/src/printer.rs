@@ -150,21 +150,38 @@ fn number(n: f64) -> String {
     number_to_text(n)
 }
 
+/// How [`write_expr`] spells what has more than one spelling.
+#[derive(Clone, Copy)]
+struct Opts {
+    /// R1C1 notation relative to this cell; A1 when `None`.
+    r1c1: Option<CellRef>,
+    /// Structured references as files spell them (see [`struct_ref_file`]).
+    file: bool,
+}
+
 /// Prints an expression in A1 notation.
 pub fn print(e: &Expr) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, None);
+    write_expr(&mut s, e, Opts { r1c1: None, file: false });
+    s
+}
+
+/// Prints an expression in A1 notation with structured references as files spell them
+/// (`Table1[[#This Row],[Qty]]` for `Table1[@Qty]`).
+pub fn print_file(e: &Expr) -> String {
+    let mut s = String::new();
+    write_expr(&mut s, e, Opts { r1c1: None, file: true });
     s
 }
 
 /// Prints an expression in R1C1 notation relative to `at`.
 pub fn print_r1c1(e: &Expr, at: CellRef) -> String {
     let mut s = String::new();
-    write_expr(&mut s, e, Some(at));
+    write_expr(&mut s, e, Opts { r1c1: Some(at), file: false });
     s
 }
 
-fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
+fn write_expr(s: &mut String, e: &Expr, o: Opts) {
     match e {
         Expr::Number(n) => s.push_str(&number(*n)),
         Expr::Text(t) => {
@@ -184,12 +201,12 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                     if ci > 0 {
                         s.push(',');
                     }
-                    write_expr(s, el, r1c1);
+                    write_expr(s, el, o);
                 }
             }
             s.push('}');
         }
-        Expr::Ref(r) => match r1c1 {
+        Expr::Ref(r) => match o.r1c1 {
             Some(at) => s.push_str(&reference_r1c1(r, at)),
             None => s.push_str(&reference_a1(r)),
         },
@@ -202,47 +219,47 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
             }
             _ => s.push_str(n),
         },
-        Expr::Struct(st) => s.push_str(&struct_ref(st)),
+        Expr::Struct(st) => s.push_str(&write_struct_ref(st, !o.file)),
         Expr::Unary(op, x) => match op {
             UnOp::Neg => {
                 s.push('-');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, o);
             }
             UnOp::Plus => {
                 s.push('+');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, o);
             }
             UnOp::At => {
                 s.push('@');
-                write_expr(s, x, r1c1);
+                write_expr(s, x, o);
             }
             UnOp::Percent => {
-                write_expr(s, x, r1c1);
+                write_expr(s, x, o);
                 s.push('%');
             }
             UnOp::Spill => {
-                write_expr(s, x, r1c1);
+                write_expr(s, x, o);
                 // A reference that became #REF! (its sheet or cell was deleted) stays `#REF!`.
                 if !matches!(**x, Expr::Error(_)) {
                     s.push('#');
                 }
             }
             UnOp::Trim(mode) => match &**x {
-                Expr::Ref(r) if !matches!(r.kind, RefKind::Cell(_)) => match r1c1 {
+                Expr::Ref(r) if !matches!(r.kind, RefKind::Cell(_)) => match o.r1c1 {
                     Some(at) => s.push_str(&range_r1c1(r, at, mode.symbol())),
                     None => s.push_str(&range_a1(r, mode.symbol())),
                 },
                 Expr::Binary(BinOp::Range, a, b) => {
-                    write_expr(s, a, r1c1);
+                    write_expr(s, a, o);
                     s.push_str(mode.symbol());
-                    write_expr(s, b, r1c1);
+                    write_expr(s, b, o);
                 }
                 // A reference that became #REF! stays `#REF!`.
-                Expr::Error(_) => write_expr(s, x, r1c1),
+                Expr::Error(_) => write_expr(s, x, o),
                 // No operator form (e.g. a range shrunk to one cell): the equivalent call.
                 other => {
                     s.push_str("TRIMRANGE(");
-                    write_expr(s, other, r1c1);
+                    write_expr(s, other, o);
                     let _ = write!(s, ",{0},{0})", mode.code());
                 }
             },
@@ -256,10 +273,10 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                 rest.push((op, b));
                 first = a;
             }
-            write_expr(s, first, r1c1);
+            write_expr(s, first, o);
             for (op, right) in rest.into_iter().rev() {
                 s.push_str(op.symbol());
-                write_expr(s, right, r1c1);
+                write_expr(s, right, o);
             }
         }
         Expr::Call(name, args) => {
@@ -269,25 +286,25 @@ fn write_expr(s: &mut String, e: &Expr, r1c1: Option<CellRef>) {
                 if i > 0 {
                     s.push(',');
                 }
-                write_expr(s, a, r1c1);
+                write_expr(s, a, o);
             }
             s.push(')');
         }
         Expr::Invoke(c, args) => {
-            write_expr(s, c, r1c1);
+            write_expr(s, c, o);
             s.push('(');
             for (i, a) in args.iter().enumerate() {
                 if i > 0 {
                     s.push(',');
                 }
-                write_expr(s, a, r1c1);
+                write_expr(s, a, o);
             }
             s.push(')');
         }
         Expr::Missing => {}
         Expr::Paren(x) => {
             s.push('(');
-            write_expr(s, x, r1c1);
+            write_expr(s, x, o);
             s.push(')');
         }
     }
