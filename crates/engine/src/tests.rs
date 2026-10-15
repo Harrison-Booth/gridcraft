@@ -3187,12 +3187,14 @@ fn encrypted_workbooks_open_with_their_password() {
     }
     assert!(s.documents().is_empty());
 
-    // The right password opens it: no save path, the file name as title, the notice first.
+    // The right password opens it: no save path (it came as bytes), the file name as title, the
+    // notice first, and the password kept for saving.
     let r = open(&mut s, Some(PW)).unwrap();
     assert_eq!(r["warnings"][0], crate::io::DECRYPTED_NOTICE);
     assert_eq!(r["title"], "Secret.xlsx");
     assert_eq!(v(&s, "A1"), Value::Number(42.0));
     assert_eq!(s.doc().unwrap().path, None);
+    assert_eq!(s.doc().unwrap().password.as_ref().map(crate::OpenPassword::expose), Some(PW));
     // The notice belongs in the info bar, not a message box.
     assert!(!s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Message(_))));
     let journal = serde_json::to_string(&s.journal).unwrap();
@@ -3201,25 +3203,116 @@ fn encrypted_workbooks_open_with_their_password() {
 
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
-fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
+fn a_decrypted_workbook_saves_back_encrypted_with_its_password() {
     const PW: &str = "synthetic-pw-5522";
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
-    let dir = std::env::temp_dir().join(format!("gridcraft-encrypted-{}-{nonce}", std::process::id()));
-    std::fs::create_dir(&dir).unwrap();
+    let dir = temp_folder("encrypted");
     let path = dir.join("Secret.xlsx");
-    let bytes = encrypted_book(PW);
-    std::fs::write(&path, &bytes).unwrap();
+    std::fs::write(&path, encrypted_book(PW)).unwrap();
 
     let mut s = s();
     s.execute("file.open", json!({"path": path, "password": PW})).unwrap();
-    assert_eq!(s.doc().unwrap().path, None);
+    // The workbook keeps its file, and its password for this session (hidden from Debug).
+    assert_eq!(s.doc().unwrap().path.as_deref(), path.to_str());
+    assert!(s.doc().unwrap().password.is_some());
+    assert!(!s.doc().unwrap().is_dirty());
+    assert!(!format!("{:?}", s.doc().unwrap()).contains(PW));
     s.take_ui_requests();
     s.execute("cell.set", json!({"cell": "A1", "input": "43"})).unwrap();
-    s.execute("file.save", json!({})).unwrap();
-    assert!(s.take_ui_requests().iter().any(|r| matches!(r, crate::UiRequest::Dialog(name, _) if name == "saveAs")));
-    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the encrypted original is untouched");
+    let r = s.execute("file.save", json!({})).unwrap();
+    assert_eq!(r["encrypted"], true);
+    assert!(!r.to_string().contains(PW));
+    assert!(s.take_ui_requests().is_empty(), "Save writes the file; no Save As dialog");
+    // The file on disk is encrypted again, with a valid integrity HMAC, and opens only with it.
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Encrypted);
+    assert_eq!(gridcraft_xlsx::testing::integrity_ok(&bytes, PW), Some(true));
+    assert!(crate::io::open_bytes("Secret.xlsx", &bytes).is_err());
+    let (wb, _) = crate::io::open_bytes_with_password("Secret.xlsx", &bytes, Some(PW)).unwrap();
+    assert_eq!(wb.sheets[0].value(CellRef::new(0, 0)), Value::Number(43.0));
+    let journal = serde_json::to_string(&s.journal).unwrap();
+    assert!(!journal.contains(PW), "the password never reaches the journal");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A fresh temporary folder for a native-only test.
+#[cfg(not(target_arch = "wasm32"))]
+fn temp_folder(tag: &str) -> std::path::PathBuf {
+    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = std::env::temp_dir().join(format!("gridcraft-{tag}-{}-{nonce}", std::process::id()));
+    std::fs::create_dir(&dir).unwrap();
+    dir
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn save_as_with_a_password_encrypts_and_an_empty_one_removes_it() {
+    const PW: &str = "synthetic-pw-8830";
+    let dir = temp_folder("save-password");
+    let (locked, plain, csv) = (dir.join("Locked.xlsx"), dir.join("Plain.xlsx"), dir.join("Data.csv"));
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "7"})).unwrap();
+    let r = s.execute("file.saveAs", json!({"path": locked, "password": PW})).unwrap();
+    assert_eq!(r["encrypted"], true);
+    let bytes = std::fs::read(&locked).unwrap();
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Encrypted);
+    assert_eq!(
+        crate::io::open_bytes_with_password("Locked.xlsx", &bytes, Some(PW)).unwrap().0.sheets[0].value(CellRef::new(0, 0)),
+        Value::Number(7.0)
+    );
+    assert!(s.doc().unwrap().password.is_some() && !s.doc().unwrap().is_dirty());
+    // Two saves of the same workbook never share salts or keys.
+    s.execute("file.save", json!({})).unwrap();
+    assert_ne!(std::fs::read(&locked).unwrap(), bytes);
+    // CSV can't hold a password: asked for, it's an error; the workbook's own is left out.
+    let err = s.execute("file.saveAs", json!({"path": csv, "password": PW})).unwrap_err().to_string();
+    assert!(err.contains(crate::io::PASSWORD_NEEDS_XLSX) && !err.contains(PW), "{err}");
+    let err = s.execute("file.save", json!({"path": dir.join("Print.pdf"), "password": PW})).unwrap_err().to_string();
+    assert!(err.contains(crate::io::PASSWORD_NEEDS_XLSX), "{err}");
+    s.execute("file.saveAs", json!({"path": csv})).unwrap();
+    assert_eq!(std::fs::read_to_string(&csv).unwrap().trim(), "7");
+    // An empty password saves without one, and the workbook no longer has one.
+    let r = s.execute("file.saveAs", json!({"path": plain, "password": ""})).unwrap();
+    assert_eq!(r["encrypted"], false);
+    assert_eq!(gridcraft_xlsx::sniff(&std::fs::read(&plain).unwrap()), gridcraft_xlsx::Format::Xlsx);
+    assert!(s.doc().unwrap().password.is_none());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn encrypt_with_password_applies_on_the_next_save() {
+    const PW: &str = "synthetic-pw-1907";
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    // Programmatic calls never open dialogs: no password is an error.
+    assert!(s.execute("file.encrypt", json!({})).is_err());
+    assert!(s.take_ui_requests().is_empty());
+    let err = s.execute("file.encrypt", json!({"password": PW, "confirmPassword": "other"})).unwrap_err().to_string();
+    assert!(err.contains("not identical") && !err.contains(PW), "{err}");
+    assert!(s.execute("file.encrypt", json!({"password": "x".repeat(256)})).is_err());
+    assert!(s.doc().unwrap().password.is_none());
+
+    // A saved, clean workbook becomes dirty when it gets a password.
+    let r = s.execute("file.saveBytes", json!({})).unwrap();
+    assert_eq!(gridcraft_xlsx::sniff(&crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap()), gridcraft_xlsx::Format::Xlsx);
+    let d = s.doc_mut().unwrap();
+    d.saved = d.wb.clone();
+    assert!(!s.doc().unwrap().is_dirty());
+    assert_eq!(s.execute("file.encrypt", json!({"password": PW, "confirmPassword": PW})).unwrap()["encrypted"], true);
+    assert!(s.doc().unwrap().is_dirty());
+    let r = s.execute("file.saveBytes", json!({})).unwrap();
+    let bytes = crate::io::base64_decode(r["base64"].as_str().unwrap()).unwrap();
+    assert_eq!(gridcraft_xlsx::sniff(&bytes), gridcraft_xlsx::Format::Encrypted);
+    assert!(crate::io::open_bytes_with_password("Book.xlsx", &bytes, Some(PW)).is_ok());
+    // saveBytes as CSV leaves the password out; asking for one there is an error.
+    assert!(s.execute("file.saveBytes", json!({"format": "csv"})).is_ok());
+    assert!(s.execute("file.saveBytes", json!({"format": "csv", "password": PW})).is_err());
+    // "" removes it again.
+    assert_eq!(s.execute("file.encrypt", json!({"password": ""})).unwrap()["encrypted"], false);
+    assert!(!s.doc().unwrap().is_dirty());
+    let journal = serde_json::to_string(&s.journal).unwrap();
+    assert!(!journal.contains(PW), "the password never reaches the journal");
 }
 
 #[test]

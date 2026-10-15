@@ -93,6 +93,27 @@ pub enum Mode {
     Point,
 }
 
+/// A workbook's password to open, kept in memory for this session only so that Save writes the
+/// workbook encrypted again. Never journaled, serialized or printed: `Debug` hides it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct OpenPassword(String);
+
+impl OpenPassword {
+    pub fn new(password: &str) -> OpenPassword {
+        OpenPassword(password.to_string())
+    }
+    /// The password itself, for encrypting.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for OpenPassword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("OpenPassword(hidden)")
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct DocState {
     pub wb: Arc<Workbook>,
@@ -112,6 +133,11 @@ pub struct DocState {
     /// The format `path`'s content was recognised as when its extension doesn't name one (an
     /// XLSX called `budget.dat`): Save writes it back in that format.
     pub content_kind: Option<io::FileKind>,
+    /// The password to open the workbook with (File › Info › Encrypt with Password, or the one
+    /// it was opened with): Save writes it encrypted while this is set.
+    pub password: Option<OpenPassword>,
+    /// `password` as of the last save, so changing it makes the workbook dirty.
+    pub saved_password: Option<OpenPassword>,
 }
 
 static NEXT_UID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
@@ -137,10 +163,12 @@ impl DocState {
             sheet_selections: vec![],
             unlocked_ranges: vec![],
             content_kind: None,
+            password: None,
+            saved_password: None,
         }
     }
     pub fn is_dirty(&self) -> bool {
-        !Arc::ptr_eq(&self.wb, &self.saved)
+        !Arc::ptr_eq(&self.wb, &self.saved) || self.password != self.saved_password
     }
     pub fn sheet_index(&self) -> usize {
         self.wb.active_sheet

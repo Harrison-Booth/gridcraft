@@ -17,6 +17,38 @@ fn the_test_compound_writer_reads_back() {
 }
 
 #[test]
+fn large_compound_files_grow_difat_sectors() {
+    // Past 109 FAT sectors (about 7 MB) the FAT's own sector list continues in DIFAT sectors.
+    let big: Vec<u8> = (0..9_000_000u32).map(|i| (i % 241) as u8).collect();
+    let file = compound_file(&[("Small", b"hi"), ("Big", &big)]);
+    let difat_count = u32::from_le_bytes(file[72..76].try_into().unwrap());
+    assert!(difat_count >= 1, "{difat_count}");
+    let cf = crate::cfb::Compound::open(&file).unwrap();
+    assert_eq!(cf.root_stream("Big").unwrap().unwrap(), big);
+    assert_eq!(cf.root_stream("Small").unwrap().unwrap(), b"hi");
+}
+
+#[test]
+fn the_directory_is_a_balanced_tree_in_name_order() {
+    let names = ["Workbook", "EncryptionInfo", "EncryptedPackage", "A", "\u{5}SummaryInformation", "zz"];
+    let streams: Vec<(&str, &[u8])> = names.iter().map(|n| (*n, &b"x"[..])).collect();
+    let file = compound_file(&streams);
+    let cf = crate::cfb::Compound::open(&file).unwrap();
+    for n in names {
+        assert_eq!(cf.root_stream(n).unwrap().as_deref(), Some(&b"x"[..]), "{n}");
+    }
+    // The root's child is the middle name: by length, then upper case ("A" < "zz" < ... ).
+    let dir = 512 * 2;
+    let child = u32::from_le_bytes(file[dir + 76..dir + 80].try_into().unwrap()) as usize;
+    let e = dir + child * 128;
+    let len = u16::from_le_bytes(file[e + 64..e + 66].try_into().unwrap()) as usize;
+    let name: Vec<u16> = file[e..e + len - 2].chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    assert_eq!(String::from_utf16(&name).unwrap(), "EncryptionInfo");
+    assert!(crate::cfb::write(&[("", b"x")]).is_err());
+    assert!(crate::cfb::write(&[(&"n".repeat(32), b"x")]).is_err());
+}
+
+#[test]
 fn encrypted_files_decrypt_to_the_package() {
     let package: Vec<u8> = (0..3_000_000u32).map(|i| (i * 31 % 251) as u8).collect();
     let agile = encrypt_workbook(&package, "Pass1234");

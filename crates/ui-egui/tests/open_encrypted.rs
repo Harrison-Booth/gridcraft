@@ -75,13 +75,15 @@ fn opening_an_encrypted_file_asks_for_its_password() {
     assert_eq!(h.state().dialog.as_ref().and_then(|d| d.values.get("path")), Some(&json!(p)));
     h.state_mut().message = None;
 
-    // The right one opens the workbook: no save path, in Recent, with the notice.
+    // The right one opens the workbook: its own file (Save encrypts it again), in Recent, with
+    // the notice.
     h.state_mut().dialog.as_mut().unwrap().values.insert("password".into(), json!(PW));
     h.get_by_label("   OK   ").click();
     h.run_steps(3);
     assert_eq!(dialog(&h), None);
     assert_eq!(a1(&h), Value::Number(42.0));
-    assert_eq!(h.state().session.active().unwrap().path, None);
+    assert_eq!(h.state().session.active().unwrap().path.as_deref(), Some(p.as_str()));
+    assert!(h.state().session.active().unwrap().password.is_some());
     assert_eq!(h.state().ui.recent.first(), Some(&p));
     assert!(h.state().notice.as_ref().is_some_and(|n| n.text.contains("password-protected")));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
@@ -169,4 +171,29 @@ fn app_open_over_the_control_channel_never_opens_a_dialog() {
     assert_eq!(a1(&h), Value::Number(42.0));
     assert_eq!(h.state().ui.recent.first(), Some(&p));
     std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn encrypt_with_password_asks_twice_and_sets_the_password_to_open() {
+    let mut h = harness(Services::default());
+    h.state_mut().open_dialog("encryptWorkbook", json!({}));
+    h.run_steps(3);
+    assert_eq!(dialog(&h).as_deref(), Some("encryptWorkbook"));
+    assert_eq!(h.query_all_by_role(Role::PasswordInput).count(), 2, "both entries are masked");
+    // Two different entries: an error, and the dialog stays for another try.
+    let values = &mut h.state_mut().dialog.as_mut().unwrap().values;
+    values.insert("password".into(), json!(PW));
+    values.insert("confirmPassword".into(), json!("typo"));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert!(h.state().message.as_ref().is_some_and(|(_, m)| m.contains("not identical") && !m.contains(PW)));
+    assert!(h.state().session.active().unwrap().password.is_none());
+    h.state_mut().message = None;
+    h.state_mut().dialog.as_mut().unwrap().values.insert("confirmPassword".into(), json!(PW));
+    h.get_by_label("   OK   ").click();
+    h.run_steps(3);
+    assert_eq!(dialog(&h), None);
+    let d = h.state().session.active().unwrap();
+    assert_eq!(d.password.as_ref().map(gridcraft_engine::OpenPassword::expose), Some(PW));
+    assert!(d.is_dirty());
 }

@@ -592,6 +592,7 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     let path = d.path.clone();
     let sheets = d.wb.sheets.len();
     let protected = d.wb.protected_structure;
+    let encrypted = d.password.is_some();
     let current: Vec<String> = {
         let pr = &d.wb.props;
         vec![pr.title.clone(), pr.subject.clone(), pr.author.clone(), pr.company.clone(), pr.keywords.clone(), pr.description.clone()]
@@ -620,6 +621,23 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
                 "Sheet structure is locked: sheets can't be added, moved, renamed or deleted."
             } else {
                 "Lock the sheet structure so sheets can't be added, moved, renamed or deleted."
+            };
+            dim(ui, lang.tr(text));
+        });
+    });
+    ui.add_space(12.0);
+    ui.horizontal(|ui| {
+        if square_button(ui, Icon::Lock, lang.tr("Encrypt with Password")).clicked() {
+            app.open_dialog("encryptWorkbook", json!({}));
+        }
+        ui.add_space(12.0);
+        ui.vertical(|ui| {
+            ui.add_space(14.0);
+            ui.label(RichText::new(lang.tr("Encrypt with Password")).font(theme::ui_bold(13.5)).color(t.text));
+            let text = if encrypted {
+                "Opening this workbook needs its password. Saved as .xlsx, it stays encrypted."
+            } else {
+                "Ask for a password whenever this workbook is opened."
             };
             dim(ui, lang.tr(text));
         });

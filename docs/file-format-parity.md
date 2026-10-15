@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** trivial (XLSX chart sheets are kept on save (#727); previously minor: CSV save keeps the separator it was opened with) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (password-encrypted `.xlsx` is written: Agile AES-256/SHA-512 with the integrity HMAC (#770); previously trivial: XLSX chart sheets are kept on save) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -34,7 +34,7 @@ and repair-free opening remain unverified.
 | `.xlam` / `.xla` add-ins | R/W | no | no | VBA; out of scope | — |
 | `.xml` XML Spreadsheet 2003 | R/W | no | no | Simple to support | — |
 | `.ods` OpenDocument Spreadsheet | R/W | **values only** (#100) | no | Sheets, values, dates, merges, repeated cells, cached formula results; no formulas, formatting, charts; encrypted ODS refused | `ods_tests.rs` |
-| Password-encrypted workbooks (Agile/Standard encryption) | R | **yes** (#11): asks for the password on open; Agile (AES-128/192/256, SHA-1/256/384/512) and Standard (AES, SHA-1) | no (opens with no save path; Save As writes it without the password) | Clean-room from [MS-OFFCRYPTO] on the CFB reader. RC4, Extensible and certificate-only encryption refused with a message. Data-integrity HMAC not checked | `crypto/tests.rs`, `encrypted_tests.rs` |
+| Password-encrypted workbooks (Agile/Standard encryption) | R | **yes** (#11): asks for the password on open; Agile (AES-128/192/256, SHA-1/256/384/512) and Standard (AES, SHA-1) | **yes** (#770): Agile (AES-256, SHA-512, 100,000 spins) with the data-integrity HMAC, salts and keys from the OS random source; segmented 4096-byte package; compound file grows DIFAT sectors past 7 MB (up to 1 GiB). A workbook opened with its password saves back with it; `password` on Save/Save As and File > Info > Encrypt with Password set or remove it. Excel opens the result with the password and refuses a wrong one, and the HMAC matches the one Excel writes (checked with Excel for Windows 16, 2026-10-14) | Clean-room from [MS-OFFCRYPTO] and [MS-CFB]. RC4, Extensible and certificate-only encryption refused with a message. The HMAC is written, not checked on open | `crypto/tests.rs`, `encrypted_tests.rs`, engine `tests.rs`, `ui-egui/tests/open_encrypted.rs` |
 | `.xlw` Excel 4.0 workbook, `.wk*`, `.dbf` | open only (some) | no | no | Rare | — |
 
 ## Text and data formats
@@ -85,6 +85,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | Password-encrypted `.xlsx` is written (Agile AES-256/SHA-512, integrity HMAC, DIFAT for large packages); opened passwords are kept for Save; Save/Save As `password`, File > Info > Encrypt with Password (#770) |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
 | 2026-10-12 | minor | `.xls` import reads the calculation settings (CalcMode, CalcIter, CalcCount, CalcDelta, CalcPrecision), so circular models calculate instead of showing `#CIRC!` (#724) |

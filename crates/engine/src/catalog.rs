@@ -15,6 +15,7 @@ pub const CATALOG: &[(&str, &str, &str, &str)] = &[
     ("file.exportCsv", "File", "Export", "CSV"),
     ("file.exportHtml", "File", "Export", "Web Page"),
     ("file.properties", "File", "Info", "Properties"),
+    ("file.encrypt", "File", "Info", "Encrypt with Password"),
     ("file.options", "File", "Options", "Options"),
     // Home
     ("edit.paste", "Home", "Clipboard", "Paste"),

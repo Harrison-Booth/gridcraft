@@ -44,7 +44,9 @@ pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password t
 /// The error for a wrong password contains this.
 pub const WRONG_PASSWORD: &str = "The password is incorrect.";
 /// The first open warning of a workbook decrypted with its password.
-pub const DECRYPTED_NOTICE: &str = "This workbook was password-protected. GridCraft saves it without the password.";
+pub const DECRYPTED_NOTICE: &str = "This workbook is password-protected. GridCraft saves it with the same password.";
+/// The error for a password to open given with a format that can't hold one.
+pub const PASSWORD_NEEDS_XLSX: &str = "Only Excel workbooks (.xlsx, .xlsm) can be saved with a password to open.";
 
 /// Parses a file's bytes into a workbook. `name` picks the format by extension when the bytes
 /// don't say. An encrypted workbook needs [`open_bytes_with_password`].
@@ -221,6 +223,18 @@ pub fn save_file_bytes(wb: &Workbook, path: &str) -> Result<Vec<u8>> {
         Some(rebased) => save_bytes(&rebased, path),
         None => save_bytes(wb, path),
     }
+}
+
+/// `xlsx` (a saved package) encrypted with `password` as Excel stores a workbook with a password
+/// to open: Agile encryption (AES-256, SHA-512) with salts and keys from the operating system's
+/// secure random numbers. Errors never quote the password.
+pub fn encrypt_xlsx(xlsx: &[u8], password: &str) -> Result<Vec<u8>> {
+    gridcraft_xlsx::encrypt(xlsx, password, &mut os_random).map_err(|e| EngineError::Other(format!("We can't save with a password: {e}.")))
+}
+
+/// The operating system's (on the web, the browser's) cryptographically secure random numbers.
+fn os_random(buf: &mut [u8]) -> std::result::Result<(), String> {
+    getrandom::fill(buf).map_err(|e| e.to_string())
 }
 
 /// The folder of the file at `path`, which relative paths to linked workbooks are relative to.

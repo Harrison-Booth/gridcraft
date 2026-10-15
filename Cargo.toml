@@ -39,6 +39,9 @@ sha2 = { version = "0.11", default-features = false }
 aes = { version = "0.9", default-features = false }
 sha1 = { version = "0.11", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+# The operating system's secure random numbers (the browser's Crypto.getRandomValues on the web),
+# for the salts and keys of workbooks saved with a password to open.
+getrandom = { version = "0.4", default-features = false }
 
 # ui
 egui = "0.36"

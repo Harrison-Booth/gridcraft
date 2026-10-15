@@ -9,9 +9,21 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
         cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
-        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
-        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
-        cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
+        cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?, password?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension). password: a password to open, encrypting the .xlsx (\"\" saves it without one); left out, the workbook's own password applies", has_doc, save),
+        cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path, password?} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet); password as for file.save", has_doc, save_as),
+        cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html, password?} → {base64}; an xlsx is encrypted with password, else with the workbook's own password", has_doc, save_bytes),
+        // Not journaled: the params are a password, and replayed without it the command would fail.
+        CommandSpec {
+            id: "file.encrypt",
+            label: "Encrypt with Password",
+            menu: &["File", "Info"],
+            shortcut: None,
+            params: "{password, confirmPassword?} (\"\" removes it) → {encrypted}: the password to open the workbook with, applied when it is next saved as .xlsx",
+            enabled: has_doc,
+            run: encrypt,
+            journal: false,
+            undoable: false,
+        },
         cmd!(noundo "file.close", "Close", ["File"], Some("Cmd+W"), "{force?: bool}", has_doc, close),
         cmd!(noundo "file.exportCsv", "Export as CSV", ["File", "Export"], None, "{path, sheet?}", has_doc, |s, p| export(s, p, "csv")),
         cmd!(noundo "file.exportHtml", "Save as Web Page", ["File", "Export"], None, "{path}", has_doc, |s, p| export(s, p, "html")),
@@ -66,10 +78,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     } else {
         std::path::Path::new(&name).file_name().and_then(|n| n.to_str()).unwrap_or("Book").to_string()
     };
-    // An import has no save target: ordinary Save must ask for a new destination. Neither does a
-    // workbook decrypted with its password, so Save never replaces the encrypted original with
-    // an unprotected copy.
-    let path = str_param(p, "path").filter(|_| !imported && !encrypted).map(str::to_string);
+    // An import has no save target: ordinary Save must ask for a new destination. A workbook
+    // decrypted with its password keeps its file and its password, so Save encrypts it again.
+    let path = str_param(p, "path").filter(|_| !imported).map(str::to_string);
     // Replace an untouched blank Book1 like Excel does.
     if s.documents().len() == 1
         && s.active().is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))
@@ -77,6 +88,10 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
         s.close_document(0);
     }
     let mut doc = DocState::new(wb, path, title);
+    if encrypted {
+        doc.password = str_param(p, "password").map(crate::OpenPassword::new);
+        doc.saved_password = doc.password.clone();
+    }
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
@@ -104,9 +119,15 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
             return ok();
         }
     };
+    // `password`: a password to open ("" for none); left out, the workbook's own applies.
+    let explicit = str_param(p, "password");
+    let is_pdf = std::path::Path::new(&path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+    if is_pdf && explicit.is_some_and(|pw| !pw.is_empty()) {
+        return Err(bad("file.save", crate::io::PASSWORD_NEEDS_XLSX));
+    }
     // A PDF is a print of the sheet (Page Setup applies), not a copy of the workbook: the
     // document keeps its file and its unsaved changes.
-    if std::path::Path::new(&path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+    if is_pdf {
         return super::print::export_pdf(s, &json!({"path": path}));
     }
     let d = s.doc_mut()?;
@@ -115,17 +136,36 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let kind = crate::io::FileKind::from_path(&path).or(d.content_kind.filter(|_| d.path.as_deref() == Some(path.as_str())));
     let rebased = crate::io::source_dir(&path).and_then(|f| gridcraft_xlsx::rebase_links(&d.wb, &f));
     let wb = rebased.as_ref().unwrap_or(&d.wb);
-    let bytes = match kind {
+    let password = match explicit {
+        Some(pw) => (!pw.is_empty()).then(|| crate::OpenPassword::new(pw)),
+        None => d.password.clone(),
+    };
+    // Only an .xlsx holds a password to open; other formats are written plain, as Excel writes
+    // them, unless a password was asked for this save.
+    let xlsx = kind.unwrap_or(crate::io::FileKind::Xlsx) == crate::io::FileKind::Xlsx;
+    if !xlsx && explicit.is_some_and(|pw| !pw.is_empty()) {
+        return Err(bad("file.save", crate::io::PASSWORD_NEEDS_XLSX));
+    }
+    let mut bytes = match kind {
         Some(kind) => crate::io::save_bytes_as(wb, &path, kind)?,
         None => crate::io::save_bytes(wb, &path)?,
     };
+    let encrypted = xlsx && password.is_some();
+    if let (true, Some(pw)) = (xlsx, &password) {
+        bytes = crate::io::encrypt_xlsx(&bytes, pw.expose())?;
+    }
     crate::io::write_file(&path, &bytes)?;
     // Only a full-fidelity format clears the dirty flag and becomes the document's file.
     if matches!(kind, Some(crate::io::FileKind::Xlsx | crate::io::FileKind::Json)) {
         d.saved = d.wb.clone();
         d.path = Some(path.clone());
+        if explicit.is_some() {
+            d.password = password;
+        }
+        // A JSON copy holds no password, but nothing about the password is unsaved either.
+        d.saved_password = d.password.clone();
     }
-    Ok(json!({"path": path, "bytes": bytes.len()}))
+    Ok(json!({"path": path, "bytes": bytes.len(), "encrypted": encrypted}))
 }
 
 fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
@@ -139,9 +179,37 @@ fn save_as(s: &mut Session, p: &Json) -> Result<Json> {
 fn save_bytes(s: &mut Session, p: &Json) -> Result<Json> {
     let fmt = str_param(p, "format").unwrap_or("xlsx");
     let d = s.doc()?;
-    let bytes = crate::io::save_bytes(&d.wb, &format!("x.{fmt}"))?;
+    let explicit = str_param(p, "password");
+    let password = match explicit {
+        Some(pw) => (!pw.is_empty()).then_some(pw),
+        None => d.password.as_ref().map(crate::OpenPassword::expose),
+    };
+    let xlsx = crate::io::FileKind::from_path(&format!("x.{fmt}")) == Some(crate::io::FileKind::Xlsx);
+    if !xlsx && explicit.is_some_and(|pw| !pw.is_empty()) {
+        return Err(bad("file.saveBytes", crate::io::PASSWORD_NEEDS_XLSX));
+    }
+    let mut bytes = crate::io::save_bytes(&d.wb, &format!("x.{fmt}"))?;
+    if let (true, Some(pw)) = (xlsx, password) {
+        bytes = crate::io::encrypt_xlsx(&bytes, pw)?;
+    }
     let name = format!("{}.{fmt}", std::path::Path::new(&d.display_title()).file_stem().and_then(|x| x.to_str()).unwrap_or("Book"));
     Ok(json!({"name": name, "base64": crate::io::base64_encode(&bytes), "bytes": bytes.len()}))
+}
+
+/// File › Info › Protect Workbook › Encrypt with Password: sets (or, with "", removes) the
+/// password to open, which the next save as .xlsx applies. The workbook becomes dirty. A
+/// missing password is an error, never a dialog; the interface asks for it itself.
+fn encrypt(s: &mut Session, p: &Json) -> Result<Json> {
+    let pw = str_param(p, "password").ok_or_else(|| bad("file.encrypt", "missing `password` (\"\" removes the password)"))?;
+    if str_param(p, "confirmPassword").is_some_and(|c| c != pw) {
+        return Err(bad("file.encrypt", "The confirmation password is not identical."));
+    }
+    if pw.encode_utf16().count() > gridcraft_xlsx::MAX_PASSWORD_LEN {
+        return Err(bad("file.encrypt", "A password to open can have at most 255 characters."));
+    }
+    let d = s.doc_mut()?;
+    d.password = (!pw.is_empty()).then(|| crate::OpenPassword::new(pw));
+    Ok(json!({"encrypted": d.password.is_some()}))
 }
 
 fn close(s: &mut Session, p: &Json) -> Result<Json> {

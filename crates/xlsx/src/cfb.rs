@@ -327,6 +327,223 @@ impl<'a> Compound<'a> {
     }
 }
 
+// ---- writing -------------------------------------------------------------------------------
+
+/// Sector-id markers in the FAT ([MS-CFB] 2.1).
+const FREE_SECT: u32 = 0xFFFF_FFFF;
+const FAT_SECT: u32 = 0xFFFF_FFFD;
+const DIF_SECT: u32 = 0xFFFF_FFFC;
+/// The header holds the first 109 FAT sector ids; DIFAT sectors hold the rest.
+const HEADER_DIFAT: usize = 109;
+const WRITE_SECTOR: usize = 512;
+const WRITE_MINI: usize = 64;
+/// Streams smaller than this live in the mini stream.
+const MINI_CUTOFF: usize = 4096;
+
+/// A version 3 compound file (512-byte sectors) holding `streams` directly under the root
+/// storage, written from the public [MS-CFB] specification. Streams under 4096 bytes go in the
+/// mini stream, larger ones in regular sectors; the FAT grows DIFAT sectors as needed, so the
+/// only limit is the 1 GiB a stream may hold when read back. Layout: header, FAT, DIFAT,
+/// directory, mini FAT, mini stream, then each large stream in order.
+pub(crate) fn write(streams: &[(&str, &[u8])]) -> Result<Vec<u8>, String> {
+    let to32 = |n: usize| u32::try_from(n).map_err(|_| "the compound file is too large".to_string());
+    let total: usize = streams.iter().map(|(_, d)| d.len()).fold(0usize, usize::saturating_add);
+    if total as u64 > MAX_STREAM {
+        return Err("the file is larger than the 1 GiB a compound file stream may hold".into());
+    }
+    for (name, _) in streams {
+        if name.is_empty() || name.encode_utf16().count() > 31 {
+            return Err(format!("a compound file stream name must be 1 to 31 characters: {name:?}"));
+        }
+    }
+    let is_mini = |d: &[u8]| d.len() < MINI_CUTOFF;
+
+    // The mini stream: small streams in 64-byte mini sectors, chained by the mini FAT.
+    let mut container = vec![];
+    let mut mini_fat: Vec<u32> = vec![];
+    let mut mini_starts = vec![];
+    for (_, d) in streams {
+        if !is_mini(d) || d.is_empty() {
+            mini_starts.push(END_OF_CHAIN);
+            continue;
+        }
+        let first = mini_fat.len();
+        let n = d.len().div_ceil(WRITE_MINI);
+        for k in 0..n {
+            mini_fat.push(if k + 1 == n { END_OF_CHAIN } else { to32(first + k + 1)? });
+        }
+        mini_starts.push(to32(first)?);
+        container.extend_from_slice(d);
+        container.resize((first + n) * WRITE_MINI, 0);
+    }
+
+    // Regular-sector blobs, in order: directory, mini FAT, mini stream, then each large stream.
+    let dir_len = (streams.len() + 1).div_ceil(4) * WRITE_SECTOR;
+    let mut blobs: Vec<&[u8]> = vec![&[], &[], &container];
+    let mini_fat_bytes: Vec<u8> = mini_fat.iter().flat_map(|v| v.to_le_bytes()).collect();
+    if let Some(b) = blobs.get_mut(1) {
+        *b = &mini_fat_bytes;
+    }
+    blobs.extend(streams.iter().map(|(_, d)| if is_mini(d) { &[][..] } else { *d }));
+    let mut counts: Vec<usize> = blobs.iter().map(|b| b.len().div_ceil(WRITE_SECTOR)).collect();
+    if let Some(c) = counts.first_mut() {
+        *c = dir_len / WRITE_SECTOR;
+    }
+    let body: usize = counts.iter().sum();
+
+    // FAT and DIFAT sectors are counted in the sectors the FAT maps: grow both to a fixed point.
+    let per = WRITE_SECTOR / 4;
+    let mut fat_sectors = 1usize;
+    let difat_sectors = loop {
+        let difat = fat_sectors.saturating_sub(HEADER_DIFAT).div_ceil(per - 1);
+        if fat_sectors * per >= fat_sectors + difat + body {
+            break difat;
+        }
+        fat_sectors += 1;
+    };
+    let mut fat = vec![FREE_SECT; fat_sectors * per];
+    let mut starts = vec![];
+    fat.iter_mut().take(fat_sectors).for_each(|s| *s = FAT_SECT);
+    fat.iter_mut().skip(fat_sectors).take(difat_sectors).for_each(|s| *s = DIF_SECT);
+    let mut next = fat_sectors + difat_sectors;
+    for &n in &counts {
+        if n == 0 {
+            starts.push(END_OF_CHAIN);
+            continue;
+        }
+        starts.push(to32(next)?);
+        for k in 0..n {
+            let v = if k + 1 == n { END_OF_CHAIN } else { to32(next + k + 1)? };
+            if let Some(slot) = fat.get_mut(next + k) {
+                *slot = v;
+            }
+        }
+        next += n;
+    }
+    let start = |i: usize| starts.get(i).copied().unwrap_or(END_OF_CHAIN);
+
+    let sectors = 1 + fat_sectors + difat_sectors + body;
+    let mut out = vec![0u8; WRITE_SECTOR * sectors];
+    let put16 = |b: &mut [u8], at: usize, v: u16| {
+        if let Some(s) = b.get_mut(at..at + 2) {
+            s.copy_from_slice(&v.to_le_bytes());
+        }
+    };
+    let put32 = |b: &mut [u8], at: usize, v: u32| {
+        if let Some(s) = b.get_mut(at..at + 4) {
+            s.copy_from_slice(&v.to_le_bytes());
+        }
+    };
+    let at = |sector: usize| WRITE_SECTOR * (1 + sector);
+
+    // Directory: the root (owning the mini stream), the streams as a balanced binary tree in
+    // [MS-CFB] name order (shorter names first, then by upper-case code units), all black.
+    let mut dir = vec![0u8; dir_len];
+    for k in 0..dir_len / 128 {
+        for off in [68, 72, 76] {
+            put32(&mut dir, k * 128 + off, NO_STREAM);
+        }
+    }
+    let key = |name: &str| -> (usize, Vec<u16>) {
+        let upper: Vec<u16> = name.to_uppercase().encode_utf16().collect();
+        (name.encode_utf16().count(), upper)
+    };
+    let mut order: Vec<usize> = (0..streams.len()).collect();
+    order.sort_by_key(|&i| streams.get(i).map(|(n, _)| key(n)));
+    let mut links = vec![(NO_STREAM, NO_STREAM); streams.len()];
+    // Bottom-up: each sorted span's middle entry has its halves' middles as children.
+    let tree_root = balance(&order, &mut links);
+    let mut entry = |k: usize, name: &str, kind: u8, start: u32, size: usize, left: u32, right: u32, child: u32| -> Result<(), String> {
+        let e = k * 128;
+        let units: Vec<u8> = name.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        if let Some(s) = dir.get_mut(e..e + units.len()) {
+            s.copy_from_slice(&units);
+        }
+        put16(&mut dir, e + 64, u16::try_from(units.len() + 2).map_err(|_| "a stream name is too long".to_string())?);
+        if let Some(b) = dir.get_mut(e + 66) {
+            *b = kind;
+        }
+        if let Some(b) = dir.get_mut(e + 67) {
+            *b = 1; // black
+        }
+        put32(&mut dir, e + 68, left);
+        put32(&mut dir, e + 72, right);
+        put32(&mut dir, e + 76, child);
+        put32(&mut dir, e + 116, start);
+        put32(&mut dir, e + 120, to32(size)?);
+        Ok(())
+    };
+    entry(0, "Root Entry", 5, start(2), container.len(), NO_STREAM, NO_STREAM, tree_root)?;
+    for (k, (name, data)) in streams.iter().enumerate() {
+        let s = if is_mini(data) { mini_starts.get(k).copied().unwrap_or(END_OF_CHAIN) } else { start(3 + k) };
+        let (left, right) = links.get(k).copied().unwrap_or((NO_STREAM, NO_STREAM));
+        entry(k + 1, name, 2, s, data.len(), left, right, NO_STREAM)?;
+    }
+    if let Some(b) = blobs.first_mut() {
+        *b = &dir;
+    }
+
+    // Header.
+    if let Some(s) = out.get_mut(..8) {
+        s.copy_from_slice(&SIGNATURE);
+    }
+    put16(&mut out, 24, 0x3E); // minor version
+    put16(&mut out, 26, 3); // major version
+    put16(&mut out, 28, 0xFFFE); // byte order
+    put16(&mut out, 30, 9); // 512-byte sectors
+    put16(&mut out, 32, 6); // 64-byte mini sectors
+    put32(&mut out, 44, to32(fat_sectors)?);
+    put32(&mut out, 48, start(0));
+    put32(&mut out, 56, to32(MINI_CUTOFF)?);
+    put32(&mut out, 60, start(1)); // first mini FAT sector (END when there is none)
+    put32(&mut out, 64, to32(counts.get(1).copied().unwrap_or(0))?);
+    put32(&mut out, 68, if difat_sectors > 0 { to32(fat_sectors)? } else { END_OF_CHAIN });
+    put32(&mut out, 72, to32(difat_sectors)?);
+    for i in 0..HEADER_DIFAT {
+        put32(&mut out, 76 + i * 4, if i < fat_sectors { to32(i)? } else { FREE_SECT });
+    }
+    // DIFAT sectors: 127 FAT sector ids each, then the next DIFAT sector.
+    for d in 0..difat_sectors {
+        let base = at(fat_sectors + d);
+        for j in 0..per - 1 {
+            let fat_id = HEADER_DIFAT + d * (per - 1) + j;
+            put32(&mut out, base + j * 4, if fat_id < fat_sectors { to32(fat_id)? } else { FREE_SECT });
+        }
+        let next_difat = if d + 1 < difat_sectors { to32(fat_sectors + d + 1)? } else { END_OF_CHAIN };
+        put32(&mut out, base + (per - 1) * 4, next_difat);
+    }
+    for (i, v) in fat.iter().enumerate() {
+        put32(&mut out, at(0) + i * 4, *v);
+    }
+    for (blob, s) in blobs.iter().zip(&starts) {
+        if !blob.is_empty() {
+            let from = at(*s as usize);
+            if let Some(dst) = out.get_mut(from..from + blob.len()) {
+                dst.copy_from_slice(blob);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Links the entries `sorted` (stream indices in name order) into a balanced binary tree:
+/// `links[i]` gets entry i's (left, right) siblings as directory ids (stream index + 1). Returns
+/// the tree's root id. The depth is log2 of the stream count, which the caller chooses.
+fn balance(sorted: &[usize], links: &mut [(u32, u32)]) -> u32 {
+    if sorted.is_empty() {
+        return NO_STREAM;
+    }
+    let mid = sorted.len() / 2;
+    let (Some(lo), Some(hi)) = (sorted.get(..mid), sorted.get(mid + 1..)) else { return NO_STREAM };
+    let left = balance(lo, links);
+    let right = balance(hi, links);
+    let Some(&me) = sorted.get(mid) else { return NO_STREAM };
+    if let Some(l) = links.get_mut(me) {
+        *l = (left, right);
+    }
+    u32::try_from(me + 1).unwrap_or(NO_STREAM)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

@@ -36,7 +36,7 @@ Errors come back as `{"id": …, "ok": false, "error": "…"}`.
 | `ui.screenshot` | `{path?}` | PNG of the window (base64 when no path). Animations are settled first: the picture shows the final state |
 | `ui.set` | `{dark?, formulaBar?, ribbonCollapsed?, animations?}` | UI preferences (`formulaBar` runs `view.formulaBar`) |
 | `ui.resize` / `ui.focus` | `{width, height}` | Window control |
-| `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog) |
+| `app.open` / `app.save` / `app.quit` | `{path, password?}` / `{path?, password?}` | Files and lifetime. `password` opens a password-protected workbook; without it, such a workbook returns an error (never a dialog). On save, `password` encrypts the `.xlsx` (`""` saves it without one) |
 
 Any other method name that is a command id (e.g. `home.bold`) runs that command.
 
@@ -60,8 +60,16 @@ system language.
 workbook (Agile or Standard encryption). Without `password` it returns an error containing
 "is password-protected. Enter its password to open it." and never opens a dialog; a wrong
 password returns "The password is incorrect." The password is left out of the journal and never
-quoted in an error. The opened workbook has no save path, so Save asks where to save it, without
-the password, and never replaces the encrypted original.
+quoted in an error. The opened workbook keeps its file and, for this session only, its password:
+Save writes it back encrypted with the same password.
+
+`file.save` / `file.saveAs` / `file.saveBytes` take `password?`: a password to open, which
+encrypts the `.xlsx` with Agile encryption (AES-256, SHA-512, salts and keys from the operating
+system's secure random numbers, with the data-integrity HMAC Excel checks). Left out, the
+workbook's own password applies; `""` saves without one. A password with `.csv`, `.json`, `.html`
+or `.pdf` is an error. `file.encrypt {password, confirmPassword?}` sets the password to open (File >
+Info > Encrypt with Password; `""` removes it) for the next save. Results report `encrypted`, never
+the password. `file.encrypt` is not journaled.
 
 For a headless equivalent (no window), use `gridcraft-cli mcp` or `gridcraft-cli run`;
 see [`mcp.md`](mcp.md) and [`cli.md`](cli.md).

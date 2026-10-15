@@ -44,7 +44,7 @@ mod tests;
 use gridcraft_core::DateSystem;
 use gridcraft_model::Workbook;
 
-pub use crypto::{DecryptError, check_encryption, decrypt};
+pub use crypto::{DecryptError, ENCRYPT_SPIN_COUNT, EncryptError, MAX_PASSWORD_LEN, check_encryption, decrypt, encrypt};
 pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
 pub use ods::read_ods;
 pub use passthrough::rebase_links;

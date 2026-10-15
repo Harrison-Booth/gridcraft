@@ -2,12 +2,13 @@
 //! two streams: `EncryptionInfo` (how the key comes from the password, and a verifier that tells
 //! a wrong password) and `EncryptedPackage` (the package, encrypted with AES). Agile encryption
 //! (Excel 2010 onward) and Standard encryption (Excel 2007) are read; RC4, Extensible and
-//! certificate-only encryption are reported as unsupported.
+//! certificate-only encryption are reported as unsupported. Workbooks are written with Agile
+//! encryption (AES-256, SHA-512) and its data-integrity HMAC, as Excel writes them.
 //!
 //! Clean-room from Microsoft's public [MS-OFFCRYPTO] specification. Every read is
 //! bounds-checked, and the costly inputs (spin count, stated sizes) are capped.
 
-use aes::cipher::{BlockCipherDecrypt, KeyInit};
+use aes::cipher::{BlockCipherDecrypt, BlockCipherEncrypt, KeyInit};
 use sha2::Digest;
 
 use crate::cfb::Compound;
@@ -26,6 +27,9 @@ const BLOCK: usize = 16;
 pub(crate) const BLOCK_VERIFIER_INPUT: [u8; 8] = [0xFE, 0xA7, 0xD2, 0x76, 0x3B, 0x4B, 0x9E, 0x79];
 pub(crate) const BLOCK_VERIFIER_HASH: [u8; 8] = [0xD7, 0xAA, 0x0F, 0x6D, 0x30, 0x61, 0x34, 0x4E];
 pub(crate) const BLOCK_KEY: [u8; 8] = [0x14, 0x6E, 0x0B, 0xE7, 0xAB, 0xAC, 0xD0, 0xD6];
+/// Agile data-integrity block keys ([MS-OFFCRYPTO] 2.3.4.14): the IVs of the HMAC key and value.
+pub(crate) const BLOCK_INTEGRITY_KEY: [u8; 8] = [0x5F, 0xB2, 0xAD, 0x01, 0x0C, 0xB9, 0xE1, 0xF6];
+pub(crate) const BLOCK_INTEGRITY_VALUE: [u8; 8] = [0xA0, 0x67, 0x7F, 0x02, 0xB2, 0x2C, 0x84, 0x33];
 
 /// The password key encryptor's URI (the other kind is certificate-based).
 pub(crate) const PASSWORD_ENCRYPTOR: &str = "http://schemas.microsoft.com/office/2006/keyEncryptor/password";
@@ -219,6 +223,30 @@ impl Aes {
             32 => Aes::A256(aes::Aes256::new_from_slice(key).map_err(bad)?),
             n => return Err(malformed(format!("a {n}-byte AES key"))),
         })
+    }
+
+    fn encrypt_block(&self, block: &mut [u8; BLOCK]) {
+        let b = aes::Block::cast_from_core_mut(block);
+        match self {
+            Aes::A128(c) => c.encrypt_block(b),
+            Aes::A192(c) => c.encrypt_block(b),
+            Aes::A256(c) => c.encrypt_block(b),
+        }
+    }
+
+    /// CBC encryption of whole blocks in place, each XORed with the previous ciphertext block.
+    fn encrypt_cbc(&self, iv: &[u8], data: &mut [u8]) -> Result<(), DecryptError> {
+        let mut prev: [u8; BLOCK] = iv.try_into().map_err(|_| malformed("an IV that isn't one AES block"))?;
+        let (blocks, rest) = data.as_chunks_mut::<BLOCK>();
+        if !rest.is_empty() {
+            return Err(malformed("plaintext isn't whole AES blocks"));
+        }
+        for b in blocks {
+            b.iter_mut().zip(prev).for_each(|(x, p)| *x ^= p);
+            self.encrypt_block(b);
+            prev = *b;
+        }
+        Ok(())
     }
 
     fn decrypt_block(&self, block: &mut [u8; BLOCK]) {
@@ -437,6 +465,188 @@ fn agile(xml: &[u8], package: &[u8], password: &str) -> Result<Vec<u8>, DecryptE
     }
     out.truncate(size);
     Ok(out)
+}
+
+// ---- Agile encryption (writing) ------------------------------------------------------------
+
+/// The spin count GridCraft encrypts with: Excel's default.
+pub const ENCRYPT_SPIN_COUNT: u32 = 100_000;
+/// Excel refuses passwords longer than this (UTF-16 code units).
+pub const MAX_PASSWORD_LEN: usize = 255;
+
+/// Why a workbook couldn't be encrypted.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum EncryptError {
+    #[error("a password to open needs at least one character")]
+    EmptyPassword,
+    #[error("a password to open can have at most 255 characters")]
+    PasswordTooLong,
+    /// The system's random number generator failed (the message is the generator's).
+    #[error("no secure random numbers are available to encrypt with ({0})")]
+    Random(String),
+    #[error("the workbook couldn't be encrypted ({0})")]
+    Failed(String),
+}
+
+impl From<DecryptError> for EncryptError {
+    fn from(e: DecryptError) -> EncryptError {
+        EncryptError::Failed(e.to_string())
+    }
+}
+
+/// The random values one Agile encryption needs ([MS-OFFCRYPTO] 2.3.4.10-2.3.4.14). Every IV
+/// is derived from the salts, so the reader can recompute it; nothing else is random.
+pub(crate) struct AgileSecrets {
+    /// `keyData` salt: the package's segment IVs and the integrity IVs come from it.
+    pub(crate) key_data_salt: [u8; 16],
+    /// The password key encryptor's salt (and its IV).
+    pub(crate) password_salt: [u8; 16],
+    /// The package key (AES-256).
+    pub(crate) key: [u8; 32],
+    /// The verifier that tells a wrong password.
+    pub(crate) verifier: [u8; 16],
+    /// The HMAC key for the data-integrity check (one SHA-512 hash long).
+    pub(crate) hmac_key: [u8; 64],
+}
+
+impl AgileSecrets {
+    /// Fresh secrets from `fill`, which must be a cryptographically secure generator.
+    fn random(fill: &mut dyn FnMut(&mut [u8]) -> Result<(), String>) -> Result<AgileSecrets, EncryptError> {
+        let mut s = AgileSecrets { key_data_salt: [0; 16], password_salt: [0; 16], key: [0; 32], verifier: [0; 16], hmac_key: [0; 64] };
+        for buf in [&mut s.key_data_salt[..], &mut s.password_salt, &mut s.key, &mut s.verifier, &mut s.hmac_key] {
+            fill(buf).map_err(EncryptError::Random)?;
+        }
+        Ok(s)
+    }
+}
+
+/// `package` (an OOXML zip) as Excel stores it with a password to open: Agile encryption
+/// (AES-256, SHA-512, 100,000 spins) with the data-integrity HMAC, in a compound file.
+/// `fill_random` supplies the salts and keys and must be a cryptographically secure generator
+/// (the operating system's); the password is never kept or reported.
+pub fn encrypt(package: &[u8], password: &str, fill_random: &mut dyn FnMut(&mut [u8]) -> Result<(), String>) -> Result<Vec<u8>, EncryptError> {
+    let secrets = AgileSecrets::random(fill_random)?;
+    let (info, stream) = encrypt_agile_with(package, password, ENCRYPT_SPIN_COUNT, &secrets)?;
+    crate::cfb::write(&[("EncryptionInfo", &info), ("EncryptedPackage", &stream)]).map_err(EncryptError::Failed)
+}
+
+/// HMAC (RFC 2104) over `message` with `hash`: H((K ^ opad) || H((K ^ ipad) || message)).
+pub(crate) fn hmac(hash: Hash, key: &[u8], message: &[u8]) -> Vec<u8> {
+    let block = match hash {
+        Hash::Sha1 | Hash::Sha256 => 64,
+        Hash::Sha384 | Hash::Sha512 => 128,
+    };
+    let mut k = if key.len() > block { hash.digest(&[key]) } else { key.to_vec() };
+    k.resize(block, 0);
+    let pad = |v: u8| k.iter().map(|b| b ^ v).collect::<Vec<u8>>();
+    let inner = hash.digest(&[&pad(0x36), message]);
+    hash.digest(&[&pad(0x5C), &inner])
+}
+
+/// `data` zero-padded to whole AES blocks, encrypted with CBC.
+fn cbc_padded(aes: &Aes, iv: &[u8], data: &[u8]) -> Result<Vec<u8>, EncryptError> {
+    let mut v = data.to_vec();
+    v.resize(data.len().div_ceil(BLOCK) * BLOCK, 0);
+    aes.encrypt_cbc(iv, &mut v)?;
+    Ok(v)
+}
+
+/// `EncryptionInfo` and `EncryptedPackage` for `plain` with the given secrets: the package in
+/// 4096-byte segments (each with its own derived IV), then the descriptor with its HMAC.
+pub(crate) fn encrypt_agile_with(plain: &[u8], password: &str, spin: u32, s: &AgileSecrets) -> Result<(Vec<u8>, Vec<u8>), EncryptError> {
+    let units = password.encode_utf16().count();
+    if units == 0 {
+        return Err(EncryptError::EmptyPassword);
+    }
+    if units > MAX_PASSWORD_LEN {
+        return Err(EncryptError::PasswordTooLong);
+    }
+    let key_data = Params { hash: Hash::Sha512, salt: s.key_data_salt.to_vec(), key_len: 32 };
+    let aes = Aes::new(&s.key)?;
+    let size = u64::try_from(plain.len()).map_err(|_| EncryptError::Failed("the package is too large".into()))?;
+    let mut stream = Vec::with_capacity(plain.len().div_ceil(BLOCK).saturating_mul(BLOCK).saturating_add(8));
+    stream.extend_from_slice(&size.to_le_bytes());
+    for (i, segment) in plain.chunks(SEGMENT).enumerate() {
+        let index = u32::try_from(i).map_err(|_| EncryptError::Failed("too many segments".into()))?;
+        stream.extend(cbc_padded(&aes, &key_data.iv(Some(&index.to_le_bytes())), segment)?);
+    }
+    let xml = agile_xml(password, spin, s, &stream)?;
+    let mut info = vec![4, 0, 4, 0, 0x40, 0, 0, 0];
+    info.extend_from_slice(xml.as_bytes());
+    Ok((info, stream))
+}
+
+/// The Agile XML descriptor for `stream` (the finished `EncryptedPackage`): AES-256 and SHA-512
+/// for the package and the password key encryptor, and the data-integrity HMAC over `stream`.
+pub(crate) fn agile_xml(password: &str, spin: u32, s: &AgileSecrets, stream: &[u8]) -> Result<String, EncryptError> {
+    let key_data = Params { hash: Hash::Sha512, salt: s.key_data_salt.to_vec(), key_len: 32 };
+    let package_aes = Aes::new(&s.key)?;
+    let hmac_value = hmac(Hash::Sha512, &s.hmac_key, stream);
+    let hmac_key_field = base64_encode(&cbc_padded(&package_aes, &key_data.iv(Some(&BLOCK_INTEGRITY_KEY)), &s.hmac_key)?);
+    let hmac_value_field = base64_encode(&cbc_padded(&package_aes, &key_data.iv(Some(&BLOCK_INTEGRITY_VALUE)), &hmac_value)?);
+
+    let pw = Params { hash: Hash::Sha512, salt: s.password_salt.to_vec(), key_len: 32 };
+    let h = iterated_hash(Hash::Sha512, password, &pw.salt, spin);
+    let iv = pw.iv(None);
+    let field = |block_key: &[u8], data: &[u8]| -> Result<String, EncryptError> {
+        let aes = Aes::new(&derive(Hash::Sha512, &h, block_key, pw.key_len))?;
+        Ok(base64_encode(&cbc_padded(&aes, &iv, data)?))
+    };
+    let input = field(&BLOCK_VERIFIER_INPUT, &s.verifier)?;
+    let value = field(&BLOCK_VERIFIER_HASH, &Hash::Sha512.digest(&[&s.verifier]))?;
+    let secret = field(&BLOCK_KEY, &s.key)?;
+    let params = |salt: &[u8]| {
+        format!(
+            "saltSize=\"16\" blockSize=\"16\" keyBits=\"256\" hashSize=\"64\" cipherAlgorithm=\"AES\" cipherChaining=\"ChainingModeCBC\" hashAlgorithm=\"SHA512\" saltValue=\"{}\"",
+            base64_encode(salt)
+        )
+    };
+    Ok(format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<encryption xmlns=\"http://schemas.microsoft.com/office/2006/encryption\" xmlns:p=\"http://schemas.microsoft.com/office/2006/keyEncryptor/password\" xmlns:c=\"http://schemas.microsoft.com/office/2006/keyEncryptor/certificate\"><keyData {}/><dataIntegrity encryptedHmacKey=\"{hmac_key_field}\" encryptedHmacValue=\"{hmac_value_field}\"/><keyEncryptors><keyEncryptor uri=\"{PASSWORD_ENCRYPTOR}\"><p:encryptedKey spinCount=\"{spin}\" {} encryptedVerifierHashInput=\"{input}\" encryptedVerifierHashValue=\"{value}\" encryptedKeyValue=\"{secret}\"/></keyEncryptor></keyEncryptors></encryption>",
+        params(&s.key_data_salt),
+        params(&s.password_salt),
+    ))
+}
+
+/// Whether the data-integrity HMAC of an Agile workbook matches its package, given the right
+/// password: what Excel checks before trusting the decrypted package. `None` when the file has
+/// no `dataIntegrity` element.
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) fn agile_integrity_ok(bytes: &[u8], password: &str) -> Result<Option<bool>, DecryptError> {
+    let (info, package) = streams(bytes)?;
+    let Scheme::Agile(xml) = scheme(&info)? else { return Err(DecryptError::Unsupported("Standard".into())) };
+    let root = crate::xml::parse(xml).map_err(|e| malformed(e.to_string()))?;
+    let Some(integrity) = root.child("dataIntegrity") else { return Ok(None) };
+    let d = agile_descriptor(xml)?;
+    let h = iterated_hash(d.key.hash, password, &d.key.salt, d.spin);
+    let mut secret = d.key_value.clone();
+    Aes::new(&derive(d.key.hash, &h, &BLOCK_KEY, d.key.key_len))?.decrypt_cbc(&d.key.iv(None), &mut secret)?;
+    let aes = Aes::new(secret.get(..d.key_data.key_len).ok_or_else(|| malformed("a short encryptedKeyValue"))?)?;
+    let field = |name: &str, block_key: &[u8]| -> Result<Vec<u8>, DecryptError> {
+        let mut v = base64(integrity.attr(name).ok_or_else(|| malformed(format!("no {name}")))?)?;
+        aes.decrypt_cbc(&d.key_data.iv(Some(block_key)), &mut v)?;
+        Ok(v)
+    };
+    let n = d.key_data.hash.digest(&[]).len();
+    let key = field("encryptedHmacKey", &BLOCK_INTEGRITY_KEY)?;
+    let value = field("encryptedHmacValue", &BLOCK_INTEGRITY_VALUE)?;
+    let expected = hmac(d.key_data.hash, key.get(..n).unwrap_or(&key), &package);
+    Ok(Some(value.get(..n) == Some(expected.as_slice())))
+}
+
+/// Standard base64 with padding, as Agile's XML stores every binary value.
+pub(crate) fn base64_encode(b: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let sym = |n: u32| T.get((n & 63) as usize).copied().map_or('=', char::from);
+    let mut s = String::with_capacity(b.len().div_ceil(3) * 4);
+    for c in b.chunks(3) {
+        let byte = |i: usize| u32::from(c.get(i).copied().unwrap_or(0));
+        let n = (byte(0) << 16) | (byte(1) << 8) | byte(2);
+        for i in 0..4 {
+            s.push(if i <= c.len() { sym(n >> (18 - 6 * i)) } else { '=' });
+        }
+    }
+    s
 }
 
 // ---- base64 --------------------------------------------------------------------------------
