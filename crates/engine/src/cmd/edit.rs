@@ -920,7 +920,11 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let dest_sheet = target_sheet(s, p)?;
     let sel = s.doc()?.selection.current();
     let at = cell_param_on(s, p, "at", dest_sheet)?.unwrap_or(sel.start);
-    let src = clip.range;
+    // Whole columns or rows paste whole (the copy keeps only their used part as its text), so
+    // what the destination columns hold further down is replaced too, as in Excel. The cells are
+    // visited sparsely below, so this costs what the columns hold, not 1,048,576 rows.
+    let whole = clip.areas.is_empty() && (clip.selected.is_full_cols() || clip.selected.is_full_rows()) && clip.selected.contains_range(&clip.range);
+    let src = if whole { clip.selected } else { clip.range };
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     // Tile the copy over a larger destination that is a multiple of its size.
     let tile = sel.height() % h == 0
@@ -931,6 +935,17 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         && !sel.is_full_rows()
         && sel.count() <= 4_000_000;
     let (tiles_r, tiles_c) = if tile { (sel.height() / h, sel.width() / w) } else { (1, 1) };
+    // Excel refuses a paste that would run off the sheet (whole columns pasted below row 1, whole
+    // rows right of column A, a whole column transposed) instead of pasting part of it.
+    if at.offset(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1).is_none() {
+        return Err(EngineError::Other("The copied cells don't fit here: paste them where the whole copied area fits on the sheet.".into()));
+    }
+    // Paste Link writes a formula into every cell, blank ones included, so it is the one paste
+    // whose work grows with the area rather than with what the source holds.
+    let link_src = clip.range;
+    if link && link_src.count().saturating_mul(u64::from(tiles_r) * u64::from(tiles_c)) > MAX_PASTE_LINK_CELLS {
+        return Err(EngineError::Other("Too many cells to paste as links at once.".into()));
+    }
     let same_doc = s.doc()?.uid == clip.doc_uid;
     let cut_move = clip.cut && same_doc && what == What::All;
     let src_wb = clip.wb.clone();
@@ -945,7 +960,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             *style_map.entry(id).or_insert_with(|| wb.styles.intern(src_wb.styles.get(id).clone()))
         };
-        let mut moved_formulas = Vec::new();
+        let mut moved_formulas = std::collections::BTreeMap::new();
         let mut moved_pictures = std::collections::BTreeMap::new();
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
@@ -955,20 +970,44 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }
-            moved_formulas = taken;
+            moved_formulas = taken.into_iter().collect();
         }
+        // The cells of the copied block that hold something (or that a link reads), as offsets
+        // inside it. Blank source cells matter only where the destination holds something.
+        let source_offsets: std::collections::BTreeSet<(u32, u32)> = if link {
+            (0..link_src.height()).flat_map(|r| (0..link_src.width()).map(move |c| (r, c))).collect()
+        } else {
+            let offset = |c: CellRef| (c.row - src.start.row, c.col - src.start.col);
+            let mut held: std::collections::BTreeSet<(u32, u32)> = src_sheet.cells.iter_range(src).map(|(c, _)| offset(c)).collect();
+            let side = src_sheet.spill.keys().chain(src_sheet.cell_pictures.keys()).chain(src_sheet.comments.keys());
+            held.extend(side.chain(moved_formulas.keys()).chain(moved_pictures.keys()).filter(|c| src.contains(**c)).map(|c| offset(*c)));
+            held
+        };
+        let skip_cells = matches!(what, What::Validation | What::ColumnWidths);
         for tr in 0..tiles_r {
             for tc in 0..tiles_c {
-                for r in 0..src.height() {
-                    for c in 0..src.width() {
+                let Some(origin) = at.offset(i64::from(tr * h), i64::from(tc * w)) else { continue };
+                let mut offsets = source_offsets.clone();
+                if !link && !skip_cells {
+                    // A blank source cell clears (or reformats) a destination cell that holds something.
+                    let tile_rect = RangeRef::new(origin, origin.offset_clamped(i64::from(h) - 1, i64::from(w) - 1));
+                    let dest = cx.wb.sheet(dest_sheet);
+                    let held = dest.into_iter().flat_map(|sh| {
+                        sh.cells.iter_range(tile_rect).map(|(c, _)| c).chain(sh.cell_pictures.keys().copied().filter(|c| tile_rect.contains(*c)))
+                    });
+                    for d in held.collect::<Vec<_>>() {
+                        let (dr, dc) = (d.row - origin.row, d.col - origin.col);
+                        offsets.insert(if transpose { (dc, dr) } else { (dr, dc) });
+                    }
+                } else if skip_cells {
+                    offsets.clear();
+                }
+                for (r, c) in offsets {
+                    {
                         let sc = CellRef::new(src.start.row + r, src.start.col + c);
                         let (dr, dc) = if transpose { (c, r) } else { (r, c) };
                         let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
-                        let src_cell = if cut_move {
-                            moved_formulas.iter().find(|(k, _)| *k == sc).map(|(_, v)| v.clone())
-                        } else {
-                            src_sheet.cell(sc).cloned()
-                        };
+                        let src_cell = if cut_move { moved_formulas.get(&sc).cloned() } else { src_sheet.cell(sc).cloned() };
                         let src_val = src_sheet.value(sc);
                         let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
                         if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
@@ -1101,29 +1140,10 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 }
                             }
                         }
-                        // The copied cell's validation rule replaces whatever rule the destination had.
-                        if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-                            let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(sc))).cloned();
-                            let sh = cx.sheet_mut(dest_sheet)?;
-                            super::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);
-                            if let Some(mut dv) = rule {
-                                // Relative references move with the rule, as pasted formulas do.
-                                let first = dv.ranges.first().map_or(sc, |r| r.start);
-                                dv.f1 = super::data::move_rule_formula(&dv.f1, first, dest);
-                                dv.f2 = dv.f2.map(|f| super::data::move_rule_formula(&f, first, dest));
-                                dv.ranges = vec![RangeRef::new(dest, dest)];
-                                sh.validations.push(dv);
-                            }
-                        }
                         match what {
                             What::Comments => {
                                 if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
                                     cx.sheet_mut(dest_sheet)?.comments.insert(dest, cm);
-                                }
-                            }
-                            What::ColumnWidths => {
-                                if let Some(info) = src_sheet.cols.get(&sc.col).copied() {
-                                    cx.sheet_mut(dest_sheet)?.cols.insert(dest.col, info);
                                 }
                             }
                             What::All => {
@@ -1139,6 +1159,25 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         }
                         cx.touch(dest_sheet, dest);
                     }
+                }
+            }
+        }
+        let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
+        if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
+            paste_validations(cx, src_sheet, src, dest_sheet, pasted, (h, w), transpose)?;
+        }
+        if what == What::ColumnWidths {
+            // Each pasted column takes the width of the column copied to it (transposed, the
+            // copied rows land in columns and all take the last copied column's width).
+            let cols = cx.sheet_mut(dest_sheet)?;
+            for dc in 0..pasted.width() {
+                let info = if transpose {
+                    (0..src.width()).rev().find_map(|c| src_sheet.cols.get(&(src.start.col + c)).copied())
+                } else {
+                    src_sheet.cols.get(&(src.start.col + dc % w)).copied()
+                };
+                if let Some(info) = info {
+                    cols.cols.insert(pasted.start.col + dc, info);
                 }
             }
         }
@@ -1175,6 +1214,73 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         s.clipboard = None;
     }
     Ok(json!({"pasted": s.doc()?.selection.a1()}))
+}
+
+/// Most cells one Paste Link writes (it writes a formula into every cell of the copied area,
+/// blank ones included).
+const MAX_PASTE_LINK_CELLS: u64 = 1_048_576;
+/// Most validation ranges one paste adds (a rule covering part of a small block tiled over a huge
+/// selection makes one range per tile).
+const MAX_PASTE_VALIDATION_RANGES: usize = 100_000;
+
+/// Pasting validation works on ranges, as Excel stores it: the pasted rectangle is cut out of the
+/// destination's rules (cells whose source had no rule end up with none), then each source rule
+/// that covers part of the copied block `src` comes along as one rule over the translated parts.
+/// `size` is one tile's (height, width) at the destination; `pasted` is all the tiles together.
+fn paste_validations(
+    cx: &mut Ctx,
+    src_sheet: &gridcraft_model::Sheet,
+    src: RangeRef,
+    dest_sheet: usize,
+    pasted: RangeRef,
+    size: (u32, u32),
+    transpose: bool,
+) -> Result<()> {
+    let (h, w) = size;
+    let (tiles_r, tiles_c) = (pasted.height() / h.max(1), pasted.width() / w.max(1));
+    let mut rules = Vec::new();
+    let mut total = 0usize;
+    for dv in &src_sheet.validations {
+        let parts: Vec<RangeRef> = dv.ranges.iter().filter_map(|r| r.intersection(&src)).collect();
+        let Some(first) = dv.ranges.first().map(|r| r.start) else { continue };
+        if parts.is_empty() {
+            continue;
+        }
+        let mut ranges = Vec::new();
+        if parts.contains(&src) {
+            ranges.push(pasted);
+        } else {
+            total = total.saturating_add(parts.len().saturating_mul(tiles_r as usize).saturating_mul(tiles_c as usize));
+            if total > MAX_PASTE_VALIDATION_RANGES {
+                return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
+            }
+            for tr in 0..tiles_r {
+                for tc in 0..tiles_c {
+                    let Some(origin) = pasted.start.offset(i64::from(tr * h), i64::from(tc * w)) else { continue };
+                    for p in &parts {
+                        let (r0, c0) = (p.start.row - src.start.row, p.start.col - src.start.col);
+                        let (r1, c1) = (p.end.row - src.start.row, p.end.col - src.start.col);
+                        let ((r0, c0), (r1, c1)) = if transpose { ((c0, r0), (c1, r1)) } else { ((r0, c0), (r1, c1)) };
+                        let Some(a) = origin.offset(i64::from(r0), i64::from(c0)) else { continue };
+                        let b = origin.offset_clamped(i64::from(r1), i64::from(c1));
+                        ranges.push(RangeRef::new(a, b));
+                    }
+                }
+            }
+        }
+        let Some(anchor) = ranges.first().map(|r| r.start) else { continue };
+        let mut rule = dv.clone();
+        // Relative references move with the rule, as pasted formulas do: they are written for the
+        // rule's first cell.
+        rule.f1 = super::data::move_rule_formula(&dv.f1, first, anchor);
+        rule.f2 = dv.f2.as_ref().map(|f| super::data::move_rule_formula(f, first, anchor));
+        rule.ranges = ranges;
+        rules.push(rule);
+    }
+    let sh = cx.sheet_mut(dest_sheet)?;
+    super::data::remove_validation_cells(&mut sh.validations, &[pasted]);
+    sh.validations.extend(rules);
+    Ok(())
 }
 
 /// Applies a reference adjustment to every cell formula and defined name in the workbook.
