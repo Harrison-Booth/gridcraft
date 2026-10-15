@@ -413,6 +413,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 kind: (opts.column_chart && c >= 3).then_some(ChartKind::Line),
                 smooth: false,
                 trendlines: Vec::new(),
+                error_bars: Vec::new(),
             })
             .collect();
         sheet.charts.push(Chart {

@@ -30,6 +30,7 @@ fn literal_category_with_separators_survives_save() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
         })
         .collect();
     s.charts.push(Chart {

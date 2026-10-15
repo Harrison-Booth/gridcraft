@@ -382,6 +382,7 @@ fn sample() -> Workbook {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
         }],
         legend: LegendPos::Bottom,
         data_labels: true,

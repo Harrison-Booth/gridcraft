@@ -15,7 +15,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Chart Element",
             ["Chart Design", "Chart Layouts"],
             None,
-            "{chart?, element: title|legend|dataLabels|gridlines|axisTitles|smooth|trendline, on?: bool, position?: bottom|top|left|right; trendline: series?: index (default all), type?: linear|exponential|linearForecast|movingAverage|logarithmic|power|polynomial, order?: 2..6, period?: 2..255, forward?, backward?, displayEquation?, displayRSquared?}",
+            "{chart?, element: title|legend|dataLabels|gridlines|axisTitles|smooth|trendline, on?: bool, position?: bottom|top|left|right; trendline: series?: index (default all), type?: linear|exponential|linearForecast|movingAverage|logarithmic|power|polynomial, order?: 2..6, period?: 2..255, forward?, backward?, displayEquation?, displayRSquared?; errorBars: series?: index (default all), type?: standardError|percentage|standardDeviation|fixed|custom, value?: number, plus?/minus?: reference or {array} (custom), direction?: y|x (x on scatter/bubble), display?: both|plus|minus, endStyle?: cap|noCap, color?, width?: points; on=false removes them}",
             has_doc,
             add_element
         ),
@@ -316,6 +316,7 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
                     s.smooth = on;
                 }
             }
+            "errorBars" => add_error_bars(c, p, on)?,
             "trendline" => {
                 let only = u32_param(p, "series").map(|i| i as usize);
                 if only.is_some_and(|i| i >= c.series.len()) {
@@ -345,6 +346,114 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
             other => return Err(bad("chart.addElement", format!("unknown element `{other}`"))),
         }
         Ok(())
+    })
+}
+
+/// `chart.addElement` `errorBars`: adds (or replaces, per direction) or removes error bars on
+/// one series or all that can show them (Excel's Add Chart Element ▸ Error Bars and the Format
+/// Error Bars options).
+fn add_error_bars(c: &mut Chart, p: &Json, on: bool) -> Result<()> {
+    let only = u32_param(p, "series").map(|i| i as usize);
+    if only.is_some_and(|i| i >= c.series.len()) {
+        return Err(bad("chart.addElement", "no such series"));
+    }
+    let targets: Vec<usize> = (0..c.series.len()).filter(|i| only.is_none_or(|o| o == *i)).collect();
+    if !on {
+        for i in targets {
+            if let Some(se) = c.series.get_mut(i) {
+                se.error_bars.clear();
+            }
+        }
+        return Ok(());
+    }
+    let e = error_bars_param(p)?;
+    let eligible: Vec<usize> = targets
+        .into_iter()
+        .filter(|i| {
+            let k = gridcraft_chart::series_plot_kind(c, *i);
+            gridcraft_chart::supports_error_bars(k)
+                && (e.direction == ErrorBarDirection::Y || matches!(k, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble))
+        })
+        .collect();
+    if eligible.is_empty() {
+        return Err(bad(
+            "chart.addElement",
+            if e.direction == ErrorBarDirection::X {
+                "X error bars need a scatter or bubble series"
+            } else {
+                "error bars need a 2-D column, bar, line, area, scatter or bubble series"
+            },
+        ));
+    }
+    for i in eligible {
+        if let Some(se) = c.series.get_mut(i) {
+            se.error_bars.retain(|o| o.direction != e.direction);
+            se.error_bars.push(e.clone());
+        }
+    }
+    Ok(())
+}
+
+/// Longest reference or array text accepted for custom error amounts.
+const MAX_ERROR_REF: usize = 8192;
+
+/// The error bars described by `chart.addElement`'s errorBars parameters. Defaults follow
+/// Excel's menu: Standard Error; Percentage is 5%, Standard Deviation 1, Fixed Value 1.
+fn error_bars_param(p: &Json) -> Result<ErrorBars> {
+    let value = |default: f64| f64_param(p, "value").filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(default);
+    let amount = match str_param(p, "type").unwrap_or("standardError") {
+        "standardError" => ErrorAmount::StdErr,
+        "percentage" => ErrorAmount::Percentage(value(5.0)),
+        "standardDeviation" => ErrorAmount::StdDev(value(1.0)),
+        "fixed" => ErrorAmount::Fixed(value(1.0)),
+        "custom" => {
+            let r = |k: &str| -> Result<Option<String>> {
+                match str_param(p, k).map(str::trim) {
+                    None | Some("") => Ok(None),
+                    Some(t) if t.len() > MAX_ERROR_REF => Err(bad("chart.addElement", format!("`{k}` is too long"))),
+                    Some(t) => {
+                        let t = t.strip_prefix('=').unwrap_or(t).trim();
+                        match gridcraft_formula::parse(t) {
+                            Ok(gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_)) => Ok(Some(t.to_string())),
+                            // One row: the file keeps a flat list.
+                            Ok(gridcraft_formula::Expr::Array(rows)) if rows.len() == 1 => Ok(Some(t.to_string())),
+                            _ => Err(bad("chart.addElement", format!("`{k}` must be a reference, a name or a one-row array constant"))),
+                        }
+                    }
+                }
+            };
+            let (plus, minus) = (r("plus")?, r("minus")?);
+            if plus.is_none() && minus.is_none() {
+                return Err(bad("chart.addElement", "custom error bars need `plus` or `minus`"));
+            }
+            ErrorAmount::Custom { plus, minus }
+        }
+        other => return Err(bad("chart.addElement", format!("unknown error bar type `{other}`"))),
+    };
+    let direction = match str_param(p, "direction").unwrap_or("y") {
+        "y" => ErrorBarDirection::Y,
+        "x" => ErrorBarDirection::X,
+        other => return Err(bad("chart.addElement", format!("unknown error bar direction `{other}`"))),
+    };
+    let sides = match str_param(p, "display").unwrap_or("both") {
+        "both" => ErrorBarSides::Both,
+        "plus" => ErrorBarSides::Plus,
+        "minus" => ErrorBarSides::Minus,
+        other => return Err(bad("chart.addElement", format!("unknown error bar display `{other}`"))),
+    };
+    let no_end_cap = match str_param(p, "endStyle").unwrap_or("cap") {
+        "cap" => false,
+        "noCap" => true,
+        other => return Err(bad("chart.addElement", format!("unknown error bar end style `{other}`"))),
+    };
+    Ok(ErrorBars {
+        direction,
+        sides,
+        amount,
+        no_end_cap,
+        color: super::format::color_param(p.get("color")).filter(|c| *c != Color::Auto),
+        width: f64_param(p, "width").filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(100.0) as f32),
+        dash: None,
     })
 }
 

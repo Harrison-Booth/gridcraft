@@ -49,6 +49,7 @@ fn chart(id: u32, kind: ChartKind, trendlines: Vec<Trendline>) -> Chart {
             kind: None,
             smooth: false,
             trendlines,
+            error_bars: Vec::new(),
         }],
         legend: LegendPos::Bottom,
         data_labels: false,

@@ -110,6 +110,7 @@ fn sales(s: &mut Session) -> bool {
                 kind: None,
                 smooth: false,
                 trendlines: Vec::new(),
+                error_bars: Vec::new(),
             }];
         }
     }
