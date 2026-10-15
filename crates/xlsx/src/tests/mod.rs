@@ -4,6 +4,7 @@ mod array_export;
 mod chart_bool_default;
 mod csv_tests;
 mod encrypted_tests;
+mod extlist;
 mod fixtures;
 mod ink_roundtrip;
 mod literal_category_roundtrip;
