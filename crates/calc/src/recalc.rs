@@ -387,6 +387,12 @@ struct PassHost<'a> {
     in_progress: HashSet<Key>,
     /// New spills found during the pass: anchor → array.
     spills: HashMap<Key, std::sync::Arc<Array>>,
+    /// Per sheet, the areas spilled before this pass by the formulas it recalculates (anchor,
+    /// area). Their values are the old arrays', about to be replaced: reading one calculates its
+    /// formula first, and while that formula is being calculated (a circular reference through its
+    /// own spill) the area reads blank, as in a full recalculation, which lays every array out
+    /// again.
+    stale: HashMap<usize, Vec<(CellRef, RangeRef)>>,
     /// Used range per sheet: the workbook doesn't change during a pass, and working it out walks
     /// every row, so once per sheet rather than once per range read.
     used: HashMap<usize, Option<RangeRef>>,
@@ -412,6 +418,12 @@ struct PassHost<'a> {
 
 impl<'a> PassHost<'a> {
     fn new(wb: &'a Workbook, exprs: &'a HashMap<Key, std::sync::Arc<Expr>>, rng: &'a mut u64, now: f64) -> Self {
+        let mut stale: HashMap<usize, Vec<(CellRef, RangeRef)>> = HashMap::default();
+        for &(sheet, anchor) in exprs.keys() {
+            if let Some(r) = wb.sheet(sheet).and_then(|s| s.spill_ranges.get(&anchor)) {
+                stale.entry(sheet).or_default().push((anchor, *r));
+            }
+        }
         PassHost {
             wb,
             exprs,
@@ -419,6 +431,7 @@ impl<'a> PassHost<'a> {
             pending: exprs.keys().copied().collect(),
             in_progress: HashSet::default(),
             spills: HashMap::default(),
+            stale,
             used: HashMap::default(),
             rng,
             now,
@@ -457,6 +470,29 @@ fn spill_blocked(host: &PassHost<'_>, (sheet, anchor): Key, a: &Array) -> bool {
 }
 
 impl PassHost<'_> {
+    /// Whether `c` holds a value spilled before this pass by a formula the pass recalculates.
+    /// With iterative calculation on, those values are the previous ones a loop reads instead.
+    fn spilled_stale(&self, sheet: usize, c: CellRef) -> bool {
+        !self.iterate && self.stale.get(&sheet).is_some_and(|v| v.iter().any(|(_, r)| r.contains(c)))
+    }
+
+    /// Calculates the formulas not calculated yet in this pass whose old arrays cover cells of
+    /// `range`, so reading them gets the new arrays.
+    fn respill(&mut self, sheet: usize, range: RangeRef) {
+        if self.iterate {
+            return;
+        }
+        let Some(v) = self.stale.get(&sheet) else { return };
+        let todo: Vec<Key> = v
+            .iter()
+            .filter(|(a, r)| r.intersects(&range) && self.pending.contains(&(sheet, *a)) && !self.in_progress.contains(&(sheet, *a)))
+            .map(|(a, _)| (sheet, *a))
+            .collect();
+        for k in todo {
+            self.compute(k);
+        }
+    }
+
     fn compute(&mut self, k: Key) -> Value {
         if let Some(v) = self.results.get(&k) {
             let v = v.clone();
@@ -653,6 +689,9 @@ impl Host for PassHost<'_> {
         if self.pending.contains(&k) || self.results.contains_key(&k) {
             return self.compute(k);
         }
+        if self.wb.sheet(sheet).is_some_and(|s| s.spill.contains_key(&c)) {
+            self.respill(sheet, RangeRef::new(c, c));
+        }
         // A cell covered by a spill computed in this pass.
         for (anchor, arr) in &self.spills {
             if anchor.0 == sheet && c.row >= anchor.1.row && c.col >= anchor.1.col {
@@ -665,10 +704,17 @@ impl Host for PassHost<'_> {
                 }
             }
         }
-        self.wb.sheet(sheet).map(|s| s.value(c)).unwrap_or_default()
+        let Some(sh) = self.wb.sheet(sheet) else { return Value::Empty };
+        if sh.spill.contains_key(&c) && self.spilled_stale(sheet, c) {
+            // The old array's value, from a formula calculated now (its new array is above) or
+            // being calculated: blank.
+            return sh.cells.get(c).map(|cell| cell.value.clone()).unwrap_or_default();
+        }
+        sh.value(c)
     }
     fn range_values(&mut self, sheet: usize, range: RangeRef) -> Vec<Value> {
         let (h, w) = (range.height() as usize, range.width() as usize);
+        self.respill(sheet, range);
         let mut out = vec![Value::Empty; h * w];
         let Some(sh) = self.wb.sheet(sheet) else { return out };
         // Sparse walk: only stored cells; formula cells that are (or were) dirty go through
@@ -683,7 +729,7 @@ impl Host for PassHost<'_> {
             }
         }
         for (c, v) in sh.spill.range(range.start..=range.end) {
-            if range.contains(*c) {
+            if range.contains(*c) && !self.spilled_stale(sheet, *c) {
                 let i = (c.row - range.start.row) as usize * w + (c.col - range.start.col) as usize;
                 if let Some(slot) = out.get_mut(i)
                     && slot.is_empty()
