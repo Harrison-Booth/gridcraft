@@ -3344,3 +3344,126 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
     let saved = s.execute("file.saveBytes", json!({"format": "csv"})).unwrap();
     assert_eq!(crate::io::base64_decode(saved["base64"].as_str().unwrap()).unwrap(), csv.replace('\n', "\r\n").as_bytes());
 }
+
+fn validation_areas(s: &Session) -> Vec<String> {
+    let sh = s.doc().unwrap().wb.active().unwrap();
+    let mut out: Vec<String> = sh.validations.iter().map(|dv| dv.ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(" ")).collect();
+    out.sort();
+    out
+}
+
+/// ft-3ir.10.16: pasting whole columns walked every one of their 1,048,576 rows and added one
+/// single-cell validation rule per pasted cell, re-cutting every rule each time (the fuzz run
+/// aborted on a 34 GB allocation). Validation now pastes as ranges and only cells that hold
+/// something are visited.
+#[test]
+fn whole_column_paste_with_validation_works_on_ranges() {
+    let mut s = s();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    s.execute("cell.set", json!({"cell": "C1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D1048576", "input": "2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F100", "input": "old"})).unwrap();
+    s.execute("data.validation", json!({"range": "C:C", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    s.execute("data.validation", json!({"range": "F:H", "type": "list", "formula1": "\"a,b\""})).unwrap();
+    s.execute("edit.copy", json!({"range": "C:D"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F1"})).unwrap();
+    assert_eq!(v(&s, "F1"), Value::Number(1.0));
+    assert_eq!(v(&s, "G1048576"), Value::Number(2.0));
+    assert_eq!(v(&s, "F100"), Value::Empty, "the whole column is replaced, below the copied text too");
+    // One rule per copied rule, over whole columns; G (D had no rule) has none; H keeps the list.
+    assert_eq!(validation_areas(&s), ["C:C", "F:F", "H:H"]);
+    assert!(!ok(&mut s, "F500", "-1"));
+    assert!(ok(&mut s, "G500", "anything"));
+    assert!(!ok(&mut s, "H500", "c"));
+    assert_eq!(s.doc().unwrap().selection.a1(), "F:G");
+    // Undo gives the list back over F:H.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(validation_areas(&s), ["C:C", "F:H"]);
+    assert_eq!(v(&s, "F100"), Value::Text("old".into()));
+}
+
+/// Excel refuses a paste that would run off the sheet rather than pasting part of it: whole
+/// columns below row 1, whole rows right of column A, a whole column transposed, or a block at
+/// the last row or column.
+#[test]
+fn paste_that_does_not_fit_on_the_sheet_is_refused() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "C1", "values": [[1, 2], [3, 4]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "A15", "input": "x"})).unwrap();
+    let before = s.doc().unwrap().wb.clone();
+    s.execute("edit.copy", json!({"range": "C:D"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "B8"})).is_err());
+    assert!(s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "A1"})).is_err());
+    s.execute("edit.copy", json!({"range": "15:15"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "AN17"})).is_err());
+    s.execute("edit.copy", json!({"range": "C1:D2"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "XFD1"})).is_err());
+    assert!(s.execute("edit.paste", json!({"at": "A1048576"})).is_err());
+    s.execute("edit.cut", json!({"range": "C1:D2"})).unwrap();
+    assert!(s.execute("edit.paste", json!({"at": "XFD1"})).is_err());
+    let after = s.doc().unwrap().wb.clone();
+    assert_eq!(after.active().unwrap().cells.len(), before.active().unwrap().cells.len());
+    assert_eq!(v(&s, "C1"), Value::Number(1.0));
+    // Whole rows still paste at column A, whole columns at row 1.
+    s.execute("edit.copy", json!({"range": "15:15"})).unwrap();
+    s.execute("edit.paste", json!({"at": "A20"})).unwrap();
+    assert_eq!(v(&s, "A20"), Value::Text("x".into()));
+}
+
+/// Paste visits only cells that hold something on either side: a blank copied cell still clears
+/// (or reformats) a destination cell that holds something, and blank onto blank stays blank, even
+/// with an operation (Excel leaves it empty rather than writing 0).
+#[test]
+fn paste_blank_cells_clear_destination_and_blank_onto_blank_stays_blank() {
+    let mut s = s();
+    let has_cell = |s: &Session, a: &str| s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse(a).unwrap()).is_some();
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "D2", "input": "7"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A3"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "values", "operation": "add", "at": "D1"})).unwrap();
+    assert_eq!(v(&s, "D1"), Value::Number(5.0));
+    assert_eq!(v(&s, "D2"), Value::Number(7.0));
+    assert!(!has_cell(&s, "D3"), "blank + blank stays blank");
+    s.execute("cell.set", json!({"cell": "F2", "input": "old"})).unwrap();
+    s.execute("edit.paste", json!({"at": "F1"})).unwrap();
+    assert_eq!(v(&s, "F1"), Value::Number(5.0));
+    assert!(!has_cell(&s, "F2"), "a blank copied cell clears the destination");
+    s.execute("home.bold", json!({"range": "H2"})).unwrap();
+    assert!(has_cell(&s, "H2"));
+    s.execute("edit.pasteSpecial", json!({"what": "formats", "at": "H1"})).unwrap();
+    assert!(!has_cell(&s, "H2"), "a blank copied cell's format replaces the bold");
+}
+
+/// Validation pastes over the whole pasted area, Skip Blanks or not (as Excel does), and cuts
+/// only the pasted cells out of a rule the block lands inside.
+#[test]
+fn paste_validation_covers_the_pasted_area_as_ranges() {
+    let mut s = s();
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    s.execute("cell.set", json!({"cell": "A1", "input": "5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A3", "input": "6"})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A3", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    s.execute("data.validation", json!({"range": "D1:D3", "type": "list", "formula1": "\"x,y\""})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A3"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "skipBlanks": true, "at": "D1"})).unwrap();
+    assert!(!ok(&mut s, "D2", "-1"), "the blank copied cell's rule is pasted too");
+    assert!(ok(&mut s, "D2", "3"));
+    assert_eq!(validation_areas(&s), ["A1:A3", "D1:D3"]);
+
+    // A block with a rule on its middle cells pasted inside a bigger list rule.
+    let mut s = self::s();
+    s.execute("data.validation", json!({"range": "A2:A3", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1:E10", "type": "list", "formula1": "\"p,q\""})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A4"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D4"})).unwrap();
+    assert_eq!(validation_areas(&s), ["A2:A3", "C1:E3 C8:E10 C4:C7 E4:E7", "D5:D6"]);
+    assert!(ok(&mut s, "D4", "anything"));
+    assert!(!ok(&mut s, "D5", "-1"));
+    assert!(!ok(&mut s, "D3", "z"));
+
+    // One copied cell tiled over a selection is one rule over the selection.
+    s.execute("edit.copy", json!({"range": "A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "G1:G4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert!(validation_areas(&s).contains(&"G1:G4".to_string()));
+}
