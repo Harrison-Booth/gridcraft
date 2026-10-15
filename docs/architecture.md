@@ -1,6 +1,6 @@
 # Architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** major (created from the code on main; supersedes the local-only plan/architecture.md for committed docs) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** minor (a command that runs other commands is one journal entry) · **Target:** Microsoft Excel (Microsoft 365)
 
 How GridCraft is built today. Rules for contributors are in [`AGENTS.md`](../AGENTS.md).
 
@@ -34,6 +34,10 @@ including tests, 2026-10-10.
    enabled, run, journal, undoable }`; ids follow Excel's ribbon (`home.bold`, `insert.chart`,
    `data.sortAscending`) plus primitives (`cell.set`, `selection.set`, `range.setValues`).
    `Session::execute` catches escaped panics and restores the workbook (never-crash guard).
+   A command that runs other commands (Subtotal, From Text/CSV, Remove Duplicates) is one undo
+   step and one journal entry: only the outermost journaled command reaches the journal, so a
+   recorded script or a replayed journal doesn't run its inner steps and then the command again.
+   Run Script isn't journaled itself; the steps it runs are, once each.
 2. **Edits** change the model through copy-on-write bands; undo keeps the previous snapshot.
 3. **Recalc** marks dependents of changed cells dirty through the dependency graph (with range
    nodes for range dependents), evaluates in topological order, spills dynamic arrays and reports
@@ -69,3 +73,4 @@ rpm, tarball), FreeBSD, and web (WASM; WebGPU or WebGL2). Release workflows in
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-10 | major | Created from the code on main: crates, layers, data flow, agent control, known gaps |
+| 2026-10-15 | minor | Data flow: nested commands are one undo step and one journal entry |

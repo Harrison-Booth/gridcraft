@@ -2,7 +2,8 @@
 //!
 //! Every user-visible action is a command with a stable id (`cell.set`, `home.bold`,
 //! `data.sortAscending`…) and JSON parameters. The egui UI, the CLI, the control channel and MCP
-//! all go through [`Session::execute`], so every action is scriptable and journaled.
+//! all go through [`Session::execute`], so every action is scriptable and journaled (a command that
+//! runs other commands is one journal entry).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
@@ -260,6 +261,10 @@ pub struct Session {
     /// undoable command runs for itself (Subtotal's inserted rows, labels and formulas) are one
     /// undo step of the outermost command, as in Excel.
     undo_nesting: u32,
+    /// Journaled commands running right now. Only the outermost one is journaled: the commands it
+    /// runs for itself are part of it, so replaying the journal or a recorded script doesn't run
+    /// them and then the command again.
+    journal_nesting: u32,
 }
 
 impl Session {
@@ -329,13 +334,20 @@ impl Session {
         // taken back to `mark` afterwards, and the command is one undo step.
         let outermost = spec.undoable && self.undo_nesting == 0;
         let mark = self.active().map_or(0, |d| d.undo.len());
+        let journals = spec.journal && self.journal_nesting == 0;
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         if spec.undoable {
             self.undo_nesting += 1;
         }
+        if spec.journal {
+            self.journal_nesting += 1;
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         if spec.undoable {
             self.undo_nesting = self.undo_nesting.saturating_sub(1);
+        }
+        if spec.journal {
+            self.journal_nesting = self.journal_nesting.saturating_sub(1);
         }
         if outermost
             && let Some((uid, ..)) = &before
@@ -359,7 +371,7 @@ impl Session {
                 return Err(EngineError::Internal(id.to_string(), msg));
             }
         };
-        if spec.journal && result.is_ok() {
+        if journals && result.is_ok() {
             self.journal.push((id.to_string(), cmd::journal_params(&params)));
             if self.journal.len() > 10_000 {
                 self.journal.drain(..5_000);

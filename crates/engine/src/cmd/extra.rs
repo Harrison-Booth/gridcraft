@@ -193,7 +193,19 @@ pub fn specs() -> Vec<CommandSpec> {
             new_script
         ),
         cmd!(query "automate.allScripts", "All Scripts", ["Automate", "Scripting Tools"], None, "{} → saved scripts", has_doc, all_scripts),
-        cmd!("automate.runScript", "Run Script", [], None, "{name}", has_doc, run_script),
+        // Not journaled itself: the steps it runs are, so the journal and a recording taken while
+        // a script runs hold each step once (and still replay after the script is deleted).
+        CommandSpec {
+            id: "automate.runScript",
+            label: "Run Script",
+            menu: &[],
+            shortcut: None,
+            params: "{name}",
+            enabled: has_doc,
+            run: run_script,
+            journal: false,
+            undoable: true,
+        },
         cmd!("automate.deleteScript", "Delete Script", [], None, "{name}", has_doc, delete_script),
         // Cell controls, themes, borders, styles
         cmd!(
