@@ -256,6 +256,10 @@ pub struct Session {
     /// Review › Notes › Show All Notes: every note is displayed. An application display setting
     /// (like Excel's comment indicator option), so it's not saved in the file.
     pub show_all_notes: bool,
+    /// Undoable commands running right now (one inside another counts twice). The commands an
+    /// undoable command runs for itself (Subtotal's inserted rows, labels and formulas) are one
+    /// undo step of the outermost command, as in Excel.
+    undo_nesting: u32,
 }
 
 impl Session {
@@ -321,8 +325,24 @@ impl Session {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
         let before = self.active().map(|d| (d.uid, d.wb.clone(), d.selection.clone()));
+        // The outermost undoable command owns the history: what the commands it runs push is
+        // taken back to `mark` afterwards, and the command is one undo step.
+        let outermost = spec.undoable && self.undo_nesting == 0;
+        let mark = self.active().map_or(0, |d| d.undo.len());
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
+        if spec.undoable {
+            self.undo_nesting += 1;
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
+        if spec.undoable {
+            self.undo_nesting = self.undo_nesting.saturating_sub(1);
+        }
+        if outermost
+            && let Some((uid, ..)) = &before
+            && let Some(d) = self.docs.iter_mut().find(|d| d.uid == *uid)
+        {
+            d.undo.truncate(mark);
+        }
         let result = match result {
             Ok(r) => r,
             Err(p) => {
@@ -351,11 +371,16 @@ impl Session {
             && !Arc::ptr_eq(&d.wb, &wb)
         {
             d.undo.push(HistoryEntry { label: spec.label.trim_end_matches('…').to_string(), wb, selection: sel });
-            if d.undo.len() > UNDO_LIMIT {
-                d.undo.remove(0);
-            }
             d.redo.clear();
             d.revision += 1;
+        }
+        // Only a top-level command trims the history: a nested step trimming it would drop the
+        // oldest steps for good before the outer command takes its steps back.
+        if self.undo_nesting == 0 {
+            for d in &mut self.docs {
+                let extra = d.undo.len().saturating_sub(UNDO_LIMIT);
+                d.undo.drain(..extra);
+            }
         }
         result
     }

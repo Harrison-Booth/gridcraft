@@ -552,14 +552,10 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
             return Err(EngineError::Other("The cut rows or columns can't be inserted inside themselves.".into()));
         }
     }
-    let revision = d.revision;
     let before = (d.wb.clone(), d.selection.clone());
+    // The nested steps are this command's single undo step (`Session::execute`).
     let result = insert_copied_steps(s, &clip, sheet, at, shift, cut);
     let d = s.doc_mut()?;
-    // The nested steps collapse into this command's single undo step.
-    for _ in 0..d.revision.saturating_sub(revision) {
-        d.undo.pop();
-    }
     match result {
         Ok((final_range, out)) => {
             d.selection = crate::Selection { active: final_range.start, anchor: final_range.start, ranges: vec![final_range] };

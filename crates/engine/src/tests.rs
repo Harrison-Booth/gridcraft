@@ -253,6 +253,97 @@ fn undo_redo() {
     assert!(s.doc().unwrap().is_dirty());
 }
 
+fn sales() -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample": "sales"})).unwrap();
+    s
+}
+
+fn undo_depth(s: &Session) -> usize {
+    s.doc().unwrap().undo.len()
+}
+
+fn workbook(s: &Session) -> gridcraft_model::Workbook {
+    (*s.doc().unwrap().wb).clone()
+}
+
+#[test]
+fn subtotal_is_one_undo_step() {
+    // ft-3ir.10.19: each row insert, label, formula, bold and group Subtotal ran was its own undo
+    // step (9, then 19), and the second Ctrl+Z jumped to a half-built Subtotal.
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    assert_eq!(undo_depth(&s), 1);
+    let start = workbook(&s);
+    s.execute("data.subtotal", json!({"columns": ["J"], "function": "average", "groupBy": "A", "header": "x"})).unwrap();
+    assert_eq!(undo_depth(&s), 2);
+    let once = workbook(&s);
+    assert_ne!(once, start);
+    s.execute("data.subtotal", json!({})).unwrap();
+    assert_eq!(undo_depth(&s), 3);
+    assert_eq!(s.doc().unwrap().undo.last().unwrap().label, "Subtotal");
+    let twice = workbook(&s);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), once);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), start);
+    s.execute("edit.redo", json!({"steps": 2})).unwrap();
+    assert_eq!(workbook(&s), twice);
+}
+
+#[test]
+fn subtotal_near_the_history_limit_keeps_the_oldest_steps() {
+    // The nested steps used to trim the 100-step history before they were taken back, so undoing
+    // everything no longer reached the starting workbook.
+    let mut s = sales();
+    let start = workbook(&s);
+    for i in 0..99 {
+        s.execute("cell.set", json!({"cell": "N1", "input": i.to_string()})).unwrap();
+    }
+    s.execute("data.subtotal", json!({"columns": ["J"], "groupBy": "A"})).unwrap();
+    assert_eq!(undo_depth(&s), 100);
+    s.execute("edit.undo", json!({"steps": 100})).unwrap();
+    assert_eq!(workbook(&s), start);
+}
+
+#[test]
+fn commands_that_run_other_commands_are_one_undo_step() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["H"], ["a"], ["a"], ["b"]]})).unwrap();
+    s.execute("insert.table", json!({"range": "A1:A4", "header": true})).unwrap();
+    let depth = undo_depth(&s);
+    let start = workbook(&s);
+    s.execute("table.removeDuplicates", json!({})).unwrap();
+    assert_ne!(workbook(&s), start);
+    assert_eq!(undo_depth(&s), depth + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), start);
+}
+
+#[test]
+fn a_script_is_one_undo_step_and_its_own_undo_takes_back_its_own_step() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "C1", "input": "before"})).unwrap();
+    let cmds = json!([
+        {"command": "cell.set", "params": {"cell": "A1", "input": "1"}},
+        {"command": "edit.undo", "params": {}},
+        {"command": "cell.set", "params": {"cell": "B1", "input": "2"}},
+    ]);
+    s.execute("automate.newScript", json!({"name": "S", "commands": cmds})).unwrap();
+    let depth = undo_depth(&s);
+    let start = workbook(&s);
+    s.execute("automate.runScript", json!({"name": "S"})).unwrap();
+    // The script's Undo took back its own A1, not C1 from before the script.
+    assert_eq!(v(&s, "A1"), Value::Empty);
+    assert_eq!(v(&s, "B1"), Value::Number(2.0));
+    assert_eq!(v(&s, "C1"), Value::Text("before".into()));
+    assert_eq!(undo_depth(&s), depth + 1);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(workbook(&s), start);
+}
+
 #[test]
 fn shape_text_edit_undo_redo_and_noop() {
     let mut s = s();
