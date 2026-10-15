@@ -1266,3 +1266,31 @@ fn offset_extreme_arguments_return_ref() {
         assert_eq!(crate::evaluate(&wb, 0, c("D1"), formula), Value::Number(expected), "{formula}");
     }
 }
+
+#[test]
+fn loan_schedule_residue_keeps_excels_sign() {
+    // A synthetic monthly loan schedule: interest on the opening balance, principal = PMT - interest,
+    // each later period guarded by IF(p - SUM(principal so far) > 0, ...). After the 12th payment
+    // Excel is left with 2^-30 > 0, so it takes a 13th, tiny-interest period. That last bit comes
+    // from PMT; the old (1 + rate)^nper form left -2.8e-8 and returned "" instead.
+    let mut t = T::new();
+    t.set("B1", "4653300");
+    t.set("B2", "1");
+    t.set("B3", "0.141");
+    let col = |i: u8| char::from(b'A' + i).to_string();
+    t.set("C8", "=$B$1*($B$3/12)");
+    t.set("C7", "=PMT($B$3/12,$B$2*12,-$B$1)-C8");
+    t.set("D8", "=($B1-C7)*($B$3/12)");
+    t.set("D7", "=PMT($B$3/12,$B$2*12,-$B$1)-D8");
+    for i in 4..16 {
+        let (c, p) = (col(i), col(i - 1));
+        t.set(&format!("{c}8"), &format!("=IF($B1-SUM($C7:{p}7)>0,($B1-SUM($C7:{p}7))*($B$3/12),\"\")"));
+        t.set(&format!("{c}7"), &format!("=IF($B1-SUM($C7:{p}7)>0,PMT($B$3/12,$B$2*12,-$B$1)-{c}8,\"\")"));
+    }
+    t.set("N4", "=IF($B$1-SUM($C7:N7)>0,$B$1-SUM($C7:N7),\"\")");
+    // Excel's values (Value2) for the same synthetic inputs.
+    assert_eq!(t.get("N4"), Value::Number(9.313225746154785e-10));
+    assert_eq!(t.get("O8"), Value::Number(1.0943040251731871e-11));
+    assert_eq!(t.get("O7"), Value::Number(418025.37230211904));
+    assert_eq!(t.get("P7"), Value::Text("".into()));
+}
