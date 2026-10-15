@@ -528,13 +528,15 @@ fn evaluate_formula(s: &mut Session, p: &Json) -> Result<Json> {
     let mut steps = Vec::new();
     let mut nodes = Vec::new();
     expr.walk(&mut |e| {
+        // Borrowed, not cloned: copying every operator of a long chain A1+A2+… copies the
+        // rest of the chain each time (quadratic memory).
         if matches!(e, gridcraft_formula::Expr::Call(..) | gridcraft_formula::Expr::Binary(..) | gridcraft_formula::Expr::Ref(_)) {
-            nodes.push(e.clone());
+            nodes.push(e);
         }
     });
     for e in nodes.into_iter().rev().take(200) {
-        let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &e);
-        steps.push(json!({"expression": gridcraft_formula::print(&e), "value": crate::cmd::inspect::value_json(&v)}));
+        let v = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, e);
+        steps.push(json!({"expression": gridcraft_formula::print(e), "value": crate::cmd::inspect::value_json(&v)}));
     }
     let result = gridcraft_calc::recalc::evaluate_expr(&d.wb, sheet, at, &expr);
     Ok(json!({"formula": format!("={text}"), "steps": steps, "result": crate::cmd::inspect::value_json(&result)}))

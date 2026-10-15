@@ -703,6 +703,41 @@ fn long_operator_chains() {
 }
 
 #[test]
+fn flat_chains_as_long_as_excel_allows() {
+    // Values observed in Excel (#916): a flat chain has no operand limit below the 8,192-character
+    // formula limit, which `=1+1+…` with 4,096 operands meets exactly. On a 1 MiB stack, as on
+    // the Windows main thread.
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let chain = |op: &str, item: &str, n: usize| format!("={}", vec![item; n].join(op));
+            let mut t = T::new();
+            for r in 1..=1500 {
+                t.set(&format!("A{r}"), "1");
+            }
+            t.set("B1", &chain("+", "1", 401));
+            t.set("B2", &chain("+", "1", 4096));
+            t.set("B3", &chain("-", "1", 2000));
+            t.set("B4", &chain("*", "1", 4096));
+            t.set("B5", &chain("/", "2", 4096));
+            t.set("B6", &chain("^", "1", 4096));
+            t.set("B7", &chain("+", "1%", 2000));
+            t.set("B8", "=1=1=1");
+            t.set("B9", &format!("={}", (1..=1500).map(|r| format!("A{r}")).collect::<Vec<_>>().join("+")));
+            t.set("B10", &chain("&", "1", 2000));
+            for (at, want) in [("B1", 401.0), ("B2", 4096.0), ("B3", -1998.0), ("B4", 1.0), ("B5", 0.0), ("B6", 1.0), ("B9", 1500.0)] {
+                assert_eq!(t.num(at), want, "{at}");
+            }
+            assert!((t.num("B7") - 20.0).abs() < 1e-9);
+            assert_eq!(t.get("B8"), Value::Bool(false));
+            assert_eq!(t.get("B10"), Value::text("1".repeat(2000)));
+        })
+        .expect("spawn")
+        .join()
+        .expect("long chains must not overflow the stack");
+}
+
+#[test]
 fn subtotal_skips_hidden() {
     let mut t = T::new();
     t.set("A1", "1");

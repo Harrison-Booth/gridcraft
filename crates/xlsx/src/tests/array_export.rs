@@ -409,3 +409,28 @@ fn implicit_intersection_metadata_distinguishes_table_rows_and_columns() {
         &[("Data[@Input]*2", false), ("SUM(Data[Input])", false), ("SUM(Data[Input]*2)", true), ("SQRT(Data[Input])", true)],
     );
 }
+
+#[test]
+fn long_flat_chains_are_scalar_formulas() {
+    // `=A1+A2+…` nests one level per operator. Past the scan's depth limit of 64, a plain sum
+    // of 66 cells was written as a dynamic-array formula; Excel writes it as a plain formula.
+    let mut wb = Workbook::new();
+    let sh = wb.sheet_mut(0).unwrap();
+    let refs = (1..=1500).map(|r| format!("A{r}")).collect::<Vec<_>>().join("+");
+    let mixed = (1..=1000).map(|r| format!("A{r}*2")).collect::<Vec<_>>().join("-");
+    let literals = vec!["1"; 4096].join("&");
+    let ranges = format!("{refs}+A1:A3");
+    sh.cells.set(at("B1"), formula(&refs, 0.0));
+    sh.cells.set(at("B2"), formula(&mixed, 0.0));
+    sh.cells.set(at("B3"), formula(&literals, 0.0));
+    sh.cells.set(at("B4"), formula(&ranges, 0.0));
+    let bytes = write_xlsx(&wb).unwrap();
+    let mut pkg = Package::open(&bytes).unwrap();
+    let sheet = pkg.read_xml("xl/worksheets/sheet1.xml").unwrap().unwrap();
+    for address in ["B1", "B2", "B3"] {
+        assert_scalar(&sheet, address);
+    }
+    // A range anywhere in the chain still needs array evaluation.
+    assert_dynamic(&sheet, "B4", "B4");
+    assert_eq!(cell(&sheet, "B1").child("f").unwrap().text, refs);
+}

@@ -366,3 +366,37 @@ fn prints_long_flat_chain_without_deep_recursion() {
     assert_eq!(text, vec!["1"; 20001].join("+"));
     assert_eq!(r1c1, text);
 }
+
+#[test]
+fn longest_flat_chains_clone_compare_walk_and_adjust_without_deep_recursion() {
+    // `=1+1+…` with 4,096 operands is 8,192 characters, Excel's formula limit, and nests 4,095
+    // levels on its left. On a 1 MiB stack (the Windows main thread) the derived, recursive
+    // Clone overflowed when the engine stored such a formula (#916).
+    let handle = std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(|| {
+            let plus = vec!["1"; 4096].join("+");
+            let e = parse(&plus).expect("parse");
+            let copy = e.clone();
+            assert!(copy == e);
+            let other = parse(&format!("{}-1", vec!["1"; 4095].join("+"))).expect("parse");
+            assert!(other != e);
+            let mut nodes = 0;
+            e.walk(&mut |_| nodes += 1);
+            assert_eq!(nodes, 2 * 4096 - 1);
+            assert_eq!(print(&copy.map(&mut |x| x)), plus);
+            // A chain of references: walk finds them in order, adjust rewrites every one.
+            let refs = (1..=1600).map(|r| format!("A{r}")).collect::<Vec<_>>().join("+");
+            let e = parse(&refs).expect("parse");
+            let found: Vec<String> = e.references().iter().map(|r| printer::reference_a1(r)).collect();
+            assert_eq!(found.first().map(String::as_str), Some("A1"));
+            assert_eq!(found.last().map(String::as_str), Some("A1600"));
+            assert_eq!(found.len(), 1600);
+            let ins = Edit::Insert { axis: Axis::Rows, at: 0, count: 1 };
+            let moved = print(&adjust(e.clone(), "S", "S", &ins));
+            assert_eq!(moved, (2..=1601).map(|r| format!("A{r}")).collect::<Vec<_>>().join("+"));
+            assert_eq!(print(&shift_relative(e, 0, 1)), (1..=1600).map(|r| format!("B{r}")).collect::<Vec<_>>().join("+"));
+        })
+        .expect("spawn");
+    handle.join().expect("long chains must not overflow the stack");
+}

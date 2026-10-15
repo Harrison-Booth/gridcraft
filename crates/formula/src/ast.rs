@@ -182,7 +182,13 @@ impl BinOp {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A formula's syntax tree.
+///
+/// A flat operator chain such as `=A1+A2+…` nests one [`Expr::Binary`] per operator on its
+/// left, so a formula as long as Excel allows (8,192 characters) is about 4,000 levels deep.
+/// `Clone`, `PartialEq`, [`Expr::walk`] and [`Expr::map`] therefore follow that left spine in a
+/// loop and recurse only into right-hand operands and real nesting, which the parser bounds.
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Expr {
     Number(f64),
     Text(Arc<str>),
@@ -206,36 +212,52 @@ pub enum Expr {
 }
 
 impl Expr {
-    /// Visits every node depth-first.
+    /// Visits every node depth-first, parents before children, left to right.
     pub fn walk<'a>(&'a self, f: &mut dyn FnMut(&'a Expr)) {
-        f(self);
-        match self {
-            Expr::Array(rows) => rows.iter().flatten().for_each(|e| e.walk(f)),
-            Expr::Unary(_, e) | Expr::Paren(e) => e.walk(f),
-            Expr::Binary(_, a, b) => {
-                a.walk(f);
-                b.walk(f);
+        // An explicit stack: a long operator chain must not recurse once per operand.
+        let mut pending = vec![self];
+        while let Some(e) = pending.pop() {
+            f(e);
+            match e {
+                Expr::Array(rows) => pending.extend(rows.iter().flatten().rev()),
+                Expr::Unary(_, e) | Expr::Paren(e) => pending.push(e),
+                Expr::Binary(_, a, b) => {
+                    pending.push(b);
+                    pending.push(a);
+                }
+                Expr::Call(_, args) => pending.extend(args.iter().rev()),
+                Expr::Invoke(c, args) => {
+                    pending.extend(args.iter().rev());
+                    pending.push(c);
+                }
+                _ => {}
             }
-            Expr::Call(_, args) => args.iter().for_each(|e| e.walk(f)),
-            Expr::Invoke(c, args) => {
-                c.walk(f);
-                args.iter().for_each(|e| e.walk(f));
-            }
-            _ => {}
         }
     }
-    /// Rewrites every node bottom-up.
+    /// Rewrites every node bottom-up, children left to right before their parent.
     pub fn map(self, f: &mut dyn FnMut(Expr) -> Expr) -> Expr {
-        let e = match self {
+        // Unwind the left spine of a long operator chain into a list, then rebuild it from the
+        // innermost operand outwards, in the order a recursive rewrite would visit the nodes.
+        let mut spine = Vec::new();
+        let mut node = self;
+        while let Expr::Binary(op, a, b) = node {
+            spine.push((op, b));
+            node = *a;
+        }
+        let e = match node {
             Expr::Array(rows) => Expr::Array(rows.into_iter().map(|r| r.into_iter().map(|e| e.map(f)).collect()).collect()),
             Expr::Unary(op, e) => Expr::Unary(op, Box::new(e.map(f))),
             Expr::Paren(e) => Expr::Paren(Box::new(e.map(f))),
-            Expr::Binary(op, a, b) => Expr::Binary(op, Box::new(a.map(f)), Box::new(b.map(f))),
             Expr::Call(n, args) => Expr::Call(n, args.into_iter().map(|e| e.map(f)).collect()),
             Expr::Invoke(c, args) => Expr::Invoke(Box::new(c.map(f)), args.into_iter().map(|e| e.map(f)).collect()),
             other => other,
         };
-        f(e)
+        let mut acc = f(e);
+        while let Some((op, b)) = spine.pop() {
+            let b = b.map(f);
+            acc = f(Expr::Binary(op, Box::new(acc), Box::new(b)));
+        }
+        acc
     }
     /// All references in the formula.
     pub fn references(&self) -> Vec<&Reference> {
@@ -256,6 +278,70 @@ impl Expr {
             }
         });
         v
+    }
+}
+
+impl Clone for Expr {
+    fn clone(&self) -> Self {
+        // Copy the left spine of an operator chain in a loop (see [`Expr`]).
+        let mut spine = Vec::new();
+        let mut node = self;
+        while let Expr::Binary(op, a, b) = node {
+            spine.push((*op, b));
+            node = a;
+        }
+        let mut acc = match node {
+            Expr::Number(n) => Expr::Number(*n),
+            Expr::Text(t) => Expr::Text(t.clone()),
+            Expr::Bool(b) => Expr::Bool(*b),
+            Expr::Error(e) => Expr::Error(*e),
+            Expr::Array(rows) => Expr::Array(rows.clone()),
+            Expr::Ref(r) => Expr::Ref(r.clone()),
+            Expr::Name(n) => Expr::Name(n.clone()),
+            Expr::Struct(s) => Expr::Struct(s.clone()),
+            Expr::Unary(op, e) => Expr::Unary(*op, e.clone()),
+            Expr::Binary(op, a, b) => Expr::Binary(*op, a.clone(), b.clone()),
+            Expr::Call(n, args) => Expr::Call(n.clone(), args.clone()),
+            Expr::Invoke(c, args) => Expr::Invoke(c.clone(), args.clone()),
+            Expr::Missing => Expr::Missing,
+            Expr::Paren(e) => Expr::Paren(e.clone()),
+        };
+        while let Some((op, b)) = spine.pop() {
+            acc = Expr::Binary(op, Box::new(acc), b.clone());
+        }
+        acc
+    }
+}
+
+impl PartialEq for Expr {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare the left spines of operator chains in a loop (see [`Expr`]).
+        let (mut x, mut y) = (self, other);
+        loop {
+            match (x, y) {
+                (Expr::Binary(o1, a1, b1), Expr::Binary(o2, a2, b2)) => {
+                    if o1 != o2 || b1 != b2 {
+                        return false;
+                    }
+                    x = a1;
+                    y = a2;
+                }
+                (Expr::Number(a), Expr::Number(b)) => return a == b,
+                (Expr::Text(a), Expr::Text(b)) => return a == b,
+                (Expr::Bool(a), Expr::Bool(b)) => return a == b,
+                (Expr::Error(a), Expr::Error(b)) => return a == b,
+                (Expr::Array(a), Expr::Array(b)) => return a == b,
+                (Expr::Ref(a), Expr::Ref(b)) => return a == b,
+                (Expr::Name(a), Expr::Name(b)) => return a == b,
+                (Expr::Struct(a), Expr::Struct(b)) => return a == b,
+                (Expr::Unary(o1, a), Expr::Unary(o2, b)) => return o1 == o2 && a == b,
+                (Expr::Call(n1, a), Expr::Call(n2, b)) => return n1 == n2 && a == b,
+                (Expr::Invoke(c1, a), Expr::Invoke(c2, b)) => return c1 == c2 && a == b,
+                (Expr::Missing, Expr::Missing) => return true,
+                (Expr::Paren(a), Expr::Paren(b)) => return a == b,
+                _ => return false,
+            }
+        }
     }
 }
 
