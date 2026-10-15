@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (rows auto-fit oversized fonts on open and whole-row/column formatting) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (chart per-point formatting) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -44,7 +44,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 4. Charts lose type and options on round trip; shallow chart model (F, FF)
 - **Missing:** kinds that survive XLSX (stock, combo, histogram, box, waterfall, funnel, treemap,
-  sunburst), axis scaling, label options, error bars, per-point formatting.
+  sunburst), axis scaling, label options, error bars, per-point gradient/pattern fills and effects (solid point fills, lines, markers, explosion, Invert if Negative and vary colors landed).
 - **Evidence:** `Chart` holds only title, legend position, two flags and axis titles
   (`crates/model/src/features.rs`); PRs #158, #161 open; charts can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines (read, written, drawn) landed.
 - **Impact:** charts are in most business workbooks.
@@ -168,6 +168,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | §4: solid per-point formats, Invert if Negative and vary colors landed |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |
 | 2026-10-12 | minor | Page Layout view: dragging margins on the rulers (#792) removed from the §14 remainder |
 | 2026-10-12 | minor | §13: Forecast Sheet Forecast Start (hindcast) landed (#785) |

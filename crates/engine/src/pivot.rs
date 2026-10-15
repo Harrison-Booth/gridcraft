@@ -1569,6 +1569,9 @@ pub fn chart_series(sheet: &str, origin: CellRef, out: &Output) -> Vec<Series> {
                 kind: None,
                 smooth: false,
                 trendlines: Vec::new(),
+                points: Vec::new(),
+                invert_if_negative: false,
+                invert_color: None,
             })
         })
         .collect()

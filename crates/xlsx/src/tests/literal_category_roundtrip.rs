@@ -30,6 +30,9 @@ fn literal_category_with_separators_survives_save() {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            points: Vec::new(),
+            invert_if_negative: false,
+            invert_color: None,
         })
         .collect();
     s.charts.push(Chart {
@@ -47,6 +50,7 @@ fn literal_category_with_separators_survives_save() {
         source: None,
         by_rows: false,
         pivot: None,
+        vary_colors: None,
     });
     wb.sheets = vec![Arc::new(s)];
     let bytes = write_xlsx(&wb).unwrap();
