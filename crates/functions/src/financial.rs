@@ -236,8 +236,9 @@ fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(sum)
 }
 
-/// Values and dates for XNPV/XIRR: both must be numeric and of equal length.
-fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
+/// Values and dates for XNPV/XIRR: both must be numeric and of equal length. XNPV rejects a
+/// date before the first; XIRR (`before_first`) takes it, as Excel does.
+fn dated_flows(values: &Value, dates: &Value, before_first: bool) -> R<(Vec<f64>, Vec<f64>)> {
     let va = as_array(values);
     let da = as_array(dates);
     if va.data.len() != da.data.len() {
@@ -259,7 +260,7 @@ fn dated_flows(values: &Value, dates: &Value) -> R<(Vec<f64>, Vec<f64>)> {
         }
     }
     let d0 = *d.first().ok_or(CellError::Num)?;
-    if d.iter().any(|&x| x < d0 || x < 0.0) {
+    if d.iter().any(|&x| (x < d0 && !before_first) || x < 0.0) {
         return Err(CellError::Num);
     }
     Ok((v, d))
@@ -275,35 +276,199 @@ fn xnpv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     if rate <= -1.0 {
         return Err(CellError::Num);
     }
-    let (v, d) = dated_flows(&a.get(1).ok_or(CellError::Value)?.value, &a.get(2).ok_or(CellError::Value)?.value)?;
+    let (v, d) = dated_flows(&a.get(1).ok_or(CellError::Value)?.value, &a.get(2).ok_or(CellError::Value)?.value, false)?;
     num_val(xnpv_calc(rate, &v, &d))
 }
 
+/// Excel's XIRR solver, reconstructed by observing Excel with synthetic inputs (not from its
+/// code; its documentation says only "iteration", 100 tries and 0.000001 percent). It looks
+/// only at the sign of XNPV until the end, so its answer is the root to about 1e-8, not to the
+/// last digit:
+///
+/// - Bracket the root from the guess (0 counts as 1e-5): double the rate while XNPV keeps the
+///   sign it has at the guess and that sign differs from the first value (the root is higher).
+///   Otherwise the root is lower: bisect towards 0 if XNPV changes sign there; halve the rate
+///   towards 0 if XNPV is larger in size at 0 than at the guess; otherwise try minus the guess
+///   and then step halfway to -100% each time. A negative guess only moves towards 0 (root
+///   higher) or towards -100% (root lower).
+/// - Bisect the bracket, taking the midpoint from the upper end, until half the bracket is
+///   under 1e-8 * (|rate| + 0.5) and |XNPV| is under 2e-8 * |first value|; return that
+///   midpoint. A zero XNPV counts as the upper side.
+/// - Halving towards 0 that gets within that tolerance of 0 without a sign change goes on with
+///   the negative side; at most 100 XNPV evaluations in all; a rate of -100% or an XNPV that
+///   can't be computed (a negative base for fractional years) is #NUM!.
+struct XirrSolver<'a> {
+    values: &'a [f64],
+    years: Vec<f64>,
+    evals: usize,
+    /// XNPV must be within this of 0 at the answer.
+    residual: f64,
+}
+
+impl XirrSolver<'_> {
+    const MAX_EVALS: usize = 100;
+
+    fn tol(rate: f64) -> f64 {
+        1e-8 * (rate.abs() + 0.5)
+    }
+
+    fn same_sign(a: f64, b: f64) -> bool {
+        a * b > 0.0
+    }
+
+    fn f(&mut self, rate: f64) -> R<f64> {
+        self.evals += 1;
+        if self.evals > Self::MAX_EVALS {
+            return Err(CellError::Num);
+        }
+        let base = 1.0 + rate;
+        if base == 0.0 {
+            return Err(CellError::Num);
+        }
+        let mut sum = 0.0;
+        for (x, t) in self.values.iter().zip(&self.years) {
+            sum += x / base.powf(*t);
+        }
+        if sum.is_finite() { Ok(sum) } else { Err(CellError::Num) }
+    }
+
+    fn solve(&mut self, guess: f64) -> R<f64> {
+        let first = self.values.first().copied().unwrap_or(0.0);
+        let g = if guess == 0.0 { 1e-5 } else { guess };
+        let fg = self.f(g)?;
+        let higher = fg * first < 0.0;
+        if g > 0.0 {
+            if higher {
+                return self.double(g, fg);
+            }
+            let f0 = self.f(0.0)?;
+            if !Self::same_sign(f0, fg) {
+                return self.bisect(g, fg, 0.0, f0);
+            }
+            if f0.abs() > fg.abs() {
+                return self.halve(g, fg, g, fg);
+            }
+            return self.negative_side(g, fg);
+        }
+        if higher { self.halve(g, fg, g, fg) } else { self.towards_minus_one(g, fg) }
+    }
+
+    fn double(&mut self, mut x: f64, mut fx: f64) -> R<f64> {
+        loop {
+            let next = 2.0 * x;
+            let fnext = self.f(next)?;
+            if !Self::same_sign(fnext, fx) {
+                return self.bisect(x, fx, next, fnext);
+            }
+            (x, fx) = (next, fnext);
+        }
+    }
+
+    fn halve(&mut self, mut x: f64, mut fx: f64, g: f64, fg: f64) -> R<f64> {
+        loop {
+            let step = -x / 2.0;
+            let next = x + step;
+            let fnext = self.f(next)?;
+            if !Self::same_sign(fnext, fx) {
+                return self.bisect(x, fx, next, fnext);
+            }
+            if step.abs() < Self::tol(next) {
+                if next < 0.0 {
+                    return Err(CellError::Num);
+                }
+                return self.negative_side(g, fg);
+            }
+            (x, fx) = (next, fnext);
+        }
+    }
+
+    fn negative_side(&mut self, g: f64, fg: f64) -> R<f64> {
+        let fm = self.f(-g)?;
+        if !Self::same_sign(fm, fg) {
+            return self.bisect(g, fg, -g, fm);
+        }
+        self.towards_minus_one(-g, fm)
+    }
+
+    fn towards_minus_one(&mut self, mut x: f64, mut fx: f64) -> R<f64> {
+        loop {
+            let next = x + (-1.0 - x) / 2.0;
+            let fnext = self.f(next)?;
+            if !Self::same_sign(fnext, fx) {
+                return self.bisect(x, fx, next, fnext);
+            }
+            (x, fx) = (next, fnext);
+        }
+    }
+
+    fn bisect(&mut self, a: f64, fa: f64, b: f64, fb: f64) -> R<f64> {
+        let (mut lo, mut flo, mut hi) = if a < b { (a, fa, b) } else { (b, fb, a) };
+        loop {
+            let mid = hi - (hi - lo) / 2.0;
+            let fm = self.f(mid)?;
+            if (hi - lo) / 2.0 < Self::tol(mid) && fm.abs() < self.residual {
+                return Ok(mid);
+            }
+            if Self::same_sign(fm, flo) {
+                (lo, flo) = (mid, fm);
+            } else {
+                hi = mid;
+            }
+        }
+    }
+}
+
 fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value)?;
+    let (v, d) = dated_flows(&a.first().ok_or(CellError::Value)?.value, &a.get(1).ok_or(CellError::Value)?.value, true)?;
     let guess = opt_num(a, 2, 0.1)?;
-    if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
+    if guess <= -1.0 || !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);
     }
-    num_val(solve_rate(|r| xnpv_calc(r, &v, &d), guess)?)
+    let d0 = d.first().copied().unwrap_or(0.0);
+    let first = v.first().copied().unwrap_or(0.0);
+    let mut solver = XirrSolver { values: &v, years: d.iter().map(|t| (t - d0) / 365.0).collect(), evals: 0, residual: 2e-8 * first.abs() };
+    num_val(solver.solve(guess)?)
+}
+
+/// Excel's IRR solver, approximated from observation (Excel's documentation says 20 tries and
+/// 0.00001 percent): Newton's method on the discount factor 1/(1+rate), where the cash flows
+/// are a polynomial, from 1/(1+guess) until a step moves less than 1e-8, for at most 100 steps.
+/// Excel's answers agree with it to about 1e-12 on ordinary flows (the last digits differ) and
+/// on which flows have no answer, apart from a few far from any guess.
+fn irr_solve(v: &[f64], guess: f64) -> R<f64> {
+    let mut x = 1.0 / (1.0 + guess);
+    for _ in 0..100 {
+        let (mut s, mut ds) = (0.0, 0.0);
+        for c in v.iter().rev() {
+            ds = ds * x + s;
+            s = s * x + c;
+        }
+        if ds == 0.0 {
+            return Err(CellError::Num);
+        }
+        let next = x - s / ds;
+        if !next.is_finite() {
+            return Err(CellError::Num);
+        }
+        if (next - x).abs() < 1e-8 {
+            return if next > 0.0 { Ok(1.0 / next - 1.0) } else { Err(CellError::Num) };
+        }
+        x = next;
+    }
+    Err(CellError::Num)
 }
 
 fn irr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let v = array_numbers(&a.first().ok_or(CellError::Value)?.value)?;
     let guess = opt_num(a, 1, 0.1)?;
+    // Excel: a guess at or below -100% is #VALUE! for IRR (#NUM! for XIRR).
+    if guess <= -1.0 {
+        return Err(CellError::Value);
+    }
     if !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);
     }
-    let f = |r: f64| {
-        let mut s = 0.0;
-        let mut d = 1.0;
-        for x in &v {
-            s += x / d;
-            d *= 1.0 + r;
-        }
-        s
-    };
-    num_val(solve_rate(f, guess)?)
+    num_val(irr_solve(&v, guess)?)
 }
 
 fn mirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -1793,6 +1958,82 @@ mod tests {
         close_tol(ev("CUMPRINC", vec![n(0.09 / 12.0), n(360.0), n(125000.0), n(1.0), n(1.0), n(0.0)]), -68.27827118, 1e-9);
         is_err(ev("CUMIPMT", vec![n(0.0), n(360.0), n(125000.0), n(1.0), n(1.0), n(0.0)]), CellError::Num);
         is_err(ev("CUMIPMT", vec![n(0.01), n(360.0), n(125000.0), n(1.0), n(1.0), n(2.0)]), CellError::Num);
+    }
+
+    /// XIRR of `values` on `dates`, with an optional guess, as a number or an error.
+    fn xirr_of(values: &[f64], dates: &[f64], guess: Option<f64>) -> Value {
+        let mut args = vec![rf(col(values)), rf(col(dates))];
+        args.extend(guess.map(n));
+        ev("XIRR", args)
+    }
+
+    #[track_caller]
+    fn xirr_is(values: &[f64], dates: &[f64], guess: Option<f64>, expected: f64) {
+        assert_eq!(xirr_of(values, dates, guess), Value::Number(expected), "XIRR{values:?} {dates:?} {guess:?}");
+    }
+
+    fn irr_of(values: &[f64], guess: Option<f64>) -> Value {
+        let mut args = vec![rf(col(values))];
+        args.extend(guess.map(n));
+        ev("IRR", args)
+    }
+
+    /// Expected values observed in Excel 365 with these synthetic inputs. XIRR matches bit for
+    /// bit: its answer is a bisection midpoint, about 1e-8 from the exact root.
+    #[test]
+    fn xirr_follows_excel_bisection() {
+        let (b, y1, y2) = (43831.0, 44196.0, 44561.0);
+        // Root 10%: the bracket and so the answer depend on the guess, not on the flows.
+        xirr_is(&[-100.0, 110.0], &[b, y1], None, 0.099_999_994_039_535_52);
+        xirr_is(&[-100.0, 121.0], &[b, y2], None, 0.099_999_994_039_535_52);
+        xirr_is(&[-100.0, 110.0], &[b, y1], Some(0.0), 0.099_999_995_117_187_5);
+        xirr_is(&[-100.0, 110.0], &[b, y1], Some(0.25), 0.099_999_997_764_825_82);
+        xirr_is(&[-100.0, 110.0], &[b, y1], Some(5.0), 0.100_000_002_421_438_7);
+        xirr_is(&[-100.0, 60.0, 60.0], &[b, y1, y2], None, 0.130_662_387_609_481_82);
+        xirr_is(&[-100.0, 150.0], &[b, y1], None, 0.499_999_994_039_535_54);
+        // Fractional dates are truncated.
+        xirr_is(&[-100.0, 60.0, 60.0], &[b, y1 + 0.9, y2 + 0.2], None, 0.130_662_387_609_481_82);
+        // Negative roots: minus the guess, then halfway to -100% each step.
+        xirr_is(&[-100.0, 73.0], &[b, y1], None, -0.269_999_996_572_733);
+        xirr_is(&[-100.0, 13.0], &[b, y1], None, -0.870_000_001_043_081_1);
+        xirr_is(&[-100.0, 1e-29], &[b, 45658.0], None, -0.999_999_359_104_708);
+        // A guess of 100% or more steps through rates below -100% (whole years only).
+        xirr_is(&[-100.0, -50.0, 10.0], &[b, y1, y2], Some(2.0), -1.653_112_880_885_601);
+        xirr_is(&[-100.0, -50.0, 10.0], &[b, y1, y2], Some(-0.3), -0.846_887_112_781_405_5);
+        is_err(xirr_of(&[-100.0, -50.0, 10.0], &[b, y1, y2], Some(1.0)), CellError::Num);
+        // One-day spans.
+        xirr_is(&[-100.0, 100.01], &[b, b + 1.0], None, 0.037_172_409_892_082_23);
+        xirr_is(&[-100.0, 99.99], &[b, b + 1.0], None, -0.035_843_667_387_962_34);
+        xirr_is(&[-100.0, 110.0], &[b, b + 1.0], None, 1_283_305_579_426_611.5);
+        // Dates before the first are allowed (time runs from the first date); in the second
+        // case the search finds no sign change.
+        xirr_is(&[-2416.93, 447.77, 1743.6], &[44331.0, 44498.0, 43849.0], None, -0.974_587_937_071_919_6);
+        is_err(xirr_of(&[-100.0, 60.0, 60.0], &[b, b - 365.0, y2], None), CellError::Num);
+        // A negative guess never reaches a positive root; a guess at or below -1 is #NUM!.
+        is_err(xirr_of(&[-100.0, 110.0], &[b, y1], Some(-0.1)), CellError::Num);
+        is_err(xirr_of(&[-100.0, 60.0, 60.0], &[b, y1, y2], Some(-1.0)), CellError::Num);
+        // Two roots with the guess outside them; all dates the same.
+        is_err(xirr_of(&[-100.0, 300.0, -210.0], &[b, y1, y2], None), CellError::Num);
+        is_err(xirr_of(&[-100.0, 60.0, 60.0], &[b, b, b], None), CellError::Num);
+    }
+
+    /// IRR follows Excel's answers to about 1e-12 and its #NUM! cases.
+    #[test]
+    fn irr_follows_excel() {
+        assert_eq!(irr_of(&[-100.0, 110.0], None), Value::Number(0.100_000_000_000_000_09));
+        close_tol(irr_of(&[-0.0001, 0.0, 0.0, 0.0, 100.0], None), 30.622_776_600_497_09, 1e-9);
+        let mut late = vec![-100.0];
+        late.extend([0.0; 19]);
+        late.push(1e-5);
+        is_err(irr_of(&late, None), CellError::Num);
+        // ...but from a guess just above -100% Newton creeps down to the root.
+        let mut late18 = vec![-100.0];
+        late18.extend([0.0; 18]);
+        late18.push(1e-5);
+        close_tol(irr_of(&late18, Some(-0.99)), -0.571_866_760_128_087_4, 1e-9);
+        close_tol(irr_of(&[-100.0, 300.0, -210.0], Some(0.9)), 0.887_298_334_620_741_5, 1e-12);
+        is_err(irr_of(&[-100.0, 60.0, 60.0], Some(-1.0)), CellError::Value);
+        close_tol(irr_of(&[-100.0, 60.0, 60.0], Some(-0.999_999)), 0.130_662_386_291_807_5, 1e-12);
     }
 
     #[test]

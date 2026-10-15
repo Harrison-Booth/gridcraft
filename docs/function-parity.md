@@ -1,6 +1,6 @@
 # Function parity: worksheet functions and formulas
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** minor (USDOLLAR added as a compatibility function; MIRR, COUNTIF and INDIRECT edge cases match Excel 365) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-15 · **Change:** minor (XIRR follows Excel's bisection bit for bit; IRR uses Newton on the discount factor like Excel) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's worksheet functions, category by category, against GridCraft's function library. Part of
 [target-app-parity.md](target-app-parity.md); gaps feed [gaps.md](gaps.md).
@@ -92,7 +92,17 @@ assertions each, but there is no conformance suite against Excel-computed result
 reports keep finding edge cases: MIN() with no arguments (#138), COUNTBLANK past the used range
 (#137), ROUND at 15 digits and DATE(1900,2,29) (fixed 10-09), SUMIF sum-range sizing (fixed
 10-09). Statistical distributions and financial functions with iterative solvers (RATE, IRR,
-XIRR, YIELD) are the highest-risk for last-digit differences.
+YIELD) are the highest-risk for last-digit differences. XIRR follows Excel's own solver,
+reconstructed from observation: a sign-only search that brackets the root from the guess
+(doubling, halving towards 0, or stepping halfway to -100%) and bisects until half the bracket is
+under 1e-8 x (|rate| + 0.5) and XNPV is under 2e-8 x the first value, so its answer is the same
+midpoint as Excel's, about 1e-8 from the exact root, bit for bit in 888 of 910 synthetic cases
+with an answer (97.7% agreement on 1,283 cases including `#NUM!`). Known differences: flows with
+several sign changes where Excel returns about 3e-9 (a halving that reached 0), or `#NUM!` for
+two roots close to the guess. IRR uses Newton on the discount factor 1/(1+rate), at most 100 steps,
+stopping at a step under 1e-8; Excel's last digits differ by about 1e-12 (its exact iteration is
+not reconstructed) and a few far-from-guess cases differ in `#NUM!` (93.5% agreement on 708
+cases, from 88%).
 
 TEXT() and cell display share `crates/numfmt`; checked against Excel-cached results in
 number- and text-format test workbooks (352 TEXT cells), all match:
@@ -108,6 +118,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | minor | XIRR follows Excel's bisection (answers bit for bit, about 1e-8 from the exact root; dates before the first allowed; guess <= -1 is `#NUM!`); IRR uses Newton on the discount factor (`IRR` of -100, 19 zeros, 1E-5 is `#NUM!` like Excel; guess <= -1 is `#VALUE!`) |
 | 2026-10-12 | minor | USDOLLAR added as a Compatibility function (not on Microsoft's list, so the counts don't change); MIRR with no positive flow is -1, COUNTIF's bare `"<="` / `">="` skip empty strings, INDIRECT with `a1` = FALSE gives `#REF!` for A1-style text (#738) |
 | 2026-10-11 | minor | TEXT / number formats fixed against Excel-cached results: fraction literals and zero fractions, `0` denominators zero padded, `?` pads the thousands separator, booleans use the text section (226 mismatches → 0 in 352 TEXT cells) |
 | 2026-10-11 | minor | Iterative calculation: circular references iterate up to Maximum Iterations / Maximum Change when enabled |
