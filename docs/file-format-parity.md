@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-12 · **Change:** trivial (XLSX chart sheets are kept on save (#727); previously minor: CSV save keeps the separator it was opened with) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** minor (`.xls` import reads notes, hyperlinks, frozen panes and the sheet display options; previously trivial: XLSX chart sheets are kept on save (#727)) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Every format Excel opens or saves, with GridCraft's read and write support, fidelity and tests.
 Part of [target-app-parity.md](target-app-parity.md). **File formats: ~50% ready, 80–120 h**
@@ -29,7 +29,7 @@ and repair-free opening remain unverified.
 | `.xlsm` Macro-Enabled Workbook | R/W | yes | yes, macros kept, not run | The VBA project is kept byte-for-byte and written back only into `.xlsm`/`.xltm` (#6); macros never run. Saved with the macro-enabled workbook content type | `roundtrip.rs` (`vba_project_roundtrip`, `package_kind_sets_workbook_content_type`), engine `io.rs` (`macros_are_saved_only_into_xlsm`) |
 | `.xltx` / `.xltm` templates | R/W | yes | partial | Saved with the template (and macro-enabled template) content type, chosen by extension; `.xltm` keeps a VBA project, `.xltx` drops it; "new from template" behaviour missing | `roundtrip.rs` (`package_kind_sets_workbook_content_type`), engine `io.rs` |
 | `.xlsb` Binary Workbook | R/W | **values only** (#101) | no | Names, visibility, numbers, text, booleans, errors, merges, cached formula results; no formulas, formatting, charts, names | `xlsb_tests.rs` |
-| `.xls` Excel 97-2003 (BIFF8) | R/W | **yes, partial** (#121) | no (Save As `.xlsx`) | Clean-room from [MS-CFB] and [MS-XLS]. Read: worksheets and visibility, shared strings, numbers, text, booleans, errors, formulas (text for the common tokens, shared and array formulas, 3-D refs, names, newer functions called by name) with cached results, number formats (dates display as dates), 1904 date system, merges, column widths, row heights, defined names, print area and titles, calculation settings (mode, iteration with its maximum iterations and change, precision as displayed). Not read: fonts, fills, borders, alignment, charts, pictures, comments, CF, validation, hyperlinks, freeze panes, external links (formula kept as its value). Chart and macro sheets skipped with a warning; encrypted (FILEPASS) and BIFF5 (Excel 5.0/95) files refused with a message. Opens as a new unsaved workbook. Unverified on a real-world corpus | `xls_tests.rs` |
+| `.xls` Excel 97-2003 (BIFF8) | R/W | **yes, partial** (#121) | no (Save As `.xlsx`) | Clean-room from [MS-CFB] and [MS-XLS]. Read: worksheets and visibility, shared strings, numbers, text, booleans, errors, formulas (text for the common tokens, shared and array formulas, 3-D refs, names, newer functions called by name) with cached results, number formats (dates display as dates), 1904 date system, merges, column widths, row heights, defined names, print area and titles, calculation settings (mode, iteration with its maximum iterations and change, precision as displayed), notes (NOTE/OBJ/TXO: author, multi-line text, shown or hidden), hyperlinks (HLINK and HLINKTOOLTIP: web and mailto URLs, absolute and relative files, places in the workbook, tooltips, multi-cell ranges), frozen panes (WINDOW2/PANE) and the sheet display options (gridlines, headings, formulas, zeros, right-to-left, page break preview). Not read: fonts, fills, borders, alignment, charts, pictures, CF, validation, split (unfrozen) panes (removed with a warning), external links (formula kept as its value). Chart and macro sheets skipped with a warning; encrypted (FILEPASS) and BIFF5 (Excel 5.0/95) files refused with a message. Opens as a new unsaved workbook. Unverified on a real-world corpus | `xls_tests.rs` |
 | `.xlt` Excel 97-2003 template | R/W | yes (read as `.xls`) | no | | — |
 | `.xlam` / `.xla` add-ins | R/W | no | no | VBA; out of scope | — |
 | `.xml` XML Spreadsheet 2003 | R/W | no | no | Simple to support | — |
@@ -75,7 +75,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 | Real-world XLSX corpus run (craftrules test-corpora standard), and confirm Excel opens our output with no repair prompt (owner runs Excel) | 15–25 |
 | Preserve the rest of the unmodelled XLSX content (slicers, timelines, data model, table query tables, `extLst` entries); pass-through landed for the rest (#330) | 6–10 |
 | Streaming XLSX reader for very large files (#175), part-size limits that degrade instead of failing | 10–15 |
-| Legacy `.xls` (BIFF8): styles (fonts, fills, borders, alignment), comments, CF, validation, pictures and charts on import; corpus run; then write | 10–15 |
+| Legacy `.xls` (BIFF8): styles (fonts, fills, borders, alignment), CF, validation, pictures and charts on import; corpus run; then write | 10–15 |
 | Encrypted workbooks: save with password (#11) | 4–6 |
 | XLSB and ODS: formulas and formatting on import; then write | 10–15 |
 | CSV/text: encoding choice, `.prn`, `.dif`, `.slk`, XML Spreadsheet 2003 | 4–7 |
@@ -85,6 +85,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-14 | minor | `.xls` import reads notes (author, text, shown state), hyperlinks (URL, mailto, file, in-workbook, tooltips) and frozen panes, plus the WINDOW2 display options; split panes are removed with a warning (#121) |
 | 2026-10-12 | trivial | XLSX chart sheets are kept on save (#727) |
 | 2026-10-12 | trivial | CSV and TSV export is capped at 512 MiB and refuses a larger used range with an error (#528) |
 | 2026-10-12 | minor | `.xls` import reads the calculation settings (CalcMode, CalcIter, CalcCount, CalcDelta, CalcPrecision), so circular models calculate instead of showing `#CIRC!` (#724) |

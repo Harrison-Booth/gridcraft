@@ -4,13 +4,15 @@
 //!
 //! Read: worksheets, shared strings, cell values, formulas (text and cached results, including
 //! shared and array formulas), number formats, the 1904 date system, merged cells, column
-//! widths, row heights, defined names, print areas, print titles and the calculation settings
-//! (mode, iteration, precision as displayed). Everything else (fonts, fills, borders, charts,
-//! pictures, comments, conditional formats, validation, macros) is skipped with a warning.
+//! widths, row heights, defined names, print areas, print titles, the calculation settings
+//! (mode, iteration, precision as displayed), cell notes, hyperlinks, frozen panes and the
+//! sheet display options (see `objects`). Everything else (fonts, fills, borders, charts,
+//! pictures, conditional formats, validation, macros) is skipped with a warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
 
 mod formula;
 mod ftab;
+mod objects;
 mod records;
 
 use std::collections::HashMap;
@@ -199,7 +201,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, merged cells, column widths, row heights and defined names were read. Fonts, fills, borders, charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, merged cells, column widths, row heights, defined names, notes, hyperlinks and frozen panes were read. Fonts, fills, borders, charts, pictures and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
@@ -415,6 +417,7 @@ struct SheetState<'g> {
     dropped: usize,
     unsupported: Vec<&'static str>,
     calc: CalcSettings,
+    objects: objects::Objects,
 }
 
 impl SheetState<'_> {
@@ -506,6 +509,7 @@ fn worksheet(
         dropped: 0,
         unsupported: vec![],
         calc: CalcSettings::default(),
+        objects: objects::Objects::default(),
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -552,6 +556,7 @@ fn worksheet(
             st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style });
         }
     }
+    std::mem::take(&mut st.objects).finish(&mut st.sheet, report);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
     }
@@ -739,11 +744,9 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 st.sheet.default_row_height = pt_to_px(f64::from(height) / 20.0);
             }
         }
-        0x001C => report.warn("Cell comments in .xls files are not imported yet."),
-        0x00EC => report.warn("Pictures, charts and shapes in .xls files are not imported yet."),
+        id if objects::handles(id) => st.objects.record(rec, budget)?,
         0x01B0 | 0x0879 => report.warn("Conditional formatting in .xls files is not imported yet."),
         0x01B2 => report.warn("Data validation in .xls files is not imported yet."),
-        0x01B8 => report.warn("Hyperlinks in .xls files are not imported yet."),
         0x00B0 => report.warn("PivotTables in .xls files are not imported yet; their values were kept."),
         _ => {}
     }
