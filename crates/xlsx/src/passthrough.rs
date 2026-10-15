@@ -6,11 +6,14 @@
 //! their `<externalReferences>`, data connections, XML maps) and each sheet (query tables, cells
 //! mapped to XML elements, form controls, ActiveX controls, OLE objects, the sheet background and
 //! printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`
-//! of `<pageSetup>` and the legacy VML shapes those controls need). PivotTables whose source is in
-//! another workbook are kept too: the PivotTable parts with their sheet, the cache definition and
-//! records parts (with the cache's link to the other workbook's path) with the workbook and its
-//! `<pivotCache>` entry, its `cacheId` unchanged. The workbook also keeps its
-//! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
+//! of `<pageSetup>` and the legacy VML shapes those controls need). The workbook's Data Model
+//! (`xl/model/item.data`) is kept with its data connections. PivotTables whose source is in
+//! another workbook, a data connection or the Data Model are kept too: the PivotTable parts with
+//! their sheet, the cache definition and records parts (with the cache's link to the other
+//! workbook's path) with the workbook and its `<pivotCache>` entry, its `cacheId` unchanged; a
+//! cache on a connection only when the connections are kept, and on the Data Model only when the
+//! model is kept. The workbook also keeps its `<fileVersion>` and the calcFeatures extension,
+//! which Excel needs to trust the saved values.
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
 //! kept XML are rewritten to match. Kept content is conservative:
@@ -41,7 +44,7 @@ use quick_xml::{Reader, Writer};
 
 use crate::IoError;
 use crate::package::{self, normalize};
-use crate::pivot::{CT_PIVOT_CACHE_DEF, CT_PIVOT_TABLE, ExternalPivot};
+use crate::pivot::{CT_PIVOT_CACHE_DEF, CT_PIVOT_TABLE, ExternalPivot, KeptSource};
 use crate::read::Ctx;
 use crate::write::{NS_REL, Out, Rels, XML_DECL};
 use crate::xml::{self, esc_attr};
@@ -103,6 +106,8 @@ const SHEET_SLOTS: &[&str] = &["picture", "oleObjects", "controls"];
 const PIVOT_TABLE_GRAPH: &[&str] = &["pivotTable", "pivotCacheDefinition"];
 /// Rewritten kinds a kept pivot cache reaches.
 const PIVOT_CACHE_GRAPH: &[&str] = &["pivotCacheDefinition", "pivotCacheRecords"];
+/// The workbook's Data Model part (Power Pivot), kept byte for byte when its connections are.
+const DATA_MODEL_GRAPH: &[&str] = &["powerPivotData"];
 
 /// Relationship kinds GridCraft reads and rewrites, or that depend on content it rewrites:
 /// kept content whose graph reaches one of them is dropped.
@@ -168,6 +173,7 @@ const OWN_DIRS: &[&str] = &[
     "xl/activex/",
     "xl/webextensions/",
     "xl/printersettings/",
+    "xl/model/",
 ];
 
 fn kind(rel_type: &str) -> &str {
@@ -242,8 +248,8 @@ pub struct KeptReader {
     budget: usize,
     parts_left: usize,
     /// Cache definition parts of the PivotTables kept with their sheets (source in another
-    /// workbook), kept with the workbook.
-    pivot_caches: Vec<String>,
+    /// workbook, a data connection or the Data Model), kept with the workbook.
+    pivot_caches: Vec<(String, KeptSource)>,
 }
 
 impl KeptReader {
@@ -409,6 +415,20 @@ impl KeptReader {
                 cx.warn(format!("{} part {} was dropped: {why}", kind(&r.rel_type), r.target));
             }
         }
+        // The Data Model: its tables are loaded through the workbook's connections, so it is kept
+        // only with them.
+        let connections = p.rels.iter().any(|r| is_kind(r, &["connections"]));
+        for r in wb_rels.iter().filter(|r| !r.external && is_kind(r, DATA_MODEL_GRAPH)).take(1) {
+            let kept = if connections {
+                self.keep_through(cx, &mut p, std::slice::from_ref(r), &mut seen, DATA_MODEL_GRAPH)
+            } else {
+                Err("the workbook's data connections were not kept".into())
+            };
+            match kept {
+                Ok(()) => cx.warn("the workbook's Data Model is kept for saving as it is; it can't be viewed, edited or refreshed here"),
+                Err(why) => cx.warn(format!("the workbook's Data Model was dropped: {why}")),
+            }
+        }
         // Chart sheets: the sheet entry (name, state, position) plus the chart sheet part and the
         // drawing, chart, style and colour parts behind it.
         for (worksheets, se) in chart_sheet_entries(wb_xml, &wb_rels, file_to_model) {
@@ -484,14 +504,33 @@ impl KeptReader {
     /// and relationship id).
     fn keep_pivot_caches(&mut self, cx: &mut Ctx<'_>, wb_xml: &xml::El, wb_rels: &[PreservedRel], p: &mut Preserved, seen: &mut HashSet<String>) {
         let caches = std::mem::take(&mut self.pivot_caches);
-        for cache in &caches {
+        // A cache names its connection by id in the kept connections part, and a Data Model cache
+        // reads the kept model: without them Excel refuses the file or can't refresh it.
+        let connections = p.rels.iter().any(|r| is_kind(r, &["connections"]));
+        let model = p.rels.iter().any(|r| is_kind(r, DATA_MODEL_GRAPH));
+        let (mut no_connections, mut no_model) = (0usize, 0usize);
+        for (cache, source) in &caches {
+            match source {
+                KeptSource::Connection | KeptSource::DataModel if !connections => {
+                    no_connections += 1;
+                    continue;
+                }
+                KeptSource::DataModel if !model => {
+                    no_model += 1;
+                    continue;
+                }
+                _ => {}
+            }
             let entry = wb_xml.child("pivotCaches").into_iter().flat_map(|c| c.kids("pivotCache")).find_map(|c| {
                 let id = c.attr_u32("cacheId")?;
                 let r = wb_rels.iter().find(|r| Some(r.id.as_str()) == c.attr("id") && !r.external && is_kind(r, &["pivotCacheDefinition"]))?;
                 (normalize(&r.target) == normalize(cache)).then(|| (id, r.clone()))
             });
             let Some((id, r)) = entry else {
-                cx.warn(format!("the cache {cache} of a PivotTable on another workbook is not in the workbook's list; the PivotTable was dropped"));
+                cx.warn(format!(
+                    "the cache {cache} of a PivotTable on {} is not in the workbook's list; the PivotTable was dropped",
+                    source.describe()
+                ));
                 continue;
             };
             match self.keep_through(cx, p, std::slice::from_ref(&r), seen, PIVOT_CACHE_GRAPH) {
@@ -499,8 +538,18 @@ impl KeptReader {
                     slot: "pivotCache".into(),
                     xml: format!("<pivotCache xmlns:r=\"{NS_REL}\" cacheId=\"{id}\" r:id=\"{}\"/>", esc_attr(&r.id)),
                 }),
-                Err(why) => cx.warn(format!("the cache of a PivotTable on another workbook was dropped with its PivotTables: {why}")),
+                Err(why) => cx.warn(format!("the cache of a PivotTable on {} was dropped with its PivotTables: {why}", source.describe())),
             }
+        }
+        if no_connections > 0 {
+            cx.warn(format!(
+                "{no_connections} PivotTable cache(s) on a data connection or the Data Model were dropped with their PivotTables (kept as plain cells): the workbook's data connections were not kept"
+            ));
+        }
+        if no_model > 0 {
+            cx.warn(format!(
+                "{no_model} PivotTable cache(s) on the workbook's Data Model were dropped with their PivotTables (kept as plain cells): the Data Model was not kept"
+            ));
         }
     }
 
@@ -509,7 +558,9 @@ impl KeptReader {
     pub fn sheet(&mut self, cx: &mut Ctx<'_>, part: &str, name: &str, pivots: &[ExternalPivot]) -> Option<Arc<Preserved>> {
         if !self.on {
             if !pivots.is_empty() {
-                cx.warn(format!("sheet \"{name}\": PivotTables on another workbook are not kept on save in this file"));
+                cx.warn(format!(
+                    "sheet \"{name}\": PivotTables on another workbook, a data connection or the Data Model are not kept on save in this file"
+                ));
             }
             return None;
         }
@@ -539,11 +590,11 @@ impl KeptReader {
                 Ok(()) => {
                     scoped.remove(&normalize(&ep.cache_part));
                     seen = scoped;
-                    if !self.pivot_caches.iter().any(|c| normalize(c) == normalize(&ep.cache_part)) {
-                        self.pivot_caches.push(ep.cache_part.clone());
+                    if !self.pivot_caches.iter().any(|(c, _)| normalize(c) == normalize(&ep.cache_part)) {
+                        self.pivot_caches.push((ep.cache_part.clone(), ep.source));
                     }
                 }
-                Err(why) => cx.warn(format!("sheet \"{name}\": a PivotTable on another workbook was dropped: {why}")),
+                Err(why) => cx.warn(format!("sheet \"{name}\": a PivotTable on {} was dropped: {why}", ep.source.describe())),
             }
         }
         (!p.is_empty()).then(|| Arc::new(p))

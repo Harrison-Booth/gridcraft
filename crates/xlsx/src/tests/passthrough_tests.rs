@@ -1067,3 +1067,259 @@ fn a_kept_pivot_table_whose_cache_is_not_listed_is_dropped() {
     assert!(written_pivot_tables(&u, "Report").is_empty());
     assert!(written_pivot_caches(&u).is_empty());
 }
+
+// ---------------------------------------------------------------- PivotTables on a data connection or the Data Model
+
+/// Bytes standing in for the Data Model (Excel's `xl/model/item.data`).
+const MODEL_DATA: &[u8] = b"\x00\x01model bytes, not really a model\xFE\xFF";
+/// A larger stand-in, for running out of room to keep it.
+static BIG_MODEL: [u8; 64 * 1024] = [7; 64 * 1024];
+const CT_MODEL: &str = "application/vnd.openxmlformats-officedocument.model+data";
+/// The model connection (id 1, as Excel writes it), a plain OLE DB connection (id 2) and a
+/// worksheet connection loading a range into the model (id 3).
+const MODEL_CONNECTIONS: &str = r#"<?xml version="1.0"?><connections xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><connection id="1" keepAlive="1" name="ThisWorkbookDataModel" description="Data Model" type="5" refreshedVersion="8" minRefreshableVersion="5"><dbPr connection="Data Model Connection" command="Model" commandType="1"/><olapPr sendLocale="1" rowDrillCount="1000"/><extLst><ext uri="{DE250136-89BD-433C-8126-D09CA5730AF9}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:connection id="" model="1"/></ext></extLst></connection><connection id="2" name="Source" type="5" refreshedVersion="8"><dbPr connection="Provider=Example;Data Source=source.xlsx" command="Data$" commandType="3"/></connection><connection id="3" name="WorksheetConnection_T" type="102" refreshedVersion="8" minRefreshableVersion="5"><extLst><ext uri="{DE250136-89BD-433C-8126-D09CA5730AF9}" xmlns:x15="http://schemas.microsoft.com/office/spreadsheetml/2010/11/main"><x15:connection id="T"><x15:rangePr sourceName="_xlcn.WorksheetConnection_T"/></x15:connection></ext></extLst></connection></connections>"#;
+const CONN_RECORDS: &str = r#"<?xml version="1.0"?><pivotCacheRecords xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="1"><r><x v="0"/><n v="6"/></r></pivotCacheRecords>"#;
+
+/// An OLAP cache on the Data Model (no records: `saveData="0"`), on connection `id`.
+fn model_cache(id: u32) -> String {
+    format!(
+        r#"<?xml version="1.0"?><pivotCacheDefinition xmlns="{NS_MAIN}" xmlns:r="{NS_R}" saveData="0" createdVersion="6" refreshedVersion="8" minRefreshableVersion="3" recordCount="0"><cacheSource type="external" connectionId="{id}"/><cacheFields count="2"><cacheField name="[T].[K].[K]" caption="K" numFmtId="0" level="1"><sharedItems count="1"><s v="x"/></sharedItems></cacheField><cacheField name="[Measures].[Sum of V]" caption="Sum of V" numFmtId="0" hierarchy="1" level="32767"/></cacheFields><cacheHierarchies count="2"><cacheHierarchy uniqueName="[T].[K]" caption="K" attribute="1" defaultMemberUniqueName="[T].[K].[All]" allUniqueName="[T].[K].[All]" dimensionUniqueName="[T]" displayFolder="" count="2" memberValueDatatype="130" unbalanced="0"><fieldsUsage count="2"><fieldUsage x="-1"/><fieldUsage x="0"/></fieldsUsage></cacheHierarchy><cacheHierarchy uniqueName="[Measures].[Sum of V]" caption="Sum of V" measure="1" displayFolder="" measureGroup="T" count="0" oneField="1" hidden="1"><fieldsUsage count="1"><fieldUsage x="1"/></fieldsUsage></cacheHierarchy></cacheHierarchies><kpis count="0"/><dimensions count="2"><dimension measure="1" name="Measures" uniqueName="[Measures]" caption="Measures"/><dimension name="T" uniqueName="[T]" caption="T"/></dimensions><measureGroups count="1"><measureGroup name="T" caption="T"/></measureGroups><maps count="1"><map measureGroup="0" dimension="1"/></maps></pivotCacheDefinition>"#
+    )
+}
+
+/// A relational cache on connection `id`, with records.
+fn conn_cache(id: u32) -> String {
+    format!(
+        r#"<?xml version="1.0"?><pivotCacheDefinition xmlns="{NS_MAIN}" xmlns:r="{NS_R}" r:id="rId1" refreshedVersion="8" recordCount="1"><cacheSource type="external" connectionId="{id}"/><cacheFields count="2"><cacheField name="K" numFmtId="0"><sharedItems count="1"><s v="x"/></sharedItems></cacheField><cacheField name="V" numFmtId="0"><sharedItems containsNumber="1"/></cacheField></cacheFields></pivotCacheDefinition>"#
+    )
+}
+
+/// What a data-connection test package holds.
+#[derive(Clone, Copy)]
+struct ConnPkg {
+    /// The Data Model part and its workbook relationship.
+    model_part: bool,
+    /// The larger model stand-in.
+    big_model: bool,
+    /// `xl/connections.xml` and its workbook relationship.
+    connections: bool,
+    /// The connections part has a relationship to content GridCraft rewrites (so it can't be kept).
+    connections_blocked: bool,
+    /// The connection the Data Model cache names.
+    model_connection: u32,
+}
+
+const CONN_PKG: ConnPkg = ConnPkg { model_part: true, big_model: false, connections: true, connections_blocked: false, model_connection: 1 };
+
+/// Sheet "Report" with a PivotTable on the Data Model (cache 3) and sheet "More" with one on the
+/// plain connection (cache 4, with records), plus the hidden name a worksheet connection uses.
+fn conn_pivot_package(o: ConnPkg) -> Vec<u8> {
+    let workbook = format!(
+        r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheets><sheet name="Report" sheetId="1" r:id="rId1"/><sheet name="More" sheetId="2" r:id="rId2"/></sheets><definedNames><definedName name="_xlcn.WorksheetConnection_T" hidden="1">More!$D$1:$E$2</definedName></definedNames><pivotCaches><pivotCache cacheId="3" r:id="rId3"/><pivotCache cacheId="4" r:id="rId7"/></pivotCaches></workbook>"#
+    );
+    let ct = |part: &str, ty: &str| format!(r#"<Override PartName="/{part}" ContentType="{CT_PREFIX}.spreadsheetml.{ty}+xml"/>"#);
+    let content_types = format!(
+        r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="data" ContentType="{CT_MODEL}"/>{}{}{}{}{}{}{}{}{}{}</Types>"#,
+        ct("xl/workbook.xml", "sheet.main"),
+        ct("xl/worksheets/sheet1.xml", "worksheet"),
+        ct("xl/worksheets/sheet2.xml", "worksheet"),
+        ct("xl/styles.xml", "styles"),
+        ct("xl/connections.xml", "connections"),
+        ct("xl/pivotTables/pivotTable1.xml", "pivotTable"),
+        ct("xl/pivotTables/pivotTable2.xml", "pivotTable"),
+        ct("xl/pivotCache/pivotCacheDefinition1.xml", "pivotCacheDefinition"),
+        ct("xl/pivotCache/pivotCacheDefinition2.xml", "pivotCacheDefinition"),
+        ct("xl/pivotCache/pivotCacheRecords2.xml", "pivotCacheRecords"),
+    );
+    let sheet = |v: &str| {
+        format!(
+            r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}"><sheetData><row r="4"><c r="A4" t="inlineStr"><is><t>x</t></is></c><c r="B4"><v>{v}</v></c></row></sheetData></worksheet>"#
+        )
+    };
+    let (s1, s2) = (sheet("5"), sheet("6"));
+    let (c1, c2) = (model_cache(o.model_connection), conn_cache(2));
+    let (t1, t2) = (ext_table("OnModel", 3), ext_table("OnConnection", 4));
+    let mut wb_rels = vec![
+        ("rId1", "worksheet", "worksheets/sheet1.xml"),
+        ("rId2", "worksheet", "worksheets/sheet2.xml"),
+        ("rId3", "pivotCacheDefinition", "pivotCache/pivotCacheDefinition1.xml"),
+        ("rId4", "styles", "styles.xml"),
+        ("rId7", "pivotCacheDefinition", "pivotCache/pivotCacheDefinition2.xml"),
+    ];
+    if o.connections {
+        wb_rels.push(("rId5", "connections", "connections.xml"));
+    }
+    if o.model_part {
+        wb_rels.push(("rId6", "powerPivotData", "model/item.data"));
+    }
+    let wb_rels = rels(&wb_rels);
+    let t1_rels = rels(&[("rId1", "pivotCacheDefinition", "../pivotCache/pivotCacheDefinition1.xml")]);
+    let t2_rels = rels(&[("rId1", "pivotCacheDefinition", "../pivotCache/pivotCacheDefinition2.xml")]);
+    let c2_rels = rels(&[("rId1", "pivotCacheRecords", "pivotCacheRecords2.xml")]);
+    let s1_rels = rels(&[("rId1", "pivotTable", "../pivotTables/pivotTable1.xml")]);
+    let s2_rels = rels(&[("rId1", "pivotTable", "../pivotTables/pivotTable2.xml")]);
+    let conn_rels = rels(&[("rId1", "worksheet", "worksheets/sheet1.xml")]);
+    let mut parts: Vec<(&str, &[u8])> = vec![
+        ("[Content_Types].xml", content_types.as_bytes()),
+        ("_rels/.rels", super::ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/styles.xml", EXT_STYLES.as_bytes()),
+        ("xl/worksheets/sheet1.xml", s1.as_bytes()),
+        ("xl/worksheets/sheet2.xml", s2.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", s1_rels.as_bytes()),
+        ("xl/worksheets/_rels/sheet2.xml.rels", s2_rels.as_bytes()),
+        ("xl/pivotTables/pivotTable1.xml", t1.as_bytes()),
+        ("xl/pivotTables/_rels/pivotTable1.xml.rels", t1_rels.as_bytes()),
+        ("xl/pivotTables/pivotTable2.xml", t2.as_bytes()),
+        ("xl/pivotTables/_rels/pivotTable2.xml.rels", t2_rels.as_bytes()),
+        ("xl/pivotCache/pivotCacheDefinition1.xml", c1.as_bytes()),
+        ("xl/pivotCache/pivotCacheDefinition2.xml", c2.as_bytes()),
+        ("xl/pivotCache/_rels/pivotCacheDefinition2.xml.rels", c2_rels.as_bytes()),
+        ("xl/pivotCache/pivotCacheRecords2.xml", CONN_RECORDS.as_bytes()),
+    ];
+    if o.connections {
+        parts.push(("xl/connections.xml", MODEL_CONNECTIONS.as_bytes()));
+    }
+    if o.connections_blocked {
+        parts.push(("xl/_rels/connections.xml.rels", conn_rels.as_bytes()));
+    }
+    if o.model_part {
+        parts.push(("xl/model/item.data", if o.big_model { &BIG_MODEL[..] } else { MODEL_DATA }));
+    }
+    make_zip(&parts)
+}
+
+/// The content type a written package gives a part.
+fn content_type_of(u: &Unpacked, part: &str) -> String {
+    let types = xml::parse(u.parts.get("[Content_Types].xml").unwrap()).unwrap();
+    if let Some(o) = types.kids("Override").find(|o| normalize(o.attr("PartName").unwrap()) == normalize(part)) {
+        return o.attr("ContentType").unwrap().to_string();
+    }
+    let ext = part.rsplit('.').next().unwrap().to_ascii_lowercase();
+    types.kids("Default").find(|d| d.attr("Extension").unwrap().eq_ignore_ascii_case(&ext)).unwrap().attr("ContentType").unwrap().to_string()
+}
+
+/// Bytes kept by a read workbook.
+fn kept_bytes(wb: &gridcraft_model::Workbook) -> usize {
+    wb.preserved.as_ref().map_or(0, |p| p.byte_len()) + wb.sheets.iter().filter_map(|s| s.preserved.as_ref()).map(|p| p.byte_len()).sum::<usize>()
+}
+
+#[test]
+fn pivot_tables_on_the_data_model_and_a_connection_survive_a_save() {
+    let (wb, rep) = read_xlsx(&conn_pivot_package(CONN_PKG)).unwrap();
+    assert!(wb.sheets.iter().all(|s| s.pivots.is_empty()), "not modelled: GridCraft can't refresh them");
+    assert!(rep.warnings.iter().any(|w| w.contains("OnModel") && w.contains("Data Model")), "{:?}", rep.warnings);
+    assert!(rep.warnings.iter().any(|w| w.contains("OnConnection") && w.contains("a data connection")), "{:?}", rep.warnings);
+    assert!(rep.warnings.iter().any(|w| w.contains("Data Model is kept")), "{:?}", rep.warnings);
+    assert!(!rep.warnings.iter().any(|w| w.contains("dropped") || w.contains("plain cells")), "{:?}", rep.warnings);
+    // Twice: what the first save kept is read back and kept again.
+    let first = write_xlsx(&wb).unwrap();
+    let (again, rep2) = read_xlsx(&first).unwrap();
+    assert!(!rep2.warnings.iter().any(|w| w.contains("dropped") || w.contains("plain cells")), "{:?}", rep2.warnings);
+    for saved in [first, write_xlsx(&again).unwrap()] {
+        let u = Unpacked::new(&saved);
+        u.assert_valid();
+        // The Data Model: same bytes, name and content type, related from the workbook.
+        assert_eq!(u.parts.get("xl/model/item.data").map(Vec::as_slice), Some(MODEL_DATA));
+        assert_eq!(content_type_of(&u, "xl/model/item.data"), CT_MODEL);
+        let wb_rels = u.rels("xl/workbook.xml");
+        assert!(wb_rels.iter().any(|r| r.1.ends_with("/powerPivotData") && r.2 == "xl/model/item.data"), "{wb_rels:?}");
+        // The connections the caches name by id, and the hidden name a worksheet connection uses.
+        let conn = wb_rels.iter().find(|r| r.1.ends_with("/connections")).unwrap();
+        assert_eq!(u.text(&conn.2), MODEL_CONNECTIONS);
+        assert!(u.text("xl/workbook.xml").contains("_xlcn.WorksheetConnection_T"));
+        let caches = written_pivot_caches(&u);
+        assert_eq!(caches.len(), 2, "{caches:?}");
+        let cache = |id: &str| caches.iter().find(|c| c.0 == id).unwrap_or_else(|| panic!("{caches:?}")).1.clone();
+        assert_eq!(u.text(&cache("3")), model_cache(1));
+        assert!(u.rels(&cache("3")).is_empty());
+        assert_eq!(u.text(&cache("4")), conn_cache(2));
+        let records = u.rels(&cache("4")).into_iter().find(|r| r.1.ends_with("/pivotCacheRecords")).unwrap();
+        assert_eq!(u.text(&records.2), CONN_RECORDS);
+        for (sheet, name, id) in [("Report", "OnModel", "3"), ("More", "OnConnection", "4")] {
+            let t = written_pivot_tables(&u, sheet);
+            assert_eq!(t.len(), 1, "{sheet}");
+            assert_eq!(u.rels(&t[0])[0].2, cache(id), "{sheet}");
+            let x = u.text(&t[0]);
+            assert!(x.contains(&format!(r#"name="{name}" cacheId="{id}""#)), "{x}");
+            let (color, code) = written_style(&u, &attr_of(&x, "format", "dxfId"), &attr_of(&x, "dataField", "numFmtId"));
+            assert_eq!((color.as_str(), code.as_str()), ("FF0000FF", "0.0%"), "{x}");
+        }
+    }
+}
+
+#[test]
+fn the_data_model_is_kept_without_pivot_tables() {
+    let (mut wb, _) = read_xlsx(&conn_pivot_package(CONN_PKG)).unwrap();
+    wb.sheets.iter_mut().for_each(|s| Arc::make_mut(s).preserved = None);
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    assert_eq!(u.parts.get("xl/model/item.data").map(Vec::as_slice), Some(MODEL_DATA));
+    // No kept table uses the caches any more: they go.
+    assert!(written_pivot_caches(&u).is_empty());
+    assert!(u.find(model_cache(1).as_bytes()).is_empty() && u.find(CONN_RECORDS.as_bytes()).is_empty());
+}
+
+#[test]
+fn data_model_pivot_tables_without_the_model_are_kept_as_plain_cells() {
+    // No model part, or no room left to keep it: the PivotTable on the model couldn't be
+    // refreshed and is dropped (its cells stay); the one on a plain connection is kept.
+    for too_large in [false, true] {
+        let pkg = ConnPkg { model_part: too_large, big_model: too_large, ..CONN_PKG };
+        let src = conn_pivot_package(pkg);
+        let (wb, rep) = if too_large {
+            // Room for everything but the model: the caches are kept after it.
+            let all = kept_bytes(&read_xlsx(&src).unwrap().0);
+            crate::passthrough::KEPT_TOTAL_FOR_TEST.with(|c| c.set(all - BIG_MODEL.len()));
+            let read = read_xlsx(&src);
+            crate::passthrough::KEPT_TOTAL_FOR_TEST.with(|c| c.set(crate::passthrough::MAX_KEPT_TOTAL));
+            let r = read.unwrap();
+            assert!(r.1.warnings.iter().any(|w| w.contains("Data Model was dropped") && w.contains("too large")), "{:?}", r.1.warnings);
+            r
+        } else {
+            read_xlsx(&src).unwrap()
+        };
+        let w = &rep.warnings;
+        assert!(
+            w.iter().any(|w| w.contains("1 PivotTable cache(s) on the workbook's Data Model were dropped") && w.contains("plain cells")),
+            "{w:?}"
+        );
+        let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+        u.assert_valid();
+        assert!(!u.parts.contains_key("xl/model/item.data"));
+        assert!(written_pivot_tables(&u, "Report").is_empty());
+        assert!(u.find(model_cache(1).as_bytes()).is_empty());
+        assert!(u.text(&sheet_part(&u, "Report")).contains("<v>5</v>"), "the report cells stay");
+        let caches = written_pivot_caches(&u);
+        assert_eq!(caches.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["4"], "{caches:?}");
+        assert_eq!(written_pivot_tables(&u, "More").len(), 1);
+    }
+}
+
+#[test]
+fn connection_pivot_tables_need_their_connections() {
+    // No connections part: the caches name connections that aren't there.
+    let (none, rep) = read_xlsx(&conn_pivot_package(ConnPkg { connections: false, ..CONN_PKG })).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("data connection is not in the workbook")), "{:?}", rep.warnings);
+    // A cache naming a connection id the part doesn't have; the other cache is unaffected.
+    let (missing, rep) = read_xlsx(&conn_pivot_package(ConnPkg { model_connection: 9, ..CONN_PKG })).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("data connection is not in the workbook")), "{:?}", rep.warnings);
+    // A connections part that can't be kept: the model and every connection cache go with it.
+    let (blocked, rep) = read_xlsx(&conn_pivot_package(ConnPkg { connections_blocked: true, ..CONN_PKG })).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("Data Model was dropped")), "{:?}", rep.warnings);
+    assert!(rep.warnings.iter().any(|w| w.contains("2 PivotTable cache(s)") && w.contains("connections were not kept")), "{:?}", rep.warnings);
+    for (wb, all_gone) in [(none, true), (blocked, true), (missing, false)] {
+        let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+        u.assert_valid();
+        assert!(written_pivot_tables(&u, "Report").is_empty());
+        assert!(u.text(&sheet_part(&u, "Report")).contains("<v>5</v>"));
+        if all_gone {
+            assert!(written_pivot_tables(&u, "More").is_empty());
+            assert!(written_pivot_caches(&u).is_empty());
+            assert!(!u.parts.contains_key("xl/model/item.data"));
+        } else {
+            assert_eq!(written_pivot_tables(&u, "More").len(), 1);
+        }
+    }
+}

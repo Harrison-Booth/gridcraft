@@ -594,7 +594,7 @@ fn cond_format_list(s: &Sheet) -> Vec<String> {
 }
 
 /// The sheet's PivotTables: those modelled, and those kept unchanged for saving (their source is
-/// in another workbook).
+/// in another workbook, a data connection or the Data Model).
 fn pivot_count(s: &Sheet) -> usize {
     let kept = s.preserved.as_deref().map_or(0, |p| p.rels.iter().filter(|r| !r.external && r.rel_type.ends_with("/pivotTable")).count());
     s.pivots.len() + kept

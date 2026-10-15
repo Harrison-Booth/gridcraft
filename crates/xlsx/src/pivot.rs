@@ -12,9 +12,12 @@
 //! (OLAP sources, calculated fields, numeric grouping…) becomes a warning.
 //!
 //! A PivotTable whose source is a range or name in another workbook (its cache's
-//! `worksheetSource` has an `r:id` to an `externalLinkPath` relationship) is not modelled:
-//! GridCraft never opens the other workbook, so it couldn't refresh it. [`read_pivots`] reports
-//! it instead, and `passthrough` keeps its PivotTable, cache and records parts unchanged.
+//! `worksheetSource` has an `r:id` to an `externalLinkPath` relationship), a data connection or
+//! the workbook's Data Model (`cacheSource type="external"` with a `connectionId` in
+//! `xl/connections.xml`) is not modelled: GridCraft never opens the other workbook, runs the
+//! connection or loads the model, so it couldn't refresh it. [`read_pivots`] reports it instead,
+//! and `passthrough` keeps its PivotTable, cache and records parts unchanged (with the Data Model
+//! for a PivotTable on the model).
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -1079,17 +1082,40 @@ impl FieldIn {
 struct CacheIn {
     source: String,
     fields: Vec<FieldIn>,
-    /// The source is in another workbook: the PivotTables on this cache are kept, not modelled.
-    external: bool,
+    /// Set when the PivotTables on this cache are kept as they are, not modelled.
+    kept: Option<KeptSource>,
 }
 
-/// A PivotTable whose source is in another workbook, kept unchanged for saving.
+/// Where the data of a PivotTable GridCraft keeps unchanged (doesn't model) comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeptSource {
+    /// A range or name in another workbook.
+    OtherWorkbook,
+    /// A data connection of the workbook (`xl/connections.xml`) other than its Data Model.
+    Connection,
+    /// The workbook's Data Model (Power Pivot), through its model connection.
+    DataModel,
+}
+
+impl KeptSource {
+    pub(crate) fn describe(self) -> &'static str {
+        match self {
+            KeptSource::OtherWorkbook => "another workbook",
+            KeptSource::Connection => "a data connection",
+            KeptSource::DataModel => "the workbook's Data Model",
+        }
+    }
+}
+
+/// A PivotTable GridCraft doesn't model (its data is in another workbook, a data connection or
+/// the Data Model), kept unchanged for saving.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ExternalPivot {
     /// The id of the sheet's relationship to the PivotTable part.
     pub rel_id: String,
     /// The pivot cache definition part it uses.
     pub cache_part: String,
+    pub source: KeptSource,
 }
 
 /// The PivotTables of a sheet: those modelled, and those kept as they are.
@@ -1105,6 +1131,8 @@ pub struct CachesIn {
     by_id: HashMap<u32, String>,
     parsed: HashMap<String, Option<CacheIn>>,
     next_id: u32,
+    /// The workbook's data connections (`connectionId` → whether it is the Data Model's).
+    connections: HashMap<u32, bool>,
 }
 
 impl CachesIn {
@@ -1119,9 +1147,27 @@ impl CachesIn {
                 }
             }
         }
-        CachesIn { by_id, parsed: HashMap::new(), next_id: 1 }
+        CachesIn { by_id, parsed: HashMap::new(), next_id: 1, connections: HashMap::new() }
+    }
+
+    /// Reads the ids of the workbook's data connections (`xl/connections.xml`), which caches on a
+    /// connection or the Data Model name by `connectionId`.
+    pub fn read_connections(&mut self, cx: &mut Ctx<'_>, wb_rels: &[crate::package::Rel]) {
+        let Some(r) = wb_rels.iter().find(|r| r.kind == "connections" && !r.external) else { return };
+        let Ok(Some(x)) = cx.optional_xml(&r.target) else { return };
+        for c in x.kids("connection").take(MAX_CONNECTIONS) {
+            let Some(id) = c.attr_u32("id") else { continue };
+            // The model connection: `<x15:connection model="1">` in its extension list (Excel
+            // also gives it `<dbPr command="Model">`).
+            let x15_model = c.child("extLst").is_some_and(|l| l.kids("ext").filter_map(|e| e.child("connection")).any(|x| x.flag("model", false)));
+            let dbpr_model = c.attr("type") == Some("5") && c.child("dbPr").and_then(|d| d.attr("command")) == Some("Model");
+            self.connections.insert(id, x15_model || dbpr_model);
+        }
     }
 }
+
+/// Most data connections read from `xl/connections.xml`.
+const MAX_CONNECTIONS: usize = 100_000;
 
 fn item_label_el(e: &El, sys: DateSystem) -> String {
     let v = e.attr("v").unwrap_or("");
@@ -1134,7 +1180,7 @@ fn item_label_el(e: &El, sys: DateSystem) -> String {
     }
 }
 
-fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn> {
+fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str, connections: &HashMap<u32, bool>) -> Option<CacheIn> {
     let x = cx.optional_xml(part).ok().flatten()?;
     if x.name != "pivotCacheDefinition" {
         cx.warn(format!("{part} is not a pivot cache definition; its PivotTable was kept as plain cells"));
@@ -1142,8 +1188,19 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
     }
     let src = x.child("cacheSource");
     let ty = src.and_then(|s| s.attr("type")).unwrap_or("worksheet");
+    // A data connection or the Data Model (OLAP): kept as it is when the workbook has that
+    // connection.
+    if ty == "external" {
+        let model = src.and_then(|s| s.attr_u32("connectionId")).and_then(|id| connections.get(&id).copied());
+        let Some(model) = model else {
+            cx.warn("a PivotTable's data connection is not in the workbook; kept as plain cells");
+            return None;
+        };
+        let kept = if model { KeptSource::DataModel } else { KeptSource::Connection };
+        return Some(CacheIn { source: String::new(), fields: vec![], kept: Some(kept) });
+    }
     if ty != "worksheet" {
-        cx.warn(format!("PivotTables with a {ty} data source are not supported; kept as plain cells"));
+        cx.warn(format!("PivotTables with a data source of type \"{ty}\" are not supported; kept as plain cells"));
         return None;
     }
     let ws = src.and_then(|s| s.child("worksheetSource"));
@@ -1154,7 +1211,7 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
             cx.warn("a PivotTable's source is in another workbook that its cache doesn't name; kept as plain cells");
             return None;
         }
-        return Some(CacheIn { source: String::new(), fields: vec![], external: true });
+        return Some(CacheIn { source: String::new(), fields: vec![], kept: Some(KeptSource::OtherWorkbook) });
     }
     let source = match ws {
         Some(w) if w.attr("name").is_some_and(|n| !n.trim().is_empty()) => w.attr("name").unwrap_or("").trim().to_string(),
@@ -1202,11 +1259,12 @@ fn read_cache(cx: &mut Ctx<'_>, part: &str, sheet_name: &str) -> Option<CacheIn>
         cx.warn("a PivotTable's cache has no fields; kept as plain cells");
         return None;
     }
-    Some(CacheIn { source, fields, external: false })
+    Some(CacheIn { source, fields, kept: None })
 }
 
-/// Reads the PivotTables related to a worksheet part. Those whose source is in another workbook
-/// are listed in [`SheetPivots::external`] (with a warning), not modelled.
+/// Reads the PivotTables related to a worksheet part. Those whose source is in another workbook,
+/// a data connection or the Data Model are listed in [`SheetPivots::external`] (with a warning),
+/// not modelled.
 pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sheet_name: &str) -> Result<SheetPivots, IoError> {
     let rels = cx.pkg.rels(sheet_part)?;
     let mut out = SheetPivots::default();
@@ -1230,18 +1288,19 @@ pub fn read_pivots(cx: &mut Ctx<'_>, caches: &mut CachesIn, sheet_part: &str, sh
         let cache = match caches.parsed.get(&cache_part) {
             Some(c) => c.clone(),
             None => {
-                let c = read_cache(cx, &cache_part, sheet_name);
+                let c = read_cache(cx, &cache_part, sheet_name, &caches.connections);
                 caches.parsed.insert(cache_part.clone(), c.clone());
                 c
             }
         };
         let Some(cache) = cache else { continue };
-        if cache.external {
+        if let Some(source) = cache.kept {
             let name = x.attr("name").unwrap_or("");
+            let from = source.describe();
             cx.warn(format!(
-                "PivotTable \"{name}\" on sheet \"{sheet_name}\" gets its data from another workbook: it is kept for saving as it is, but can't be edited or refreshed here"
+                "PivotTable \"{name}\" on sheet \"{sheet_name}\" gets its data from {from}: it is kept for saving as it is, but can't be edited or refreshed here"
             ));
-            out.external.push(ExternalPivot { rel_id: rel.id.clone(), cache_part });
+            out.external.push(ExternalPivot { rel_id: rel.id.clone(), cache_part, source });
             continue;
         }
         if let Some(pt) = read_table(cx, &x, &cache, caches.next_id) {
