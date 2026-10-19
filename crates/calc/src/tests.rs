@@ -1444,3 +1444,31 @@ fn criteria_function_loops_iterate() {
     assert!((t.num("A1") - 10.0).abs() < 1e-4, "{}", t.num("A1"));
     assert!(t.calc.circular.is_empty());
 }
+
+#[test]
+fn median_large_values_recalculate_dependents() {
+    let mut t = T::new();
+    t.set("A1", "1e308");
+    t.set("A2", "1.6e308");
+    t.set("B1", "=MEDIAN(A1:A2)");
+    t.set("B2", "=AGGREGATE(12,0,A1:A2)");
+    t.set("C1", "=B1/1e308");
+    t.set("C2", "=B2/1e308");
+    for cell in ["B1", "B2"] {
+        assert!((t.num(cell) / 1e308 - 1.3).abs() < 1e-14);
+    }
+    for cell in ["C1", "C2"] {
+        assert!((t.num(cell) - 1.3).abs() < 1e-14);
+    }
+    t.set("A2", "-1e308");
+    for cell in ["B1", "B2", "C1", "C2"] {
+        assert_eq!(t.num(cell), 0.0);
+    }
+    t.set("A1", "-1.6e308");
+    for cell in ["B1", "B2"] {
+        assert!((t.num(cell) / 1e308 + 1.3).abs() < 1e-14);
+    }
+    for cell in ["C1", "C2"] {
+        assert!((t.num(cell) + 1.3).abs() < 1e-14);
+    }
+}
