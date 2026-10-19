@@ -831,6 +831,10 @@ fn remove_duplicates(s: &mut Session, p: &Json) -> Result<Json> {
         for c in RangeRef::new(CellRef::new(start, r.start.col), r.end).iter() {
             cx.changed.push((sheet, c));
         }
+        if removed > 0 {
+            // Rows moved up: like Sort, request a full recalculation.
+            cx.structural = true;
+        }
         Ok(())
     })?;
     let remaining = (r.end.row + 1 - start) as usize - removed;
