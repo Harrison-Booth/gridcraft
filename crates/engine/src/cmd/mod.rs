@@ -385,15 +385,29 @@ fn round_edited_as_displayed(old: &Workbook, wb: &mut Workbook, changed: &mut Ve
             continue;
         }
         let mut updates = Vec::new();
-        for c in before.cells.diff(&after.cells) {
+        let diffs = before.cells.diff(&after.cells);
+        let mut anchors = std::collections::HashSet::new();
+        for &c in &diffs {
             let Some(cell) = after.cell(c) else { continue };
             if cell.formula.is_some() {
                 changed.push((si, c));
+                anchors.insert(c);
             } else if let gridcraft_core::Value::Number(n) = cell.value {
                 let r = prec.round(wb, si, c, n);
                 if r.to_bits() != n.to_bits() {
                     updates.push((c, r));
                 }
+            }
+        }
+        // A spill destination is no stored cell: reformatting it (or its row or column) leaves
+        // no change in the store, so its anchor is recalculated to round the new element.
+        for (&anchor, range) in &after.spill_ranges {
+            if !anchors.contains(&anchor)
+                && (diffs.iter().any(|d| range.contains(*d))
+                    || line_styles_differ(&before.rows, &after.rows, range.start.row, range.end.row)
+                    || line_styles_differ(&before.cols, &after.cols, range.start.col, range.end.col))
+            {
+                changed.push((si, anchor));
             }
         }
         if updates.is_empty() {
@@ -407,6 +421,17 @@ fn round_edited_as_displayed(old: &Workbook, wb: &mut Workbook, changed: &mut Ve
             }
         }
     }
+}
+
+/// Whether any row or column style in `lo..=hi` differs between two sheets' line maps.
+fn line_styles_differ(
+    before: &std::collections::BTreeMap<u32, gridcraft_model::LineInfo>,
+    after: &std::collections::BTreeMap<u32, gridcraft_model::LineInfo>,
+    lo: u32,
+    hi: u32,
+) -> bool {
+    let style = |m: &std::collections::BTreeMap<u32, gridcraft_model::LineInfo>, k: u32| m.get(&k).and_then(|l| l.style);
+    after.range(lo..=hi).any(|(k, l)| l.style != style(before, *k)) || before.range(lo..=hi).any(|(k, l)| l.style != style(after, *k))
 }
 
 /// Turning "Set precision as displayed" on rounds every number constant in the workbook to its

@@ -3368,6 +3368,30 @@ fn precision_as_displayed_option() {
     assert_eq!((num(&s, "A1"), num(&s, "A3")), (5.43, 7.0 / 3.0));
 }
 
+/// Reformatting a cell a dynamic array spills into rounds that element as displayed: the cell
+/// holds no stored value (the spill lives in `Sheet::spill`), so the edit changes only its
+/// style, and the anchor must be recalculated for the element to be rounded.
+#[test]
+fn precision_as_displayed_rounds_a_reformatted_spill_cell() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "F1", "input": "=SEQUENCE(3,1,0.123,0.111)"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    s.execute("cell.set", json!({"cell": "G1", "input": "=SUM(F1:F3)"})).unwrap();
+    let (f2, f3) = (0.123 + 0.111, 0.123 + 0.111 * 2.0);
+    assert_eq!((num(&s, "F1"), num(&s, "F2"), num(&s, "F3")), (0.123, f2, f3));
+    // Formatting a spill destination (the anchor is not in the edit) rounds just that element.
+    s.execute("home.numberFormat", json!({"range": "F2", "code": "0.0"})).unwrap();
+    assert_eq!((num(&s, "F1"), num(&s, "F2"), num(&s, "F3")), (0.123, 0.2, f3));
+    assert_eq!(num(&s, "G1"), 0.123 + 0.2 + f3);
+    // A range covering anchor and spill, and a whole column, round every element.
+    s.execute("home.numberFormat", json!({"range": "F:F", "code": "0.00"})).unwrap();
+    assert_eq!((num(&s, "F1"), num(&s, "F2"), num(&s, "F3")), (0.12, 0.23, 0.35));
+    assert_eq!(num(&s, "G1"), 0.12 + 0.23 + 0.35);
+    // Formatting a cell that no spill covers changes nothing.
+    s.execute("home.numberFormat", json!({"range": "F4", "code": "0.0"})).unwrap();
+    assert_eq!(num(&s, "F3"), 0.35);
+}
 #[test]
 fn csv_as_text_keeps_identifier_columns_as_written() {
     let csv = "gtin,zip,flag,day\n8435392892278,01234,TRUE,2026-03-04\n";
