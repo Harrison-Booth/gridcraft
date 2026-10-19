@@ -302,7 +302,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let mut legacy_cell = None;
             let array = dynamic.get(c).copied().or_else(|| {
                 let f = cell?.formula.as_ref().filter(|f| f.array.is_none())?;
-                match crate::array_formula::export(wb, si, *c, f, out.functions) {
+                match crate::array_formula::export(wb, si, *c, f, out.functions, &mut out.names) {
                     crate::array_formula::Export::Unchanged => None,
                     crate::array_formula::Export::Dynamic => Some(RangeRef::cell(*c)),
                     // Every `@` is one Excel implies in a legacy formula: write it without them.

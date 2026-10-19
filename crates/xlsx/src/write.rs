@@ -128,6 +128,8 @@ pub struct Out {
     pub kept: crate::passthrough::KeptOut,
     /// Decides which formulas need dynamic-array metadata.
     pub functions: FunctionInfo,
+    /// Defined names analysed for implicit intersection, shared by every formula written.
+    pub(crate) names: crate::array_formula::NameCache,
 }
 
 impl Out {
@@ -214,6 +216,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Res
         cell_pictures: Default::default(),
         kept: Default::default(),
         functions,
+        names: Default::default(),
     };
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
     out.default_type("xml", "application/xml");

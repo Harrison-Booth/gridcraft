@@ -77,7 +77,6 @@ PIVOTBY, REGEXTEST…) are all present.
 | Defined names (workbook and sheet scope), Create from Selection | done |
 | Dynamic arrays, spill, `#SPILL!`, spill operator `A1#` | done; stale-spill bugs (#133, #139; PRs #148, #157) |
 | Recalculation after clearing large sparse ranges | every stored cell changed by Clear is reported to recalculation, without a million-coordinate cutoff; removed formula spills are cleared, and removing empty merges still unblocks spills (#1032) |
-| Implicit intersection `@`, legacy CSE array formulas | done; legacy array range fill (PR #156) |
 | Implicit intersection `@`, legacy CSE array formulas | done; legacy array range fill (PR #156). Formulas saved without dynamic-array metadata (pre-dynamic-array Excel, or no `@` needed) open with Excel's implicit `@` inserted where a range meets a single-value parameter, operator or the cell result, and calculate like Excel's cached values (cells differing from Excel's cached value: FormulaEvalTestData 205 → 11, StructuredReferences 2 → 0). T reads a reference's top-left cell |
 | Trim references `A1:.E10` (trailing), `A1.:E10` (leading), `A1.:.E10` (both), also on whole rows/columns (`A:.A`) | done; evaluated as `TRIMRANGE(range, code, code)`, adjusted on insert/delete; files store `_xlfn.TRIMRANGE(range,code,code)` (Excel's own file spelling unconfirmed in public docs), `_xlfn._TRO_ALL/_TRO_LEADING/_TRO_TRAILING(...)` read too |
 | LET, LAMBDA, named LAMBDAs, ISOMITTED, MAP/REDUCE/SCAN/BYROW/BYCOL/MAKEARRAY | done |
