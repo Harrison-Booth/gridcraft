@@ -286,3 +286,18 @@ fn combo_charts_write_vary_colors_on_the_first_group_only() {
     assert!(x.contains("<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>"));
     assert_eq!(back[0].vary_colors, Some(true));
 }
+
+#[test]
+fn repeated_indices_do_not_use_up_the_point_cap() {
+    // Thousands of entries for index 0, then a distinct point: the cap counts distinct indices,
+    // so the later point is kept.
+    let mut dpts = String::new();
+    for _ in 0..(crate::chart::MAX_POINT_FORMATS + 904) {
+        dpts.push_str("<c:dPt><c:idx val=\"0\"/><c:spPr><a:solidFill><a:srgbClr val=\"FF0000\"/></a:solidFill></c:spPr></c:dPt>");
+    }
+    dpts.push_str("<c:dPt><c:idx val=\"7\"/><c:spPr><a:solidFill><a:srgbClr val=\"00FF00\"/></a:solidFill></c:spPr></c:dPt>");
+    let c =
+        read_group(&format!("<c:pieChart><c:varyColors val=\"1\"/><c:ser><c:idx val=\"0\"/><c:order val=\"0\"/>{dpts}{VAL}</c:ser></c:pieChart>"));
+    let idx: Vec<u32> = c.series[0].points.iter().map(|p| p.index).collect();
+    assert_eq!(idx, vec![0, 7]);
+}

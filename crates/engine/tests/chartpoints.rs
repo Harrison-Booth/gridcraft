@@ -87,3 +87,20 @@ fn bad_point_parameters_are_errors_not_panics() {
     assert!(chart(&s).series.iter().all(|x| x.points.len() <= 1));
     assert!(s.execute("chart.formatSelection", json!({})).is_ok());
 }
+
+#[test]
+fn chart_wide_and_series_settings_leave_a_named_point_alone() {
+    let mut s = session();
+    s.execute("chart.formatSelection", json!({"series": 1, "point": 2, "color": "#FF0000"})).unwrap();
+    // varyColors with a point named is a chart-wide setting: the point keeps its fill.
+    s.execute("chart.formatSelection", json!({"series": 1, "point": 2, "varyColors": true})).unwrap();
+    assert_eq!(chart(&s).series[1].points.len(), 1);
+    assert_eq!(chart(&s).vary_colors, Some(true));
+    // invertColor with a point named is a series setting: it is applied and the point stays.
+    s.execute("chart.formatSelection", json!({"series": 1, "point": 2, "invertColor": "#FFFF00"})).unwrap();
+    assert_eq!(chart(&s).series[1].invert_color, Some(Color::Rgb(0xFFFF00)));
+    assert_eq!(chart(&s).series[1].points.len(), 1);
+    // With no other setting the call still resets the point to Match Style.
+    s.execute("chart.formatSelection", json!({"series": 1, "point": 2})).unwrap();
+    assert!(chart(&s).series[1].points.is_empty());
+}

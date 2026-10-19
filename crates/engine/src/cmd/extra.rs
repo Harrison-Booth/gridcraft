@@ -585,9 +585,18 @@ fn format_series(s: &mut Session, p: &Json) -> Result<Json> {
             || marker_line.is_some()
             || explosion.is_some()
             || invert.is_some();
-        if reset || !any {
+        // `invertColor` is a series setting, so it applies even when a point is named.
+        if let Some(v) = invert_color {
+            se.invert_color = v;
+        }
+        let series_level = vary.is_some() || invert_color.is_some();
+        if reset || (!any && !series_level) {
             // Reset to Match Style.
             se.points.retain(|x| x.index != pi);
+            return Ok(());
+        }
+        if !any {
+            // Only chart-wide or series-level settings were given: leave the point as it is.
             return Ok(());
         }
         let Some(dp) = se.point_mut(pi) else { return Ok(()) };

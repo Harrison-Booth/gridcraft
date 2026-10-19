@@ -160,25 +160,31 @@ fn read_marker(m: &El) -> Option<MarkerFormat> {
 /// nothing GridCraft models (Excel echoes the series' invertIfNegative into every bar point)
 /// are dropped.
 fn read_points(s: &El, series_invert: bool) -> Vec<DataPoint> {
-    let mut out: Vec<DataPoint> = s
-        .kids("dPt")
-        .filter_map(|d| {
-            let index = d.child("idx").and_then(|i| i.attr_u32("val"))?;
-            let (fill, line) = sp_colors(d.child("spPr"));
-            let p = DataPoint {
-                index,
-                fill,
-                line,
-                marker: d.child("marker").and_then(read_marker),
-                explosion: d.child("explosion").and_then(|e| e.attr_u32("val")).map(|v| v.min(400)),
-                invert_if_negative: d.child("invertIfNegative").map(|c| c.flag("val", true)).filter(|v| *v != series_invert),
-            };
-            (p != DataPoint { index, ..Default::default() }).then_some(p)
-        })
-        .take(MAX_POINT_FORMATS)
-        .collect();
+    // The cap counts distinct point indices, so repeated `dPt` entries for one index can't use it up.
+    // The first entry for an index wins.
+    let mut seen = std::collections::HashSet::new();
+    let mut out: Vec<DataPoint> = Vec::new();
+    for d in s.kids("dPt") {
+        let Some(index) = d.child("idx").and_then(|i| i.attr_u32("val")) else { continue };
+        let (fill, line) = sp_colors(d.child("spPr"));
+        let p = DataPoint {
+            index,
+            fill,
+            line,
+            marker: d.child("marker").and_then(read_marker),
+            explosion: d.child("explosion").and_then(|e| e.attr_u32("val")).map(|v| v.min(400)),
+            invert_if_negative: d.child("invertIfNegative").map(|c| c.flag("val", true)).filter(|v| *v != series_invert),
+        };
+        if p == (DataPoint { index, ..Default::default() }) || seen.contains(&index) {
+            continue;
+        }
+        if seen.len() >= MAX_POINT_FORMATS {
+            break;
+        }
+        seen.insert(index);
+        out.push(p);
+    }
     out.sort_by_key(|p| p.index);
-    out.dedup_by_key(|p| p.index);
     out
 }
 
