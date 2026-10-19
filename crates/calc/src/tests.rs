@@ -1349,6 +1349,34 @@ fn criteria_functions_selecting_their_dependents_are_circular() {
     }
 }
 
+/// Criteria arrays of different lengths are lifted together: the shorter one reads `#N/A` where
+/// it ends, and a criterion of `#N/A` selects the `#N/A` cells there, so the cells it selects are
+/// read (and count for circular references) even though no element of the array names `#N/A`.
+#[test]
+fn criteria_arrays_padded_with_na_still_select_na_cells() {
+    // `{"x","y","z"}` with `{1,2}`: the third position is `"z"` and `#N/A`.
+    let base = [("B1", "5"), ("B2", "z"), ("C2", "y"), ("D2", "x"), ("B3", "=NA()"), ("C3", "1"), ("D3", "2")];
+    let formula = "=SUM(SUMIFS(B1:D1,B2:D2,{\"x\",\"y\",\"z\"},B3:D3,{1,2}))";
+    let mut cells = base.to_vec();
+    cells.push(("A1", formula));
+    let (value, circular) = calc_cells(&cells);
+    assert_eq!(value, Value::Number(5.0), "{formula}");
+    assert!(!circular);
+    // The selected sum cell refers back to the formula: a real circular reference.
+    let mut cells = base.to_vec();
+    cells.retain(|(at, _)| *at != "B1");
+    cells.extend([("B1", "=A1*2"), ("A1", formula)]);
+    let (_, circular) = calc_cells(&cells);
+    assert!(circular, "{cells:?}");
+    // Equal-length arrays pad nothing, so the `#N/A` cell is not read.
+    let mut cells = base.to_vec();
+    cells.retain(|(at, _)| *at != "B1");
+    cells.extend([("B1", "=A1*2"), ("A1", "=SUM(SUMIFS(B1:D1,B2:D2,{\"x\",\"y\",\"z\"},B3:D3,{1,2,3}))")]);
+    let (value, circular) = calc_cells(&cells);
+    assert_eq!(value, Value::Number(0.0));
+    assert!(!circular);
+}
+
 /// Reading only the selected cells doesn't change results: references give what the same values
 /// as array constants give (the usual path), errors in unselected cells included.
 #[test]

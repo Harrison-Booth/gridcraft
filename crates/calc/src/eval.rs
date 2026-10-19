@@ -930,6 +930,10 @@ impl<'h> Evaluator<'h> {
         // SUMIF's sum range has the criteria range's size, cut off at the sheet's edge.
         let sized = ranges.iter().all(|(i, _, r)| (resize && Some(*i) == target) || (r.height() as usize, r.width() as usize) == (h, w));
         let single_pair = pairs.len() == 1;
+        // Criteria arrays of different lengths are lifted together and the shorter one reads
+        // `#N/A` where it ends, which selects the `#N/A` cells there.
+        let criteria_values: Vec<&Value> = pairs.iter().filter_map(|&i| evaluated.get(i + 1)).map(|a| &a.value).collect();
+        let pads_na = gridcraft_functions::lifting_pads_na(&criteria_values);
         let mut selected = vec![sized; h.saturating_mul(w)];
         for (k, &(i, area, extent)) in ranges.iter().enumerate() {
             let (rh, rw) = (extent.height() as usize, extent.width() as usize);
@@ -952,7 +956,7 @@ impl<'h> Evaluator<'h> {
                 && Some(i) != target
                 && let Some(criteria) = evaluated.get(i + 1)
             {
-                let filter = gridcraft_functions::CriteriaFilter::new(&criteria.value, single_pair);
+                let filter = gridcraft_functions::CriteriaFilter::new(&criteria.value, single_pair, pads_na);
                 for (s, v) in selected.iter_mut().zip(data.iter()) {
                     if *s && !filter.selects(v) {
                         *s = false;
