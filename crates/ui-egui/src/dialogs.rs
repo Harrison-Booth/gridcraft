@@ -2253,7 +2253,11 @@ fn manage_rules(app: &mut SheetApp, ui: &mut egui::Ui) {
 /// highlighted, Up/Down move the highlight, Enter or a click runs it and closes the box. A command
 /// that asks for its dialog opens it, as from the ribbon.
 fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let r = ui.add(egui::TextEdit::singleline(&mut d.search).desired_width(480.0).hint_text("Search for a command, e.g. freeze, chart, bold…"));
+    let r = ui.add(
+        egui::TextEdit::singleline(&mut d.search)
+            .desired_width(480.0)
+            .hint_text(app.ui.language.tr("Search for a command, e.g. freeze, chart, bold…")),
+    );
     r.request_focus();
     if r.changed() {
         d.list_index = 0;
@@ -2299,8 +2303,7 @@ fn command_search(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm
     if *confirm && let Some(c) = cmds.get(d.list_index) {
         let id = c.id;
         app.dialog = None;
-        app.remember_command(id);
-        app.run_or_alert(id, json!({}));
+        app.run_searched_command(ui.ctx(), id);
     }
 }
 

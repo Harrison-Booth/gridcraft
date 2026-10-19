@@ -588,6 +588,8 @@ const JAPANESE: &[(&str, &str)] = &[
     ("Workbook calculation", "ブックの計算"),
     ("Enable iterative calculation", "反復計算を行う"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    ("Search commands (Alt+Q)", "コマンドを検索 (Alt+Q)"),
+    ("Search for a command, e.g. freeze, chart, bold…", "コマンドを検索 (例: ウィンドウ枠の固定、グラフ、太字)…"),
 ];
 
 #[cfg(test)]
@@ -645,6 +647,16 @@ mod tests {
         assert_eq!(Language::Sr.tr("Page Layout|Orientation"), "Orijentacija");
         assert_eq!(Language::Sr.tr("Orientation"), "Orijentacija");
         assert_eq!(Language::parse("xx"), None);
+    }
+
+    #[test]
+    fn the_command_search_texts_are_translated_in_every_language() {
+        for text in ["Search commands (Alt+Q)", "Search for a command, e.g. freeze, chart, bold…"] {
+            assert_eq!(Language::En.tr(text), text);
+            for language in Language::ALL.into_iter().filter(|l| *l != Language::En) {
+                assert_ne!(language.tr(text), text, "{} lacks a translation of {text}", language.code());
+            }
+        }
     }
 
     #[test]

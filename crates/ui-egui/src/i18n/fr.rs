@@ -410,6 +410,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Workbook calculation" => "Calcul du classeur",
         "Enable iterative calculation" => "Activer le calcul itératif",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        "Search commands (Alt+Q)" => "Rechercher des commandes (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Rechercher une commande, p. ex. figer, graphique, gras…",
         _ => return None,
     })
 }

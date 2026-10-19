@@ -220,3 +220,79 @@ fn plain_alt_still_shows_key_tips_and_alt_then_q_opens_the_search() {
     }
     assert!(bold(&h));
 }
+
+/// Like [`harness`], with host services and A1 selected.
+fn harness_with(services: gridcraft_ui_egui::Services) -> Harness {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("cell.set", json!({"cell": "A1", "input": "x"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_os(OperatingSystem::Windows).with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app: &mut SheetApp| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        },
+        SheetApp::new(s, services),
+    );
+    h.run_steps(4);
+    h
+}
+
+/// Searches for `query` and runs the result whose command id is `id`.
+fn run_id_from_search(h: &mut Harness, query: &str, id: &str) {
+    let hits = ui_search(h, query);
+    let at = hits.iter().position(|c| c["id"] == id).unwrap_or_else(|| panic!("{id} not offered for {query:?}: {hits:?}"));
+    run_from_search(h, query, at);
+}
+
+#[test]
+fn copy_and_cut_from_the_search_publish_to_the_system_clipboard() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    for (query, id) in [("copy", "edit.copy"), ("cut", "edit.cut")] {
+        let calls = Rc::new(RefCell::new(Vec::new()));
+        let received = calls.clone();
+        let mut h = harness_with(gridcraft_ui_egui::Services {
+            copy_html: Some(Box::new(move |_, text| {
+                received.borrow_mut().push(text.to_string());
+                Ok(())
+            })),
+            ..Default::default()
+        });
+        run_id_from_search(&mut h, query, id);
+        assert_eq!(calls.borrow().as_slice(), ["x\n".to_string()], "{id} reaches the host clipboard");
+        assert_eq!(h.state().recent_commands(), [id.to_string()], "{id} ran, so it is remembered");
+    }
+}
+
+#[test]
+fn paste_from_the_search_reads_the_system_clipboard() {
+    let mut h = harness_with(gridcraft_ui_egui::Services { paste_text: Some(Box::new(|| Some("from elsewhere".to_string()))), ..Default::default() });
+    run_id_from_search(&mut h, "paste", "edit.paste");
+    let cell = h.state_mut().session.run("cell.get", json!({"cell": "A1"})).unwrap();
+    let text = cell.to_string();
+    assert!(text.contains("from elsewhere"), "text copied in another application is pasted: {text}");
+    assert_eq!(h.state().recent_commands(), ["edit.paste".to_string()]);
+}
+
+#[test]
+fn a_command_that_fails_from_the_search_is_not_remembered() {
+    let mut h = harness();
+    // Nothing was copied, so Paste has nothing to paste.
+    run_id_from_search(&mut h, "paste", "edit.paste");
+    assert!(h.state().recent_commands().is_empty(), "a failed Paste is not a recent command");
+    // Printing with no printer available fails the same way.
+    run_id_from_search(&mut h, "print", "file.print");
+    assert!(h.state().recent_commands().is_empty(), "a failed Print is not a recent command");
+}
+
+#[test]
+fn a_successful_print_from_the_search_is_remembered() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let printed = Rc::new(Cell::new(0));
+    let seen = printed.clone();
+    let mut h = harness_with(gridcraft_ui_egui::Services { print: Some(Box::new(move |_| seen.set(seen.get() + 1))), ..Default::default() });
+    run_id_from_search(&mut h, "print", "file.print");
+    assert_eq!(printed.get(), 1, "the PDF reaches the host's print hook");
+    assert_eq!(h.state().recent_commands(), ["file.print".to_string()]);
+}

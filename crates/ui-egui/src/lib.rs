@@ -428,12 +428,20 @@ impl SheetApp {
     /// Copy or cut the selected cells to the system clipboard. Engine-only commands keep
     /// their existing internal clipboard behavior and do not write to the host clipboard.
     pub fn copy_to_clipboard(&mut self, ctx: &egui::Context, command: &str) {
+        self.copy_to_clipboard_ok(ctx, command);
+    }
+
+    /// [`Self::copy_to_clipboard`], telling whether the command ran (an error is alerted and is `false`).
+    fn copy_to_clipboard_ok(&mut self, ctx: &egui::Context, command: &str) -> bool {
         // Only ask the engine for HTML when the host can publish it.
         let result = match self.run_command(command, json!({"html": self.services.copy_html.is_some()})) {
             Ok(result) => result,
-            Err(e) => return self.alert(e),
+            Err(e) => {
+                self.alert(e);
+                return false;
+            }
         };
-        let Some(text) = result.get("text").and_then(Json::as_str) else { return };
+        let Some(text) = result.get("text").and_then(Json::as_str) else { return true };
         // The system clipboard gets this copy, so its text decides what Paste pastes.
         self.clipboard_text_at_copy = None;
         self.cut_text = (command == "edit.cut").then(|| text.replace("\r\n", "\n"));
@@ -441,11 +449,12 @@ impl SheetApp {
             && let Some(copy_html) = &mut self.services.copy_html
         {
             match copy_html(html, text) {
-                Ok(()) => return,
+                Ok(()) => return true,
                 Err(error) => log::warn!("HTML clipboard unavailable; copying plain text: {error}"),
             }
         }
         ctx.copy_text(text.to_string());
+        true
     }
 
     /// Paste text that came from the system clipboard (Cmd/Ctrl+V, or the ribbon and menu Paste),
@@ -456,9 +465,14 @@ impl SheetApp {
     /// clipboard is pasted instead, which reports "Nothing to paste.". Other text means the
     /// clipboard has moved on, so the cut's text is forgotten and pastes normally later.
     pub fn paste_external(&mut self, text: String) {
+        self.paste_external_ok(text);
+    }
+
+    /// [`Self::paste_external`], telling whether the paste ran.
+    fn paste_external_ok(&mut self, text: String) -> bool {
         if Self::same_clipboard_text(Some(&text), self.cut_text.as_deref()) {
             if self.session.clipboard.is_none() {
-                return self.run_or_alert("edit.paste", json!({}));
+                return self.run_or_alert_ok("edit.paste", json!({}));
             }
         } else {
             self.cut_text = None;
@@ -468,16 +482,21 @@ impl SheetApp {
             Some(html) => json!({"text": text, "html": html}),
             None => json!({"text": text}),
         };
-        self.run_or_alert("edit.paste", params);
+        self.run_or_alert_ok("edit.paste", params)
     }
 
     /// Ribbon and menu Paste: paste the text on the system clipboard, as Cmd/Ctrl+V does. With no
     /// text there, no host clipboard (web), or the text that was there when GridCraft last copied
     /// without publishing, GridCraft's own clipboard is pasted.
     pub fn paste_from_clipboard(&mut self) {
+        self.paste_from_clipboard_ok();
+    }
+
+    /// [`Self::paste_from_clipboard`], telling whether the paste ran.
+    fn paste_from_clipboard_ok(&mut self) -> bool {
         match self.system_clipboard_text() {
-            Some(text) if self.session.clipboard.is_none() || self.clipboard_text_at_copy.as_ref() != Some(&text) => self.paste_external(text),
-            _ => self.run_or_alert("edit.paste", json!({})),
+            Some(text) if self.session.clipboard.is_none() || self.clipboard_text_at_copy.as_ref() != Some(&text) => self.paste_external_ok(text),
+            _ => self.run_or_alert_ok("edit.paste", json!({})),
         }
     }
 
@@ -520,34 +539,59 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        self.run_or_alert_ok(id, params);
+    }
+
+    /// [`Self::run_or_alert`], telling whether the command ran: `false` when it failed (the error
+    /// is alerted) or was cancelled before it started.
+    fn run_or_alert_ok(&mut self, id: &str, params: Json) -> bool {
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
                 self.open_backstage(backstage::Page::Print);
-                return;
+                return true;
             }
-            return self.print_now(params);
+            return self.print_now_ok(params);
         }
         // Menu-style Export as PDF with no file named: ask where to save, like Save As does.
         // Programmatic callers use `run` and keep getting the PDF bytes back.
         if id == "file.exportPdf" && self.services.pick_save.is_some() && params.get("path").and_then(Json::as_str).is_none_or(str::is_empty) {
             return self.export_pdf_with_picker(params);
         }
-        if let Err(e) = self.run(id, params) {
-            self.alert(e);
+        match self.run(id, params) {
+            Ok(_) => true,
+            Err(e) => {
+                self.alert(e);
+                false
+            }
+        }
+    }
+
+    /// Runs `id` as the search box (Alt+Q) chose it, the way the ribbon would: Copy and Cut publish
+    /// to the system clipboard and Paste reads it. The command is remembered as recently used in
+    /// the workbook that was active when it was chosen, and only if it ran.
+    pub(crate) fn run_searched_command(&mut self, ctx: &egui::Context, id: &str) {
+        let uid = self.session.active().map(|d| d.uid).unwrap_or_default();
+        let ran = match id {
+            "edit.copy" | "edit.cut" => self.copy_to_clipboard_ok(ctx, id),
+            "edit.paste" => self.paste_from_clipboard_ok(),
+            _ => self.run_or_alert_ok(id, json!({})),
+        };
+        if ran {
+            self.remember_command_in(uid, id);
         }
     }
 
     /// Asks for a `.pdf` path with the save picker, then re-runs `file.exportPdf` with it. Other
     /// params (range, sheets, fitToPage) are kept. A cancelled picker does nothing.
-    fn export_pdf_with_picker(&mut self, mut params: Json) {
+    fn export_pdf_with_picker(&mut self, mut params: Json) -> bool {
         if !self.commit_edit(0, 0, false, false) {
-            return;
+            return false;
         }
         let title = self.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
         let stem = std::path::Path::new(&title).file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
-        let Some(pick) = &self.services.pick_save else { return };
-        let Some(path) = pick(&format!("{stem}.pdf")) else { return };
+        let Some(pick) = &self.services.pick_save else { return false };
+        let Some(path) = pick(&format!("{stem}.pdf")) else { return false };
         // The picker may suggest a workbook extension; the export writes a PDF.
         let path = std::path::Path::new(&path).with_extension("pdf").to_string_lossy().into_owned();
         match &mut params {
@@ -556,8 +600,12 @@ impl SheetApp {
             }
             other => *other = json!({"path": path}),
         }
-        if let Err(e) = self.run("file.exportPdf", params) {
-            self.alert(e);
+        match self.run("file.exportPdf", params) {
+            Ok(_) => true,
+            Err(e) => {
+                self.alert(e);
+                false
+            }
         }
     }
 
@@ -574,8 +622,17 @@ impl SheetApp {
     /// browser. Rendering errors use the usual alert; asynchronous spooler errors stay visible
     /// on the Print page. The engine command still returns PDF bytes without submitting.
     pub fn print_now(&mut self, params: Json) {
-        if let Err(error) = self.submit_print(params) {
-            self.alert(error);
+        self.print_now_ok(params);
+    }
+
+    /// [`Self::print_now`], telling whether the job was handed off.
+    fn print_now_ok(&mut self, params: Json) -> bool {
+        match self.submit_print(params) {
+            Ok(_) => true,
+            Err(error) => {
+                self.alert(error);
+                false
+            }
         }
     }
 
@@ -605,9 +662,8 @@ impl SheetApp {
         self.recent_commands.get(&uid).map(Vec::as_slice).unwrap_or_default()
     }
 
-    /// Notes `id` as just run from the search box in the active workbook.
-    pub(crate) fn remember_command(&mut self, id: &str) {
-        let uid = self.session.active().map(|d| d.uid).unwrap_or_default();
+    /// Notes `id` as just run from the search box in the workbook `uid`.
+    fn remember_command_in(&mut self, uid: u64, id: &str) {
         command_search::remember(self.recent_commands.entry(uid).or_default(), id);
     }
 

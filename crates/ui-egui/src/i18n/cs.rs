@@ -535,6 +535,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom Out" => "Oddálit",
         // widgets.rs (alphabetical keys).
         "Dismiss" => "Zavřít",
+        "Search for a command, e.g. freeze, chart, bold…" => "Vyhledejte příkaz, např. ukotvit, graf, tučné…",
         _ => return None,
     })
 }

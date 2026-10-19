@@ -423,6 +423,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Link…" => "Link…",
         "Hide" => "Ausblenden",
         "Unhide" => "Einblenden",
+        "Search commands (Alt+Q)" => "Befehle suchen (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Befehl suchen, z. B. fixieren, Diagramm, fett…",
         _ => return None,
     })
 }
