@@ -3382,6 +3382,54 @@ fn whole_column_paste_with_validation_works_on_ranges() {
     assert_eq!(v(&s, "F100"), Value::Text("old".into()));
 }
 
+/// Paste Link of whole columns links the cells the columns hold, wherever they start.
+#[test]
+fn paste_link_of_whole_columns_links_the_used_rows() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "C5", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C6", "input": "2"})).unwrap();
+    s.execute("edit.copy", json!({"range": "C:C"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "link": true, "at": "F1"})).unwrap();
+    assert_eq!(v(&s, "F1"), Value::Number(0.0), "a link to a blank cell reads 0");
+    assert_eq!(v(&s, "F5"), Value::Number(1.0));
+    assert_eq!(v(&s, "F6"), Value::Number(2.0));
+    assert_eq!(s.execute("cell.get", json!({"cell": "F5"})).unwrap()["input"], json!("=C5"));
+}
+
+/// A transposed paste clears the destination cells that line up with blank source cells.
+#[test]
+fn transposed_paste_clears_destination_cells_under_blank_source_cells() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "3"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B2", "input": "4"})).unwrap();
+    s.execute("cell.set", json!({"cell": "E2", "input": "old"})).unwrap();
+    s.execute("cell.set", json!({"cell": "F1", "input": "older"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:B2"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "all", "transpose": true, "at": "E1"})).unwrap();
+    assert_eq!(v(&s, "E1"), Value::Number(1.0));
+    assert_eq!(v(&s, "E2"), Value::Empty, "B1 was blank");
+    assert_eq!(v(&s, "F1"), Value::Number(3.0));
+    assert_eq!(v(&s, "F2"), Value::Number(4.0));
+}
+
+/// A copy tiled over a larger selection clears the non-blank destination cells under its blanks,
+/// in every tile.
+#[test]
+fn tiled_paste_clears_destination_cells_under_blank_source_cells() {
+    let mut s = s();
+    s.execute("cell.set", json!({"cell": "A1", "input": "1"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C2", "input": "x"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C4", "input": "y"})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A2"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1:C4"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(v(&s, "C1"), Value::Number(1.0));
+    assert_eq!(v(&s, "C2"), Value::Empty);
+    assert_eq!(v(&s, "C3"), Value::Number(1.0));
+    assert_eq!(v(&s, "C4"), Value::Empty);
+}
+
 /// Excel refuses a paste that would run off the sheet rather than pasting part of it: whole
 /// columns below row 1, whole rows right of column A, a whole column transposed, or a block at
 /// the last row or column.
