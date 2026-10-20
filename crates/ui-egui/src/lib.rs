@@ -258,6 +258,8 @@ pub struct SheetApp {
     pub control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
     /// The AutoSave being written on its worker thread.
     pub autosave_job: Option<autosave::InFlight>,
+    /// Failed AutoSaves in a row; each one doubles the wait before the next try (up to 64 s).
+    pub autosave_failures: u32,
     pub grid: grid::GridState,
     pub perf: Perf,
     pub fonts_ready: bool,
@@ -315,6 +317,7 @@ impl SheetApp {
             synthetic: Default::default(),
             control_rx: None,
             autosave_job: None,
+            autosave_failures: 0,
             grid: grid::GridState {
                 last_border: "bottom".into(),
                 last_fill: "#FFFF00".into(),
@@ -1223,6 +1226,7 @@ impl SheetApp {
     /// asks for a frame when the gate opens, so an idle window still saves it.
     fn autosave(&mut self, ctx: &egui::Context) {
         const GATE_MS: f64 = 2000.0;
+        let gate = GATE_MS * f64::from(1u32 << self.autosave_failures.min(5));
         if let Some(job) = &self.autosave_job {
             match job.poll() {
                 Some(result) => {
@@ -1240,10 +1244,10 @@ impl SheetApp {
             return;
         }
         let now = now_ms();
-        let wait = self.grid.last_autosave + GATE_MS - now;
+        let wait = self.grid.last_autosave + gate - now;
         if wait >= 0.0 {
             // Not yet: come back when the gate opens, even if nothing else wakes the window.
-            ctx.request_repaint_after(std::time::Duration::from_millis(wait.min(GATE_MS) as u64 + 1));
+            ctx.request_repaint_after(std::time::Duration::from_millis(wait.min(gate) as u64 + 1));
             return;
         }
         if self.editor.is_some() || self.text_box_editor.is_some() {
@@ -1258,18 +1262,14 @@ impl SheetApp {
             // No worker thread (the browser): save here.
             None => {
                 let result = autosave::run(&job);
-                self.perf.autosave_write_ms = now_ms() - now;
-                if result.is_ok() {
-                    self.session.finish_save(&job);
-                    self.perf.autosaves = self.perf.autosaves.saturating_add(1);
-                }
+                self.finish_autosave(&job, now, result);
             }
         }
         self.perf.autosave_ms = now_ms() - now;
     }
 
     /// Records a finished AutoSave. A failed one leaves the workbook dirty, so AutoSave tries
-    /// again after the gate.
+    /// again after the gate, which doubles with every failure in a row.
     fn finish_autosave(&mut self, job: &gridcraft_engine::autosave::SaveJob, started: f64, result: Result<usize, String>) {
         self.perf.autosave_write_ms = now_ms() - started;
         // The 2 s gate runs from the end of the write, so a slow save is never followed at once by the next.
@@ -1278,8 +1278,12 @@ impl SheetApp {
             Ok(_) => {
                 self.session.finish_save(job);
                 self.perf.autosaves = self.perf.autosaves.saturating_add(1);
+                self.autosave_failures = 0;
             }
-            Err(e) => log::warn!("AutoSave of {} failed: {e}", job.path),
+            Err(e) => {
+                self.autosave_failures = self.autosave_failures.saturating_add(1);
+                log::warn!("AutoSave of {} failed: {e}", job.path);
+            }
         }
     }
 
@@ -1502,6 +1506,11 @@ mod autosave_gate_tests {
         assert!(app.session.active().unwrap().is_dirty(), "a failed save must not mark the document clean");
         assert_eq!(app.perf.autosaves, 0);
         assert!(now_ms() - app.grid.last_autosave < 2000.0, "the retry waits for the gate");
+        assert_eq!(app.autosave_failures, 1);
+        // The base gate has passed, but one failure doubles the wait, so no new attempt starts yet.
+        app.grid.last_autosave = now_ms() - 2500.0;
+        frame(&mut app);
+        assert!(app.autosave_job.is_none(), "the retry backs off after a failure");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
