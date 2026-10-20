@@ -30,6 +30,7 @@ impl InFlight {
                 let _ = tx.send(result);
                 ctx.request_repaint();
             })
+            .map_err(|e| log::warn!("AutoSave could not start a worker thread, saving in the frame instead: {e}"))
             .ok()?;
         Some(InFlight { job, started: crate::now_ms(), rx, handle: Some(handle) })
     }

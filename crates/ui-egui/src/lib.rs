@@ -1272,6 +1272,8 @@ impl SheetApp {
     /// again after the gate.
     fn finish_autosave(&mut self, job: &gridcraft_engine::autosave::SaveJob, started: f64, result: Result<usize, String>) {
         self.perf.autosave_write_ms = now_ms() - started;
+        // The 2 s gate runs from the end of the write, so a slow save is never followed at once by the next.
+        self.grid.last_autosave = now_ms();
         match result {
             Ok(_) => {
                 self.session.finish_save(job);
@@ -1484,6 +1486,22 @@ mod autosave_gate_tests {
         app.finish_pending_autosave();
         assert!(!app.session.active().unwrap().is_dirty());
         assert_eq!(app.perf.autosaves, 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_write_leaves_the_document_dirty_and_restarts_the_gate() {
+        let dir = temp_dir("autosave-failed");
+        std::fs::write(dir.join("blocker.txt"), b"not a folder").unwrap();
+        let mut app = dirty_app(&dir.join("blocker.txt").join("book.xlsx"));
+        app.grid.autosave = true;
+        app.grid.last_autosave = 0.0;
+        frame(&mut app);
+        assert!(app.autosave_job.is_some(), "the save starts on the worker");
+        app.finish_pending_autosave();
+        assert!(app.session.active().unwrap().is_dirty(), "a failed save must not mark the document clean");
+        assert_eq!(app.perf.autosaves, 0);
+        assert!(now_ms() - app.grid.last_autosave < 2000.0, "the retry waits for the gate");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
