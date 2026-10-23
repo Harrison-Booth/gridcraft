@@ -191,6 +191,81 @@ fn index_area_number_overflow() {
     }
 }
 
+/// INDEX with one index, as observed in Excel: a 2-D reference needs both indexes (#REF!), a
+/// column array gives a 1×1 array (TYPE 64), a row array or 1-D reference gives one value.
+#[test]
+fn index_with_one_index() {
+    let mut t = T::new();
+    for (i, v) in [10, 20, 30].iter().enumerate() {
+        t.set(&format!("A{}", i + 1), &v.to_string());
+    }
+    let mut k = 1;
+    for r in 5..=7 {
+        for col in ["A", "B", "C"] {
+            t.set(&format!("{col}{r}"), &k.to_string());
+            k += 1;
+        }
+    }
+    for (row, (formula, expected)) in [
+        // Column arrays keep Excel's 1×1 array; row arrays and explicit columns give a value.
+        ("=INDEX({10;20;30},2)", 20.0),
+        ("=TYPE(INDEX({10;20;30},2))", 64.0),
+        ("=TYPE(INDEX(SEQUENCE(3),2))", 64.0),
+        ("=TYPE(INDEX({10;20;30},2,1))", 1.0),
+        ("=TYPE(INDEX({10,20,30},2))", 1.0),
+        ("=TYPE(INDEX(INDEX({10;20;30},2),1))", 1.0),
+        ("=SUM(INDEX({10;20;30},2))", 20.0),
+        // 1-D references with one index are single-cell references.
+        ("=TYPE(INDEX(A1:A3,2))", 1.0),
+        ("=SUM(INDEX(A1:A3,1):INDEX(A1:A3,3))", 60.0),
+        ("=SUM(INDEX((A1:A3,A5:C7),2))", 20.0),
+        // A 2-D array with one index is the row.
+        ("=SUM(INDEX({1,2;3,4},2))", 7.0),
+        ("=SUM(INDEX({1,2;3,4},0))", 10.0),
+        // A 2-D reference with an empty (not omitted) column argument is the row.
+        ("=SUM(INDEX(A5:C7,2,))", 15.0),
+        ("=SUM(INDEX(A5:C7,2,,1))", 15.0),
+        ("=COLUMNS(INDEX((A1:A3,A5:C7),2,,2))", 3.0),
+        ("=INDEX(A5:C7,2,2)", 5.0),
+        // A 2-D reference with one index is #REF!, and the error carries through.
+        ("=TYPE(INDEX(A5:C7,2))", 16.0),
+        ("=ISREF(INDEX(A5:C7,2))", 0.0),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let at = format!("J{}", row * 4 + 1);
+        t.set(&at, formula);
+        let got = match t.get(&at) {
+            Value::Bool(b) => f64::from(u8::from(b)),
+            v => v.as_f64().unwrap_or_else(|| panic!("{formula} = {v:?}")),
+        };
+        assert_eq!(got, *expected, "{formula}");
+    }
+    for formula in [
+        "=INDEX(A5:C7,2)",
+        "=INDEX(A5:C7,0)",
+        "=INDEX(A5:C7,1.9)",
+        "=INDEX(A5:C7,)",
+        "=INDEX(A5:B6,1)",
+        "=INDEX(A5:C7,2)+1",
+        "=SUM(INDEX(A5:C7,{1;2}))",
+        "=ROWS(INDEX(INDEX(A5:C7,2),3))",
+        "=SUM(A5:INDEX(A5:C7,2))",
+        "=SUM(INDEX(A5:C7,2):C7)",
+    ] {
+        t.set("L1", formula);
+        assert_eq!(t.get("L1"), Value::Error(CellError::Ref), "{formula}");
+    }
+    t.set("L1", "=INDEX(A5:C7,{1;2})");
+    assert_eq!([t.get("L1"), t.get("L2")], [Value::Error(CellError::Ref), Value::Error(CellError::Ref)]);
+    t.set("L1", "=IFERROR(INDEX(A5:C7,2),\"e\")");
+    assert_eq!(t.get("L1"), Value::from("e"));
+    // A bad position is still #VALUE!.
+    t.set("L1", "=INDEX(A5:C7,\"x\")");
+    assert_eq!(t.get("L1"), Value::Error(CellError::Value));
+}
+
 #[test]
 fn errors_and_cycles() {
     let mut t = T::new();
