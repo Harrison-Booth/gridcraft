@@ -42,11 +42,10 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Impact:** open-edit-save still simplifies workbooks with slicers, timelines or Power Pivot.
 - **Estimate:** 6–10 h. [file-format-parity.md](file-format-parity.md)
 
-### 4. Charts lose type and options on round trip; shallow chart model (F, FF)
-- **Missing:** kinds that survive XLSX (stock, combo, histogram, box, waterfall, funnel, treemap,
-  sunburst), axis scaling, label options, per-point formatting.
+### 4. Charts lose options on round trip; shallow chart model (F, FF)
+- **Missing:** axis scaling, label options, per-point formatting.
 - **Evidence:** `Chart` holds only title, legend position, two flags and axis titles
-  (`crates/model/src/features.rs`); PRs #158, #161 open; charts can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116), trendlines and error bars (read, written, drawn) landed.
+  (`crates/model/src/features.rs`); PRs #158, #161 merged; charts can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116), trendlines and error bars (read, written, drawn) landed.
 - **Impact:** charts are in most business workbooks.
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
