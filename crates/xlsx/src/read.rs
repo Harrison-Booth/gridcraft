@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{CalcMode, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
