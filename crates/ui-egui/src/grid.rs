@@ -1300,7 +1300,9 @@ pub(crate) fn paint_quadrant(
         // Numbers and dates never overflow: they show #### when too narrow.
         let hashed = !shrunk && (numeric || matches!(v, Value::Number(_))) && w > avail_w - 2.0 * pad && st.align.h != HAlign::Fill;
         if hashed {
-            let n = ((avail_w - 2.0 * pad) / char_w).floor().max(1.0) as usize;
+            // Measured on `#` itself: it is wider than `0` in some fonts, and #### must fit its cell.
+            let hash_w = p.layout_no_wrap("#".to_string(), font.clone(), color).size().x.max(1.0);
+            let n = ((avail_w - 2.0 * pad) / hash_w).floor().max(1.0) as usize;
             galley = p.layout_no_wrap("#".repeat(n), font.clone(), color);
             w = galley.size().x;
         }
