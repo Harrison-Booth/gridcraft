@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Insert Copied Cells",
             ["Home", "Cells", "Insert"],
             None,
-            "{at?: \"B3\", shift?: down|right}: inserts the copied cells at `at` (the active cell) and pastes them there. Whole copied rows or columns insert whole rows or columns; other blocks shift the cells at `at` down (default) or right. A cut of whole rows or columns moves them (Insert Cut Cells)",
+            "{at?: \"B3\", shift?: down|right, unmerge?: bool}: inserts the copied cells at `at` (the active cell) and pastes them there. Whole copied rows or columns insert whole rows or columns; other blocks shift the cells at `at` down (default) or right. A cut of whole rows or columns moves them (Insert Cut Cells). `unmerge: true` unmerges the merged cells a shift would split",
             has_clipboard,
             insert_copied_cells
         ),
