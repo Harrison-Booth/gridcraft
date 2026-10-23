@@ -134,10 +134,11 @@ fn vh_lookup(args: &[Arg], vertical: bool) -> R<Value> {
         return Err(*e);
     }
     let idx = num(args, 2)?;
-    if idx < 1.0 {
+    // NaN too: it would pass `idx < 1.0` and become index 0 (#2163).
+    if idx.is_nan() || idx < 1.0 {
         return Err(CellError::Value);
     }
-    let idx = idx.trunc() as usize - 1;
+    let idx = (idx.trunc() as usize).saturating_sub(1);
     let approx = opt_bool(args, 3, true)?;
     let (keys, len) = if vertical { (column(&table, 0), table.cols) } else { (row(&table, 0), table.rows) };
     if idx >= len {
@@ -413,15 +414,15 @@ fn transpose(args: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     }
 }
 
-/// Sheet text for ADDRESS, quoted when it needs to be. A `[Book]Sheet` prefix is judged by its
+/// Sheet text for ADDRESS, quoted when Excel quotes it. A `[Book]Sheet` prefix is judged by its
 /// parts (Microsoft's ADDRESS examples: `"[Book1]Sheet1"` stays bare, `"EXCEL SHEET"` becomes
-/// `'EXCEL SHEET'`).
+/// `'EXCEL SHEET'`). Unlike in a formula, `TRUE` and `FALSE` stay bare.
 fn quote_sheet(s: &str) -> String {
-    let word = |p: &str| p.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.');
-    let bare_sheet = |p: &str| !p.is_empty() && word(p) && !p.chars().next().is_some_and(|c| c.is_ascii_digit());
+    let bare = |p: &str| p.eq_ignore_ascii_case("TRUE") || p.eq_ignore_ascii_case("FALSE") || !gridcraft_core::sheet_needs_quotes(p);
+    let word = |p: &str| !p.is_empty() && p.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.');
     let plain = match s.strip_prefix('[').and_then(|r| r.split_once(']')) {
-        Some((book, sheet)) => !book.is_empty() && word(book) && bare_sheet(sheet),
-        None => bare_sheet(s),
+        Some((book, sheet)) => word(book) && bare(sheet),
+        None => bare(s),
     };
     if plain { s.to_string() } else { format!("'{}'", s.replace('\'', "''")) }
 }
@@ -790,6 +791,13 @@ mod tests {
         ];
         for (r, c, abs, a1, sheet, want) in cases {
             is_text(ev("ADDRESS", vec![n(r), n(c), n(abs), b(a1), t(sheet)]), want);
+        }
+        // Sheet names that read as a cell or an R1C1 reference, or start with a dot, are quoted;
+        // off-sheet cells and booleans are not (#1458).
+        for (sheet, want) in
+            [("A1", "'A1'!$A$1"), ("R1C1", "'R1C1'!$A$1"), ("RC", "'RC'!$A$1"), (".x", "'.x'!$A$1"), ("XFE1", "XFE1!$A$1"), ("TRUE", "TRUE!$A$1")]
+        {
+            is_text(ev("ADDRESS", vec![n(1.0), n(1.0), n(1.0), b(true), t(sheet)]), want);
         }
         is_text(ev("ADDRESS", vec![n(1048576.0), n(16384.0)]), "$XFD$1048576");
         is_err(ev("ADDRESS", vec![n(0.0), n(1.0)]), CellError::Value);
