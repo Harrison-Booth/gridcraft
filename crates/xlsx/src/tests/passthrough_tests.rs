@@ -1078,6 +1078,27 @@ fn pivot_tables_on_another_workbook_survive_a_save() {
 }
 
 #[test]
+fn pivot_table_without_its_cache_relationship_keeps_its_cache() {
+    // The table names no cache itself: its cache is found through the workbook's cache id.
+    let parts: Vec<(String, Vec<u8>)> = Unpacked::new(&ext_pivot_package(false, false, "externalLinkPath"))
+        .parts
+        .into_iter()
+        .filter(|(name, _)| name != "xl/pivotTables/_rels/pivotTable1.xml.rels")
+        .collect();
+    let refs: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    let (wb, rep) = read_xlsx(&make_zip(&refs)).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("Ext1") && w.contains("another workbook")), "{:?}", rep.warnings);
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let caches = written_pivot_caches(&u);
+    assert_eq!(caches.len(), 1, "{caches:?}");
+    let tables = written_pivot_tables(&u, "Report");
+    assert_eq!(tables.len(), 1);
+    let linked = u.rels(&tables[0]).into_iter().find(|r| r.1.ends_with("/pivotCacheDefinition")).map(|r| r.2);
+    assert_eq!(linked, Some(caches[0].1.clone()));
+}
+
+#[test]
 fn pivot_tables_sharing_a_cache_on_another_workbook_keep_one_cache() {
     let (wb, _) = read_xlsx(&ext_pivot_package(false, true, "externalLinkPath")).unwrap();
     let u = Unpacked::new(&write_xlsx(&wb).unwrap());

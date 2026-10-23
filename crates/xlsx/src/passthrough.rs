@@ -104,6 +104,8 @@ const SHEET_SLOTS: &[&str] = &["legacyDrawingHF", "picture", "oleObjects", "cont
 const PIVOT_TABLE_GRAPH: &[&str] = &["pivotTable", "pivotCacheDefinition"];
 /// Rewritten kinds a kept pivot cache reaches.
 const PIVOT_CACHE_GRAPH: &[&str] = &["pivotCacheDefinition", "pivotCacheRecords"];
+/// Relationship type of a PivotTable's link to its cache.
+const PIVOT_CACHE_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/pivotCacheDefinition";
 
 /// Relationship kinds GridCraft reads and rewrites, or that depend on content it rewrites:
 /// kept content whose graph reaches one of them is dropped.
@@ -182,6 +184,21 @@ fn is_kind(r: &PreservedRel, kinds: &[&str]) -> bool {
 
 fn rewritten(r: &PreservedRel) -> bool {
     !r.external && REWRITTEN.contains(&kind(&r.rel_type).to_ascii_lowercase().as_str())
+}
+
+/// Gives the kept PivotTable part `table` a relationship to its cache `cache`, unless it has one.
+/// A table with no cache relationship gets its cache from the workbook's cache id, and the writer
+/// keeps the cache only through a relationship from the table.
+fn link_cache(p: &mut Preserved, table: &str, cache: &str) {
+    let Some(part) = p.parts.iter_mut().find(|q| normalize(&q.name) == normalize(table)) else { return };
+    if part.rels.iter().any(|r| !r.external && is_kind(r, &["pivotCacheDefinition"]) && normalize(&r.target) == normalize(cache)) {
+        return;
+    }
+    let mut n = part.rels.len() + 1;
+    while part.rels.iter().any(|r| r.id == format!("rId{n}")) {
+        n += 1;
+    }
+    part.rels.push(PreservedRel { id: format!("rId{n}"), rel_type: PIVOT_CACHE_REL.into(), target: cache.into(), external: false });
 }
 
 fn rels_part_name(part: &str) -> String {
@@ -543,6 +560,7 @@ impl KeptReader {
                 Ok(()) => {
                     scoped.remove(&normalize(&ep.cache_part));
                     seen = scoped;
+                    link_cache(&mut p, &r.target, &ep.cache_part);
                     if !self.pivot_caches.iter().any(|c| normalize(c) == normalize(&ep.cache_part)) {
                         self.pivot_caches.push(ep.cache_part.clone());
                     }
