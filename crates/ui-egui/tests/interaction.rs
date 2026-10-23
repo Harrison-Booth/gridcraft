@@ -678,6 +678,7 @@ fn insert_cells_dialog_asks_before_unmerging_split_merges() {
         h.state().session.active().unwrap().wb.active().unwrap().merges.iter().map(|m| m.a1()).collect()
     };
     let mut h = harness(s);
+    let before = merges(&h);
     // Escape cancels, Enter (OK) unmerges and shifts.
     for (answer, k) in [("Cancel", Key::Escape), ("OK", Key::Enter)] {
         h.state_mut().open_dialog("insertCells", json!({}));
@@ -689,7 +690,7 @@ fn insert_cells_dialog_asks_before_unmerging_split_merges() {
         key(&mut h, k, Modifiers::NONE);
         assert!(h.state().dialog.is_none(), "{answer} closes the dialog");
         if answer == "Cancel" {
-            assert_eq!(merges(&h).len(), 2, "Cancel leaves the merges alone");
+            assert_eq!(merges(&h), before, "Cancel leaves the merges alone");
         }
     }
     assert_eq!(merges(&h), ["F23:F24"], "OK unmerges rows 22:24 and shifts F19:F20 down");
