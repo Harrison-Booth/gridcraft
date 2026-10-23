@@ -63,6 +63,7 @@ fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesDat
         secondary: false,
         smooth: false,
         trendlines: Vec::new(),
+        error_bars: Vec::new(),
         number_format: "$#,##0".into(),
     }
 }
@@ -231,6 +232,7 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
         },
         Series {
             name: None,
@@ -243,6 +245,7 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
         },
         Series {
             name: Some("Literal".into()),
@@ -255,6 +258,7 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -294,6 +298,7 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
         },
         Series {
             name: None,
@@ -306,6 +311,7 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            error_bars: Vec::new(),
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -323,6 +329,7 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        error_bars: Vec::new(),
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -341,6 +348,7 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        error_bars: Vec::new(),
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -648,6 +656,26 @@ fn fuzz_random_data_and_sizes() {
                             ..Trendline::default()
                         },
                         color: [0, 0, 0, 255],
+                    })
+                    .collect(),
+                error_bars: (0..r.next() % 3)
+                    .map(|_| {
+                        let v = [0.0, 1.5, -2.0, f64::NAN, 1e300][(r.next() % 5) as usize];
+                        ErrorBarData {
+                            spec: ErrorBars {
+                                direction: if r.next().is_multiple_of(2) { ErrorBarDirection::X } else { ErrorBarDirection::Y },
+                                sides: [ErrorBarSides::Both, ErrorBarSides::Plus, ErrorBarSides::Minus][(r.next() % 3) as usize],
+                                amount: [ErrorAmount::Fixed(v), ErrorAmount::Percentage(v), ErrorAmount::StdDev(v), ErrorAmount::StdErr]
+                                    [(r.next() % 4) as usize]
+                                    .clone(),
+                                no_end_cap: r.next().is_multiple_of(2),
+                                width: [None, Some(0.0), Some(f32::NAN), Some(3.0)][(r.next() % 4) as usize],
+                                ..ErrorBars::default()
+                            },
+                            color: [0, 0, 0, 255],
+                            plus: (0..r.next() % 4).map(|_| val(&mut r)).collect(),
+                            minus: (0..r.next() % 4).map(|_| val(&mut r)).collect(),
+                        }
                     })
                     .collect(),
                 number_format: ["General", "$#,##0", "0.00%", "yyyy-mm-dd", "#,##0.0;[Red]-#,##0.0", "@"][(r.next() % 6) as usize].into(),
@@ -1042,6 +1070,7 @@ fn pie_points_follow_workbook_theme() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        error_bars: Vec::new(),
     }];
     let d = resolve(&wb, 0, &c);
     let expected = vec![series_color(&wb.theme, 0), series_color(&wb.theme, 1)];

@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (§8: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (§8: PivotTable Show Details; §4: chart error bars landed) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -42,13 +42,11 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Impact:** open-edit-save still simplifies workbooks with slicers, timelines or Power Pivot.
 - **Estimate:** 6–10 h. [file-format-parity.md](file-format-parity.md)
 
-### 4. Charts lose options on round trip; shallow chart model (F, FF)
-- **Missing:** axis scaling, label options, error bars, per-point formatting.
+### 4. Charts lose type and options on round trip; shallow chart model (F, FF)
+- **Missing:** kinds that survive XLSX (stock, combo, histogram, box, waterfall, funnel, treemap,
+  sunburst), axis scaling, label options, per-point formatting.
 - **Evidence:** `Chart` holds only title, legend position, two flags and axis titles
-  (`crates/model/src/features.rs`); PRs #158, #161 open; charts can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines (read, written, drawn) landed. Multi-level category axes (year beside month) are read, drawn and written back.
-  (`crates/model/src/features.rs`); all 2-D kinds survive XLSX round trip (#158, #161); charts
-  can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116) and trendlines (read,
-  written, drawn) landed.
+  (`crates/model/src/features.rs`); PRs #158, #161 open; charts can't be resized (#190). Smooth lines (#62), Switch Row/Column (#116), trendlines and error bars (read, written, drawn) landed.
 - **Impact:** charts are in most business workbooks.
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
@@ -183,6 +181,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |
+| 2026-10-14 | minor | §4: chart error bars landed |
 | 2026-10-13 | trivial | §4: multi-level category axes landed |
 | 2026-10-12 | minor | §9: next/previous sheet commands retain the current visible sheet and selection when there is no visible destination |
 | 2026-10-12 | minor | rows auto-fit oversized fonts on open and whole-row/column formatting (#833) |

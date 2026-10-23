@@ -3,12 +3,13 @@
 use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, ErrorBarDirection, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
 
 use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
+use crate::errbars::{error_spans, supports_error_bars};
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
-use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
+use crate::{ChartData, ErrorBarData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
 
 pub(crate) const TEXT: Rgba = [0x59, 0x59, 0x59, 0xFF];
 const DARK_TEXT: Rgba = [0x26, 0x26, 0x26, 0xFF];
@@ -207,6 +208,12 @@ fn sanitize(d: &ChartData) -> ChartData {
                 secondary: s.secondary,
                 smooth: s.smooth,
                 trendlines: s.trendlines.iter().take(MAX_TRENDLINES).cloned().collect(),
+                error_bars: s
+                    .error_bars
+                    .iter()
+                    .take(2)
+                    .map(|e| ErrorBarData { spec: e.spec.clone(), color: e.color, plus: sanitize_vals(&e.plus), minus: sanitize_vals(&e.minus) })
+                    .collect(),
                 number_format: s.number_format.clone(),
             })
             .collect(),
@@ -857,6 +864,75 @@ fn draw_trend_labels(ctx: &mut Ctx, plot: Bx, labels: &[String]) {
     }
 }
 
+// ---------------------------------------------------------------- error bars
+
+/// Half the length of an error bar's end cap.
+const CAP: f32 = 2.5;
+
+/// One drawn error bar in data units along its axis: the point index, the low and high ends,
+/// and whether each end gets a cap (the start of a one-sided bar has none).
+#[derive(Clone, Copy, Debug)]
+struct ErrSeg {
+    j: usize,
+    lo: f64,
+    hi: f64,
+    cap_lo: bool,
+    cap_hi: bool,
+}
+
+/// Error bar segments of `eb` for the points `values` (their own values along the bar axis)
+/// drawn at `anchors` (the plotted positions: the value, or the stack top).
+fn error_segments(eb: &ErrorBarData, values: &[Option<f64>], anchors: &[Option<f64>]) -> Vec<ErrSeg> {
+    error_spans(eb, values)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(j, sp)| {
+            let sp = sp?;
+            let at = anchors.get(j).copied().flatten()?;
+            let v = values.get(j).copied().flatten()?;
+            let c = sp.center.map(|m| m + (at - v)).unwrap_or(at);
+            let (lo, hi) = (c - sp.minus, c + sp.plus);
+            // Excel caps only the ends away from the start: a plus-only standard deviation bar
+            // runs up from the mean with no cap at the mean.
+            (lo.is_finite() && hi.is_finite() && (sp.minus > 0.0 || sp.plus > 0.0)).then_some(ErrSeg {
+                j,
+                lo,
+                hi,
+                cap_lo: sp.minus > 0.0,
+                cap_hi: sp.plus > 0.0,
+            })
+        })
+        .collect()
+}
+
+/// Draws one error bar from `a` to `b` (pixels), capped across its direction at the ends
+/// asked for, clipped to the plot.
+fn draw_error_bar(ctx: &mut Ctx, plot: Bx, a: [f32; 2], b: [f32; 2], caps: (bool, bool), eb: &ErrorBarData, cap_on: bool) {
+    if !(fin(a[0]) && fin(a[1]) && fin(b[0]) && fin(b[1])) {
+        return;
+    }
+    let clamp = |p: [f32; 2]| [p[0].clamp(plot.x, plot.right()), p[1].clamp(plot.y, plot.bottom())];
+    // Excel's automatic error bar line is 0.75 pt.
+    let width = eb.spec.width.filter(|w| w.is_finite()).unwrap_or(0.75).clamp(0.25, 12.0);
+    let dash = eb.spec.dash.is_some_and(|d| d != LineDash::Solid);
+    let (ca, cb) = (clamp(a), clamp(b));
+    if ca != cb {
+        ctx.out.push(Prim::Line { pts: vec![ca, cb], color: eb.color, width, dash });
+    }
+    if !cap_on {
+        return;
+    }
+    let vertical = (a[0] - b[0]).abs() < (a[1] - b[1]).abs();
+    for (p, on, cp) in [(a, caps.0, ca), (b, caps.1, cb)] {
+        // A cap past the plot edge is clipped away with its end.
+        if !on || p != cp {
+            continue;
+        }
+        let (p0, p1) = if vertical { ([p[0] - CAP, p[1]], [p[0] + CAP, p[1]]) } else { ([p[0], p[1] - CAP], [p[0], p[1] + CAP]) };
+        ctx.out.push(Prim::Line { pts: vec![p0, p1], color: eb.color, width, dash: false });
+    }
+}
+
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -962,6 +1038,24 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         spans.push(row);
     }
 
+    // Error bars run along the value axis from the plotted value (the stack top when stacked).
+    let err_segs: Vec<Option<(&ErrorBarData, Vec<ErrSeg>)>> = data
+        .series
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let fam = fams.get(i).copied()?;
+            let k = kinds.get(i).copied()?;
+            if fam == Fam::Col100 || !supports_error_bars(k) {
+                return None;
+            }
+            let eb = s.error_bars.iter().find(|e| e.spec.direction == ErrorBarDirection::Y)?;
+            let anchors: Vec<Option<f64>> = spans.get(i)?.iter().map(|sp| sp.map(|(_, t)| t)).collect();
+            let vals: Vec<Option<f64>> = s.values.iter().take(ncat).copied().collect();
+            Some((eb, error_segments(eb, &vals, &anchors)))
+        })
+        .collect();
+
     // Axis scales.
     let mut axes: Vec<(Scale, Fmt)> = Vec::new();
     for axis in [false, true] {
@@ -971,10 +1065,15 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         }
         let force_zero = members.iter().any(|i| fams.get(*i).is_some_and(|f| !is_line(*f)));
         let all100 = members.iter().all(|i| fams.get(*i) == Some(&Fam::Col100));
-        let range = value_range(members.iter().flat_map(|i| {
-            let line = fams.get(*i).is_some_and(|f| is_line(*f));
-            spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
-        }));
+        let range = value_range(
+            members
+                .iter()
+                .flat_map(|i| {
+                    let line = fams.get(*i).is_some_and(|f| is_line(*f));
+                    spans.get(*i).into_iter().flatten().flatten().flat_map(move |(b, t)| if line { vec![*t] } else { vec![*b, *t] })
+                })
+                .chain(members.iter().filter_map(|i| err_segs.get(*i)?.as_ref()).flat_map(|(_, segs)| segs.iter().flat_map(|e| [e.lo, e.hi]))),
+        );
         let (lo, hi) = range.unwrap_or((0.0, 0.0));
         let (scale, fmt) = if all100 {
             (fixed_scale(if lo < -1e-9 { -1.0 } else { 0.0 }, if hi > 1e-9 || lo >= -1e-9 { 1.0 } else { 0.0 }, 0.2), Fmt::new("0%"))
@@ -1170,6 +1269,22 @@ fn cartesian(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, horizonta
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (0.5, ncat_slots as f64 + 0.5));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+    // Error bars over everything, at the column's slot or the line/area point.
+    for (i, segs) in err_segs.iter().enumerate() {
+        let Some((eb, segs)) = segs else { continue };
+        let fam = fams.get(i).copied().unwrap_or(Fam::Col);
+        let sc = scale_of(i);
+        let k = slot_of.get(i).copied().unwrap_or(0) as f32;
+        for e in segs.iter().take(MAX_CATS) {
+            let mut c = center(e.j);
+            if is_col(fam) {
+                c = if horizontal { c + nslots * bw / 2.0 - (k + 0.5) * bw } else { c - nslots * bw / 2.0 + (k + 0.5) * bw };
+            }
+            let (a, b) = (vpos(e.lo, &sc), vpos(e.hi, &sc));
+            let (pa, pb) = if horizontal { ([a, c], [b, c]) } else { ([c, a], [c, b]) };
+            draw_error_bar(ctx, plot, pa, pb, (e.cap_lo, e.cap_hi), eb, !eb.spec.no_end_cap);
+        }
+    }
 }
 
 // ---------------------------------------------------------------- scatter & bubble
@@ -1200,7 +1315,41 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             xhi = xhi.max(hi + max_forward(s));
         }
     }
-    let Some((ylo, yhi)) = value_range(all.iter().flatten().flatten().map(|p| p.1)) else { return };
+    let Some((mut ylo, mut yhi)) = value_range(all.iter().flatten().flatten().map(|p| p.1)) else { return };
+    // Error bars, X and Y, widen the axes to their ends.
+    let err: Vec<Vec<(ErrorBarDirection, &ErrorBarData, Vec<ErrSeg>)>> = data
+        .series
+        .iter()
+        .zip(&all)
+        .map(|(s, pts)| {
+            let xs: Vec<Option<f64>> = pts.iter().map(|p| p.map(|p| p.0)).collect();
+            let ys: Vec<Option<f64>> = pts.iter().map(|p| p.map(|p| p.1)).collect();
+            let mut seen = Vec::new();
+            s.error_bars
+                .iter()
+                .filter(|e| {
+                    let new = !seen.contains(&e.spec.direction);
+                    seen.push(e.spec.direction);
+                    new
+                })
+                .map(|e| {
+                    let v = if e.spec.direction == ErrorBarDirection::X { &xs } else { &ys };
+                    (e.spec.direction, e, error_segments(e, v, v))
+                })
+                .collect()
+        })
+        .collect();
+    for (dir, _, segs) in err.iter().flatten() {
+        if let Some((lo, hi)) = value_range(segs.iter().flat_map(|e| [e.lo, e.hi])) {
+            if *dir == ErrorBarDirection::X {
+                xlo = xlo.min(lo);
+                xhi = xhi.max(hi);
+            } else {
+                ylo = ylo.min(lo);
+                yhi = yhi.max(hi);
+            }
+        }
+    }
     let xs = nice_scale(xlo, xhi, false);
     let ys = nice_scale(ylo, yhi, false);
     let fx = Fmt::new("General");
@@ -1264,6 +1413,15 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         draw_trendlines(ctx, s, &pts, &frac, &px, &mut trend_labels, (xs.min, xs.max));
     }
     draw_trend_labels(ctx, plot, &trend_labels);
+    for (pts, bars) in all.iter().zip(&err) {
+        for (dir, eb, segs) in bars {
+            for e in segs.iter().take(MAX_POINTS) {
+                let Some((x, y)) = pts.get(e.j).copied().flatten() else { continue };
+                let (a, b) = if *dir == ErrorBarDirection::X { (map((e.lo, y)), map((e.hi, y))) } else { (map((x, e.lo)), map((x, e.hi))) };
+                draw_error_bar(ctx, plot, a, b, (e.cap_lo, e.cap_hi), eb, !eb.spec.no_end_cap);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------- histogram

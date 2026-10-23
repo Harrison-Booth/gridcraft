@@ -637,6 +637,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                error_bars: Vec::new(),
             });
         }
     } else {
@@ -653,6 +654,7 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                error_bars: Vec::new(),
             });
         }
     }
@@ -843,6 +845,18 @@ fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     idx.map(|i| (sheet, i)).ok_or_else(|| bad("chart", "no such chart"))
 }
 
+/// After a chart type change, drops error bars the new kind can't show or save: all of them on
+/// pie, radar and the other kinds without error bars, X bars on column, bar, line and area.
+fn keep_supported_error_bars(c: &mut Chart) {
+    let kinds: Vec<ChartKind> = (0..c.series.len()).map(|i| gridcraft_chart::series_plot_kind(c, i)).collect();
+    for (se, k) in c.series.iter_mut().zip(kinds) {
+        let xy = matches!(k, ChartKind::Scatter | ChartKind::ScatterLines | ChartKind::Bubble);
+        // 100% stacked and stock series keep theirs in the file, though they aren't drawn.
+        let saved = gridcraft_chart::supports_error_bars(k) || matches!(k, ChartKind::ColumnStacked100 | ChartKind::BarStacked100 | ChartKind::Stock);
+        se.error_bars.retain(|e| saved && (xy || e.direction == ErrorBarDirection::Y));
+    }
+}
+
 fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     let (si, ci) = find_chart(s, p)?;
     let at = cell_param_on(s, p, "at", si)?;
@@ -859,6 +873,7 @@ fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
+            keep_supported_error_bars(c);
         }
         if let Some(method) = quartiles {
             for series in &mut c.series {
