@@ -281,8 +281,9 @@ impl Objects {
                 }
             }
             WINDOW2 => {
-                // The first Window2 is the sheet's window.
+                // The first Window2 is the sheet's window; a truncated one is ignored.
                 if self.window.is_none()
+                    && c.remaining() >= super::WINDOW2_MIN_LEN
                     && let Ok((grbit, top, left)) = (|| Ok::<_, IoError>((c.u16()?, c.u16()?, c.u16()?)))()
                 {
                     self.window = Some((grbit, CellRef::new(u32::from(top), u32::from(left.min(255)))));

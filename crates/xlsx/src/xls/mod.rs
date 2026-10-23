@@ -42,6 +42,9 @@ const MAX_RECORDS: usize = 40_000_000;
 const BOF: u16 = 0x0809;
 const EOF: u16 = 0x000A;
 const BIFF8: u16 = 0x0600;
+/// WsBool (MS-XLS 2.4.351): its first byte's `fDialog` bit marks a dialog sheet, whose BOF says worksheet.
+const WSBOOL: u16 = 0x0081;
+const WSBOOL_DIALOG: u8 = 0x10;
 
 pub(crate) fn invalid(msg: impl Into<String>) -> IoError {
     IoError::Format(format!("XLS: {}", msg.into()))
@@ -271,11 +274,9 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
                 budget.text(code.len())?;
                 g.formats.insert(ifmt, code);
             }
-            0x00E0 => {
-                if g.xf_formats.len() < MAX_XFS {
-                    c.u16()?;
-                    g.xf_formats.push(c.u16()?);
-                }
+            0x00E0 if g.xf_formats.len() < MAX_XFS => {
+                c.u16()?;
+                g.xf_formats.push(c.u16()?);
             }
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
             0x01AE => {
@@ -528,6 +529,7 @@ fn worksheet(
                 continue;
             }
             _ if depth > 1 => continue,
+            WSBOOL if rec.parts.first().and_then(|p| p.first()).is_some_and(|b| b & WSBOOL_DIALOG != 0) => return Ok(None),
             _ => {}
         }
         sheet_record(&rec, &mut st, budget, report)?;
@@ -565,6 +567,9 @@ fn worksheet(
     }
     Ok(Some((st.sheet, st.calc)))
 }
+
+/// The shortest WINDOW2 a file holds (the chart-sheet form); a shorter one is truncated.
+const WINDOW2_MIN_LEN: usize = 10;
 
 fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, report: &mut ReadReport) -> Result<(), IoError> {
     let mut c = Cursor::new(&rec.parts);
