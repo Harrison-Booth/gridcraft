@@ -594,6 +594,11 @@ impl SheetApp {
         let ran = match id {
             "edit.copy" | "edit.cut" => self.copy_to_clipboard_ok(ctx, id),
             "edit.paste" => self.paste_from_clipboard_ok(),
+            // Menu-style Insert Cells with no range asks for the shift direction, like the ribbon does.
+            "home.insertCells" => {
+                self.open_dialog("insertCells", json!({}));
+                self.dialog.is_some()
+            }
             _ => self.run_or_alert_ok(id, json!({})),
         };
         if ran {
