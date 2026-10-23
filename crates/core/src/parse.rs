@@ -362,7 +362,6 @@ fn parse_date(t: &str, sys: DateSystem) -> Option<(f64, &'static str)> {
     {
         return Some(r);
     }
-    let num = |s: &str| s.trim().parse::<i64>().ok();
     let num = |s: &str| {
         let s = s.trim();
         if s.is_empty() || !s.bytes().all(|b| b.is_ascii_digit()) {
