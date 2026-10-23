@@ -590,16 +590,56 @@ impl SheetApp {
     /// to the system clipboard and Paste reads it. The command is remembered as recently used in
     /// the workbook that was active when it was chosen, and only if it ran.
     pub(crate) fn run_searched_command(&mut self, ctx: &egui::Context, id: &str) {
+        // Commands that need a dialog to get their parameters. Run with empty params they would
+        // apply defaults (Series, Paste Special) or fail, so the search box opens the dialog the
+        // ribbon opens. Excluded: file.open (a file picker, not a password), comments (depend on
+        // threaded state), chart.set (needs a selected chart), and workbook protection (the
+        // dialog does not swap to Unprotect like protectSheet does).
+        const SEARCH_DIALOGS: &[(&str, &str)] = &[
+            ("home.insertCells", "insertCells"),
+            ("home.insertCopiedCells", "insertPaste"),
+            ("home.deleteCells", "deleteCells"),
+            ("home.rowHeight", "rowHeight"),
+            ("home.columnWidth", "columnWidth"),
+            ("home.defaultWidth", "defaultWidth"),
+            ("home.conditionalFormat", "cfQuick"),
+            ("sheet.rename", "renameSheet"),
+            ("sheet.move", "moveSheet"),
+            ("sheet.unhide", "unhideSheet"),
+            ("review.protectSheet", "protectSheet"),
+            ("review.unprotectSheet", "unprotectSheet"),
+            ("review.allowEditRanges", "allowEditRanges"),
+            ("edit.pasteSpecial", "pasteSpecial"),
+            ("edit.fillSeries", "series"),
+            ("edit.goToSpecial", "goToSpecial"),
+            ("link.open", "openLink"),
+            ("insert.link", "insertLink"),
+            ("insert.sparkline", "sparkline"),
+            ("insert.picture", "insertPicture"),
+            ("pageLayout.headerFooter", "headerFooter"),
+            ("pageLayout.margins", "pageSetup"),
+            ("data.textToColumns", "textToColumns"),
+            ("data.removeDuplicates", "removeDuplicates"),
+            ("data.advancedFilter", "advancedFilter"),
+            ("data.forecastSheet", "forecastSheet"),
+            ("data.subtotal", "subtotal"),
+            ("data.validation", "dataValidation"),
+            ("view.zoom", "zoom"),
+            ("formulas.defineName", "defineName"),
+            ("table.resize", "tableResize"),
+            ("pivot.calculatedField", "pivotCalculatedField"),
+        ];
         let uid = self.session.active().map(|d| d.uid).unwrap_or_default();
         let ran = match id {
             "edit.copy" | "edit.cut" => self.copy_to_clipboard_ok(ctx, id),
             "edit.paste" => self.paste_from_clipboard_ok(),
-            // Menu-style Insert Cells with no range asks for the shift direction, like the ribbon does.
-            "home.insertCells" => {
-                self.open_dialog("insertCells", json!({}));
-                self.dialog.is_some()
-            }
-            _ => self.run_or_alert_ok(id, json!({})),
+            _ => match SEARCH_DIALOGS.iter().find(|(c, _)| *c == id) {
+                Some((_, dialog)) => {
+                    self.open_dialog(dialog, json!({}));
+                    self.dialog.is_some()
+                }
+                None => self.run_or_alert_ok(id, json!({})),
+            },
         };
         if ran {
             self.remember_command_in(uid, id);
