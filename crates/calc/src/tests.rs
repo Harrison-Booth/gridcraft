@@ -1781,3 +1781,40 @@ fn text_before_after_empty_instance_defaults_to_one() {
     t.set("A4", "=TEXTBEFORE(\"a-b\",\"-\",0)");
     assert_eq!(t.get("A4"), Value::Error(CellError::Value));
 }
+
+#[test]
+fn loan_schedule_residue_keeps_excels_sign() {
+    // A synthetic monthly loan schedule: interest on the opening balance, principal = PMT - interest,
+    // each later period guarded by IF(p - SUM(principal so far) > 0, ...). After the 12th payment
+    // Excel is left with 2^-30 > 0, so it takes a 13th, tiny-interest period. That last bit comes
+    // from PMT; the old (1 + rate)^nper form left -2.8e-8 and returned "" instead.
+    let mut t = T::new();
+    t.set("B1", "4653300");
+    t.set("B2", "1");
+    t.set("B3", "0.141");
+    let col = |i: u8| char::from(b'A' + i).to_string();
+    t.set("C8", "=$B$1*($B$3/12)");
+    t.set("C7", "=PMT($B$3/12,$B$2*12,-$B$1)-C8");
+    t.set("D8", "=($B1-C7)*($B$3/12)");
+    t.set("D7", "=PMT($B$3/12,$B$2*12,-$B$1)-D8");
+    for i in 4..16 {
+        let (c, p) = (col(i), col(i - 1));
+        t.set(&format!("{c}8"), &format!("=IF($B1-SUM($C7:{p}7)>0,($B1-SUM($C7:{p}7))*($B$3/12),\"\")"));
+        t.set(&format!("{c}7"), &format!("=IF($B1-SUM($C7:{p}7)>0,PMT($B$3/12,$B$2*12,-$B$1)-{c}8,\"\")"));
+    }
+    t.set("N4", "=IF($B$1-SUM($C7:N7)>0,$B$1-SUM($C7:N7),\"\")");
+    // Excel's values (Value2) for the same synthetic inputs.
+    // The leftover (2^-30 in Excel) is 12 payments' worth of rounding, so a one-ULP libm difference
+    // moves it by as much as its own size: only its sign is checked, and the 13th period must exist.
+    let positive = |cell: &str| match t.get(cell) {
+        Value::Number(x) => assert!(x > 0.0 && x < 1e-6, "{cell}: {x}"),
+        other => panic!("{cell}: expected a small positive number, got {other:?}"),
+    };
+    positive("N4");
+    positive("O8");
+    match t.get("O7") {
+        Value::Number(x) => assert!((x - 418025.37230211904).abs() < 1e-3, "O7: {x}"),
+        other => panic!("O7: expected a number, got {other:?}"),
+    }
+    assert_eq!(t.get("P7"), Value::Text("".into()));
+}
