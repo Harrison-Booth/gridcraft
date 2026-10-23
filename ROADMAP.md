@@ -147,6 +147,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | Memory: the interface and script fallback fonts are read once per run and shared with egui instead of copied into it: an empty workbook settles at 158 MB instead of 258 MB on macOS |
 | 2026-10-15 | Function help follows the interface language: argument hints, autocomplete, Insert Function (search and readable categories) and the Formulas-tab menus read per-language tables of descriptions and argument names; Spanish keeps its 10 functions in the new format |
 | 2026-10-15 | Row auto-fit counts a cell's line breaks only when the cell wraps, as Excel does: a file whose unwrapped cells hold multi-line text no longer opens with tall rows (typing a break still turns wrap on and grows the row) |
+| 2026-10-14 | Functions: EOMONTH, EDATE, WORKDAY, NETWORKDAYS, YEARFRAC, WEEKNUM, the bond and coupon functions, DISC, BIN2DEC, IM* and the other Analysis ToolPak functions give `#VALUE!` for a reference to more than one cell in a value argument, as Excel 365 does, instead of spilling; array constants and computed arrays still lift |
 | 2026-10-14 | Protect Sheet on a protected sheet: Home › Format, its keytips (HOP, RPS) and the tab menu now read Unprotect Sheet… and unprotect (straight away without a password); a protected sheet that forbids selecting locked (or unlocked) cells is enforced for clicks, arrows and Go To, and the Protect Sheet dialog has the select options (#1346) |
 | 2026-10-14 | XLSX: formulas opened with dynamic-array metadata (`cm`) keep it on save, with `xl/metadata.xml`. Before, a formula returning one value lost it (11 of 40 corpus files that have the part lost it entirely), and Excel recalculated some of them with implicit intersection (`SUMPRODUCT(IFERROR(...))` changed value) |
 | 2026-10-14 | Recalculation: a dynamic array's anchor given a new formula that reads its old spill area (`A1` was `=SEQUENCE(3)`, becomes `=SUM(A2:A3)+1` or `=SEQUENCE(1,A2+1)`) sees that area empty instead of the old values |
@@ -230,6 +231,7 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 | 2026-10-16 | minor | Progress log: floating pictures' textures bounded and kept per workbook |
 | 2026-10-16 | trivial | Progress log: web preferences kept between visits (#1562) |
 | 2026-10-16 | minor | Progress log: interface fonts held once instead of twice |
+| 2026-10-14 | minor | Progress log: Analysis ToolPak value arguments reject multi-cell references |
 | 2026-10-14 | minor | XLSX dynamic-array `cm` metadata kept on save; progress log row |
 | 2026-10-14 | minor | Progress log: spill anchor reading its old spill area |
 | 2026-10-14 | minor | Progress log: formulas reading an array that loses a spill conflict |
