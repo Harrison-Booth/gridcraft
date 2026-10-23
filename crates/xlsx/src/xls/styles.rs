@@ -377,11 +377,18 @@ pub(super) fn build(r: &StyleRecords, formats: &HashMap<u16, String>, wb: &mut W
     // User-defined named styles. Excel 2007 and later write every built-in style into each .xls
     // (about fifty, their colours approximated to the palette); GridCraft defines those itself.
     let mut named: Vec<(String, Style)> = Vec::new();
+    // Names are compared ASCII-case-insensitively; a set keeps a hostile file's many names linear.
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::from(["normal".to_string()]);
     for ns in &r.styles {
-        if ns.builtin.is_some() || ns.name.eq_ignore_ascii_case("Normal") || named.iter().any(|(n, _)| n.eq_ignore_ascii_case(&ns.name)) {
+        if ns.builtin.is_some() {
+            continue;
+        }
+        let key = ns.name.to_ascii_lowercase();
+        if seen.contains(&key) {
             continue;
         }
         if let Some(xf) = r.xfs.get(usize::from(ns.ixf)) {
+            seen.insert(key);
             named.push((ns.name.clone(), xf_style(xf, &fonts, formats, &table)));
         }
     }
