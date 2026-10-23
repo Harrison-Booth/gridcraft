@@ -180,6 +180,67 @@ pub struct GridState {
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
+    /// F8 Extend Selection or Shift+F8 Add or Remove Selection mode (see [`SelectionMode`]).
+    pub selection_mode: SelectionMode,
+    /// Add mode: the last area is the cell an arrow key moved to, not yet extended, so the next
+    /// arrow moves it again instead of keeping it.
+    pub add_pending: bool,
+    /// Add mode header drag: the areas kept from before the drag, which the dragged range joins.
+    pub header_drag_base: Vec<String>,
+}
+
+/// Excel's keyboard selection modes, shown in the status bar. In Extend mode (F8) arrow keys and
+/// clicks extend from the anchor as if Shift were held. In Add mode (Shift+F8) arrow keys move the
+/// active cell without dropping the selected areas, Shift+arrows grow a new area from there, and a
+/// click adds an area (or removes one already selected) as Ctrl+click does. Esc, the same key
+/// again, or editing a cell turns the mode off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectionMode {
+    #[default]
+    Off,
+    Extend,
+    Add,
+}
+
+impl SelectionMode {
+    /// The id the `ui.selectionMode` command takes and returns.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Extend => "extend",
+            Self::Add => "add",
+        }
+    }
+
+    pub fn parse(id: &str) -> Option<Self> {
+        match id.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" => Some(Self::Off),
+            "extend" => Some(Self::Extend),
+            "add" => Some(Self::Add),
+            _ => None,
+        }
+    }
+
+    /// The status bar text (an i18n catalog key), when the mode shows one.
+    pub fn status_text(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Extend => Some("Extend Selection"),
+            Self::Add => Some("Add or Remove Selection"),
+        }
+    }
+}
+
+impl GridState {
+    /// Turns `mode` on, or off when it is already on (F8 / Shift+F8); the other mode ends.
+    pub fn toggle_selection_mode(&mut self, mode: SelectionMode) {
+        self.set_selection_mode(if self.selection_mode == mode { SelectionMode::Off } else { mode });
+    }
+
+    pub fn set_selection_mode(&mut self, mode: SelectionMode) {
+        self.selection_mode = mode;
+        self.add_pending = false;
+    }
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
@@ -2076,6 +2137,14 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     let primary_clicked = resp.clicked_by(egui::PointerButton::Primary);
     let pointer = ctx.input(|i| i.pointer.clone());
     let mods = ctx.input(|i| i.modifiers);
+    // Selecting with the pointer: Extend mode (F8) clicks as if Shift were held, Add mode
+    // (Shift+F8) as if Ctrl were.
+    let mut sel_mods = mods;
+    match app.grid.selection_mode {
+        SelectionMode::Extend => sel_mods.shift = true,
+        SelectionMode::Add => sel_mods.command = true,
+        SelectionMode::Off => {}
+    }
     // Hit-testing works in logical coordinates (see `Geo::rtl`).
     let pos = pointer.interact_pos().or(pointer.hover_pos()).map(|p| geo.mirror_pos(p));
     let in_cells = pos.is_some_and(|p| geo.in_cells(p));
@@ -2292,7 +2361,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             // An armed Format Painter paints the columns dragged over instead of moving them.
             if resp.drag_started()
-                && !mods.any()
+                && !sel_mods.any()
                 && app.session.format_painter.is_none()
                 && sel.ranges.len() == 1
                 && sel.current().is_full_cols()
@@ -2301,9 +2370,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 app.grid.drag = Drag::MoveCols { source: sel.current(), before: None };
                 return;
             }
-            let range = if mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
-            select_ranges(app, range, mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
-            app.grid.drag = Drag::Cols(if mods.shift { sel.anchor.col } else { c });
+            let range = if sel_mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
+            app.grid.header_drag_base = add_mode_base(app);
+            select_ranges(app, range, sel_mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
+            app.grid.drag = Drag::Cols(if sel_mods.shift { sel.anchor.col } else { c });
             return;
         }
         if in_row_header {
@@ -2315,9 +2385,10 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             if point_header(app, wb, sh, RangeRef::rows(r, r), mods.shift, mods.command) {
                 return;
             }
-            let range = if mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
-            select_ranges(app, range, mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
-            app.grid.drag = Drag::Rows(if mods.shift { sel.anchor.row } else { r });
+            let range = if sel_mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
+            app.grid.header_drag_base = add_mode_base(app);
+            select_ranges(app, range, sel_mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
+            app.grid.drag = Drag::Rows(if sel_mods.shift { sel.anchor.row } else { r });
             return;
         }
         if !in_cells {
@@ -2407,7 +2478,8 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             return;
         }
         app.grid.last_click = Some((c, now));
-        if mods.shift {
+        if sel_mods.shift {
+            app.grid.add_pending = false;
             let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
             if let Some(d) = app.session.active_mut() {
                 d.selection.anchor = sel.anchor;
@@ -2423,6 +2495,8 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             } else {
                 select_ranges(app, RangeRef::cell(c), true, c);
             }
+        } else if sel_mods.command {
+            select_ranges(app, RangeRef::cell(c), true, c);
         } else {
             let _ = app.session.run("selection.set", json!({"cell": c.a1()}));
             if primary_clicked && wb.styles.get(sh.style_id(c)).num_fmt.as_str() == "checkbox" {
@@ -2480,14 +2554,16 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::Rows(anchor) => {
                 let r = geo.row_at(sh, p.y);
-                let _ =
-                    app.session.run("selection.set", json!({"range": RangeRef::rows(anchor.min(r), anchor.max(r)).a1(), "active": sel.active.a1()}));
+                let range = RangeRef::rows(anchor.min(r), anchor.max(r)).a1();
+                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
+                let _ = app.session.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
                 scroll_by(app, vec2(0.0, auto.y));
             }
             Drag::Cols(anchor) => {
                 let c = geo.col_at(sh, p.x);
-                let _ =
-                    app.session.run("selection.set", json!({"range": RangeRef::cols(anchor.min(c), anchor.max(c)).a1(), "active": sel.active.a1()}));
+                let range = RangeRef::cols(anchor.min(c), anchor.max(c)).a1();
+                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
+                let _ = app.session.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             Drag::MoveCols { source, .. } => {
@@ -2950,7 +3026,45 @@ fn toggled_ranges(mut ranges: Vec<String>, clicked: String, add: bool) -> Vec<St
     ranges
 }
 
+/// An arrow (or Page Up/Down, Ctrl+arrow) in Add mode. Without Shift the active cell moves and the
+/// selected areas stay, the cell it lands on becoming a provisional last area that the next arrow
+/// moves again; with Shift that area grows from its anchor and is kept, so the next arrow starts
+/// another one.
+fn add_mode_move(app: &mut SheetApp, dr: i64, dc: i64, shift: bool, jump: bool) {
+    app.grid.ensure_visible = true;
+    app.grid.reveal_moving_end = shift;
+    if shift {
+        let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": true, "jump": jump}));
+        app.grid.add_pending = false;
+        return;
+    }
+    let Some(mut keep) = app.session.active().map(|d| d.selection.ranges.clone()) else { return };
+    if app.grid.add_pending {
+        keep.pop();
+    }
+    // The engine works out where the cell lands (hidden rows, merged cells, Ctrl+arrow jumps).
+    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": false, "jump": jump}));
+    let Some((area, active)) = app.session.active().map(|d| (d.selection.current(), d.selection.active)) else { return };
+    // Landing on an area already kept leaves it kept: the next arrow doesn't drop it.
+    let kept = keep.contains(&area);
+    keep.retain(|r| *r != area);
+    keep.push(area);
+    let range = keep.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",");
+    let _ = app.session.run("selection.set", json!({"range": range, "active": active.a1()}));
+    app.grid.add_pending = !kept;
+}
+
+/// The active sheet's areas in Add mode, as `selection.set` takes them; empty in other modes.
+fn add_mode_base(app: &SheetApp) -> Vec<String> {
+    if app.grid.selection_mode != SelectionMode::Add {
+        return Vec::new();
+    }
+    app.session.active().map(|d| d.selection.ranges.iter().map(|x| x.a1()).collect()).unwrap_or_default()
+}
+
 fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
+    // A clicked area is kept: the next Add mode arrow starts a new one.
+    app.grid.add_pending = false;
     let current: Vec<String> =
         if add { app.session.active().map(|d| d.selection.ranges.iter().map(|x| x.a1()).collect()).unwrap_or_default() } else { vec![] };
     let clicked = r.a1();
@@ -3019,6 +3133,12 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
+                let navigation = matches!(
+                    key,
+                    Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::PageUp | Key::PageDown | Key::Home | Key::End
+                );
+                // Extend mode (F8): navigation keys extend from the anchor as if Shift were held.
+                let m = if navigation && app.grid.selection_mode == SelectionMode::Extend { egui::Modifiers { shift: true, ..m } } else { m };
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
                     continue;
@@ -3027,6 +3147,11 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 let shift = m.shift;
                 let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
                     let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
+                    if app.grid.selection_mode == SelectionMode::Add {
+                        add_mode_move(app, dr, dc, shift, cmd);
+                        app.grid.reveal_from = from;
+                        return;
+                    }
                     let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd}));
                     app.grid.ensure_visible = true;
                     app.grid.reveal_moving_end = shift;
@@ -3086,8 +3211,13 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     Key::Escape => {
                         app.session.clipboard = None;
                         app.session.format_painter = None;
+                        app.grid.set_selection_mode(SelectionMode::Off);
                     }
                     Key::Space if !cmd && !shift && is_checkbox(sh, app) => app.run_or_alert("cell.toggleCheckbox", json!({})),
+                    // F8 Extend Selection, Shift+F8 Add or Remove Selection: each toggles its mode.
+                    Key::F8 if !m.alt && !cmd => {
+                        app.grid.toggle_selection_mode(if shift { SelectionMode::Add } else { SelectionMode::Extend });
+                    }
                     Key::F8 if m.alt => {
                         app.open_dialog("macros", json!({}));
                     }
