@@ -6,7 +6,7 @@
 //! their `<externalReferences>`, data connections, XML maps) and each sheet (query tables, cells
 //! mapped to XML elements, form controls, ActiveX controls, OLE objects, the sheet background and
 //! printer settings, with the sheet's `<picture>`, `<oleObjects>` and `<controls>` XML, the `r:id`
-//! of `<pageSetup>` and the legacy VML shapes those controls need). PivotTables whose source is in
+//! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and footers (`&G`, with their `<legacyDrawingHF>`). PivotTables whose source is in
 //! another workbook are kept too: the PivotTable parts with their sheet, the cache definition and
 //! records parts (with the cache's link to the other workbook's path) with the workbook and its
 //! `<pivotCache>` entry, its `cacheId` unchanged. The workbook also keeps its
@@ -97,7 +97,8 @@ const FILE_VERSION_ATTRS: &[&str] = &["appName", "lastEdited", "lowestEdited", "
 const CALC_FEATURES_URI: &str = "{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}";
 const NS_CALC_FEATURES: &str = "http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures";
 /// Kept sheet elements, in schema order (all after `<legacyDrawing>`, before `<tableParts>`).
-const SHEET_SLOTS: &[&str] = &["picture", "oleObjects", "controls"];
+/// The sheet parts a kept sheet carries: the header and footer pictures first, as main lists them.
+const SHEET_SLOTS: &[&str] = &["legacyDrawingHF", "picture", "oleObjects", "controls"];
 /// Rewritten kinds a kept PivotTable (source in another workbook) reaches: the table, from the
 /// sheet, and its cache, which the workbook keeps (several tables can share one cache).
 const PIVOT_TABLE_GRAPH: &[&str] = &["pivotTable", "pivotCacheDefinition"];
@@ -527,7 +528,10 @@ impl KeptReader {
                 cx.warn(format!("sheet \"{name}\": {} was dropped: {why}", kind(&r.rel_type)));
             }
         }
-        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) {
+        // Notes have one VML drawing per sheet; another one holds the header and footer pictures.
+        let vml_drawings = rels.iter().filter(|r| is_kind(r, &["vmlDrawing"])).count();
+        let notes = rels.iter().filter(|r| is_kind(r, &["comments"])).count();
+        if rels.iter().any(|r| is_kind(r, SHEET_ELEMENT_KINDS)) || vml_drawings > notes {
             self.sheet_elements(cx, part, name, &rels, &mut p, &mut seen);
         }
         for ep in pivots {
@@ -565,6 +569,21 @@ impl KeptReader {
             match self.keep(cx, p, std::slice::from_ref(r), seen) {
                 Ok(()) => p.elements.push(PreservedXml { slot: "pageSetup".into(), xml: r.id.clone() }),
                 Err(why) => cx.warn(format!("sheet \"{name}\": printer settings were dropped: {why}")),
+            }
+        }
+        // Header and footer pictures (`&G`): a VML drawing of their own and the images it shows,
+        // kept byte for byte (GridCraft writes the header text, not the pictures).
+        if let Some(id) = scan.legacy_drawing_hf.as_deref()
+            && scan.legacy_drawing.as_deref() != Some(id)
+            && let Some(r) = rels.iter().find(|r| r.id == id && is_kind(r, &["vmlDrawing"]))
+        {
+            match self.keep_through(cx, p, std::slice::from_ref(r), seen, &["vmlDrawing"]) {
+                Ok(()) => {
+                    let xml = format!("<legacyDrawingHF xmlns:r=\"{NS_REL}\" r:id=\"{}\"/>", esc_attr(&r.id));
+                    p.elements.push(PreservedXml { slot: "legacyDrawingHF".into(), xml });
+                    cx.warn(format!("sheet \"{name}\": pictures in the header and footer are not shown; they are kept for saving"));
+                }
+                Err(why) => cx.warn(format!("sheet \"{name}\": header and footer pictures were dropped: {why}")),
             }
         }
         let mut frags = scan.fragments;
@@ -771,18 +790,20 @@ struct SheetScan {
     /// (slot, XML with the namespace declarations it needs).
     fragments: Vec<(String, String)>,
     legacy_drawing: Option<String>,
+    /// The relationship id on `<legacyDrawingHF>` (header and footer pictures).
+    legacy_drawing_hf: Option<String>,
     /// The relationship id on `<pageSetup>` (printer settings).
     page_setup: Option<String>,
 }
 
 /// Finds the sheet's `<picture>`, `<oleObjects>`, `<controls>` (also inside
-/// `<mc:AlternateContent>`) and the `<legacyDrawing>` id. `None` when the XML is damaged.
+/// `<mc:AlternateContent>`) and the `<legacyDrawing>` and `<legacyDrawingHF>` ids. `None` when the XML is damaged.
 fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
     let data = xml::to_utf8(bytes);
     let text = std::str::from_utf8(&data).ok()?;
     let mut reader = Reader::from_str(text);
     let mut decls: Vec<(String, String)> = vec![];
-    let mut out = SheetScan { fragments: vec![], legacy_drawing: None, page_setup: None };
+    let mut out = SheetScan { fragments: vec![], legacy_drawing: None, legacy_drawing_hf: None, page_setup: None };
     let mut in_root = false;
     loop {
         let start = usize::try_from(reader.buffer_position()).ok()?;
@@ -804,6 +825,7 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
                 match local.as_slice() {
                     b"pageSetup" => out.page_setup = rel_id_attr(&e),
                     b"legacyDrawing" => out.legacy_drawing = rel_id_attr(&e),
+                    b"legacyDrawingHF" => out.legacy_drawing_hf = rel_id_attr(&e),
                     _ => {}
                 }
                 reader.read_to_end(e.name()).ok()?;
@@ -816,12 +838,12 @@ fn scan_sheet(bytes: &[u8]) -> Option<SheetScan> {
             }
             Event::Empty(e) if in_root => {
                 let local = e.local_name().as_ref().to_vec();
-                if local == b"legacyDrawing" || local == b"pageSetup" {
+                if local == b"legacyDrawing" || local == b"legacyDrawingHF" || local == b"pageSetup" {
                     let id = rel_id_attr(&e);
-                    if local == b"pageSetup" {
-                        out.page_setup = id;
-                    } else {
-                        out.legacy_drawing = id;
+                    match local.as_slice() {
+                        b"pageSetup" => out.page_setup = id,
+                        b"legacyDrawing" => out.legacy_drawing = id,
+                        _ => out.legacy_drawing_hf = id,
                     }
                 } else if local == b"picture"
                     && let Some(frag) = text.get(start..usize::try_from(reader.buffer_position()).ok()?)
@@ -928,6 +950,19 @@ fn shape_numbers(vml: &str) -> Vec<u64> {
         .collect()
 }
 
+/// The highest shape block VML text claims in `<o:idmap data>` or uses in a shape id.
+fn vml_block_max(vml: &str) -> u64 {
+    let used = shape_numbers(vml).into_iter().max().unwrap_or(0) / 1024;
+    let claimed = vml
+        .find("<o:idmap")
+        .and_then(|i| vml.get(i..)?.find("data=\"").map(|d| i + d + "data=\"".len()))
+        .and_then(|d| Some((d, d + vml.get(d..)?.find('"')?)))
+        .and_then(|(d, e)| vml.get(d..e))
+        .map(|list| list.split(',').filter_map(|b| b.trim().parse::<u64>().ok()).max().unwrap_or(0))
+        .unwrap_or(0);
+    used.max(claimed)
+}
+
 /// Kept VML (controls, OLE objects) plus GridCraft's note shapes: the notes get ids in a fresh
 /// shape block so they can't collide with the kept shapes the sheet XML refers to.
 fn merge_vml(kept: &str, ours: &str) -> String {
@@ -1027,6 +1062,8 @@ fn map_start(e: &BytesStart<'_>, prefixes: &mut HashSet<Vec<u8>>, map: &mut dyn 
 pub struct KeptOut {
     used: HashSet<String>,
     n: u32,
+    /// The highest VML shape block a kept header and footer drawing uses: notes go after it.
+    vml_blocks: u32,
     /// Package-root relationships (type, target, external), added when `_rels/.rels` is written.
     root: Vec<(String, String, bool)>,
     /// Names of the workbook's kept parts, which sheets' kept parts can refer to (the cache of a
@@ -1036,6 +1073,20 @@ pub struct KeptOut {
 }
 
 impl KeptOut {
+    /// Reserves the VML shape blocks the kept header and footer drawings of `wb` use, so that the
+    /// notes drawings GridCraft writes don't reuse their shape ids.
+    pub fn reserve_vml_blocks(&mut self, wb: &Workbook) {
+        let vmls =
+            wb.sheets.iter().filter_map(|s| s.preserved.as_deref()).flat_map(|p| &p.parts).filter(|q| q.content_type.eq_ignore_ascii_case(CT_VML));
+        let max = vmls.map(|q| vml_block_max(&String::from_utf8_lossy(&q.data))).max().unwrap_or(0);
+        self.vml_blocks = u32::try_from(max).unwrap_or(u32::MAX);
+    }
+
+    /// The shape block of the `n`th notes drawing.
+    pub fn notes_block(&self, n: u32) -> u32 {
+        n.saturating_add(self.vml_blocks)
+    }
+
     /// A part name for a kept part: its original name when that can't collide with anything
     /// written, otherwise a fresh one in the same folder.
     fn claim(&mut self, original: &str) -> String {
