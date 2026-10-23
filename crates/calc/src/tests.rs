@@ -329,6 +329,149 @@ fn date_text_coerces_in_the_workbook_date_system() {
     }
 }
 
+/// Lookups compare numbers exactly while `=` and the criteria functions compare them at 15
+/// significant digits. Every expectation was observed in Excel 365 with these fixtures
+/// (`=0.1+0.2` is 0.30000000000000004, `=100+1E-14` is 100.00000000000001).
+#[test]
+fn lookups_compare_numbers_exactly() {
+    let mut t = T::new();
+    for (at, input) in [
+        ("A1", "=0.1+0.2"),
+        ("A2", "0.3"),
+        ("A3", "=100+1E-14"),
+        ("A4", "100"),
+        ("A5", "=1E15+0.5"),
+        ("A6", "1E15"),
+        // Ascending 0.1, 0.3+e, 0.5 and the same descending.
+        ("B1", "0.1"),
+        ("B2", "=0.1+0.2"),
+        ("B3", "0.5"),
+        ("C1", "0.5"),
+        ("C2", "=0.1+0.2"),
+        ("C3", "0.1"),
+        // 0.3 next to 0.3+e, ascending and descending.
+        ("D1", "0.3"),
+        ("D2", "=0.1+0.2"),
+        ("D3", "0.7"),
+        ("E1", "0.7"),
+        ("E2", "=0.1+0.2"),
+        ("E3", "0.3"),
+        ("G1", "=0.1+0.2"),
+        ("H1", "x"),
+        ("G2", "row2"),
+        // The bisection probes 0.3 first and must not run on into 0.3+e.
+        ("J1", "0.1"),
+        ("J2", "0.2"),
+        ("J3", "0.3"),
+        ("J4", "=0.1+0.2"),
+        ("J5", "0.4"),
+        ("K1", "a"),
+        ("K2", "b"),
+        ("K3", "c"),
+        ("K4", "d"),
+        ("K5", "e"),
+    ] {
+        t.set(at, input);
+    }
+    let e = 0.1 + 0.2;
+    let n = Value::Number;
+    let s = |x: &str| Value::from(x);
+    let na = Value::Error(CellError::NA);
+    let cases: Vec<(&str, Value)> = vec![
+        // `=` and friends stay at 15 digits.
+        ("=A1=A2", Value::Bool(true)),
+        ("=A3=A4", Value::Bool(true)),
+        ("=A5=A6", Value::Bool(true)),
+        ("=SWITCH(A1,0.3,\"hit\",\"miss\")", s("hit")),
+        // Exact match.
+        ("=MATCH(A1,A2:A2,0)", na.clone()),
+        ("=MATCH(A2,A1:A1,0)", na.clone()),
+        ("=VLOOKUP(A1,A2:A2,1,FALSE)", na.clone()),
+        ("=HLOOKUP(A1,A2,1,FALSE)", na.clone()),
+        ("=HLOOKUP(0.3,G1:H2,2,FALSE)", na.clone()),
+        ("=XLOOKUP(A1,A2:A2,A2:A2,\"nf\")", s("nf")),
+        ("=XMATCH(A1,A2:A2)", na.clone()),
+        ("=MATCH(0.1+0.2,{0.3},0)", na.clone()),
+        ("=MATCH(0.3,A1:A2,0)", n(2.0)),
+        ("=MATCH(A1,A1:A2,0)", n(1.0)),
+        ("=MATCH(0.3,INDEX(A1:A2,0),0)", n(2.0)),
+        ("=MATCH(100,A3:A3,0)", na.clone()),
+        ("=MATCH(1E15,A5:A5,0)", na.clone()),
+        ("=XLOOKUP(0.3,A1:A2,{1;2},\"nf\",0,-1)", n(2.0)),
+        ("=XMATCH(A1,A1:A2,0,-1)", n(1.0)),
+        // Approximate match against a single entry.
+        ("=MATCH(0.3,A1:A1,1)", na.clone()),
+        ("=MATCH(0.3,A1:A1,-1)", n(1.0)),
+        ("=LOOKUP(0.3,A1:A1)", na.clone()),
+        ("=LOOKUP(0.3,A1:A1,G2)", na.clone()),
+        ("=VLOOKUP(0.3,A1:A1,1,TRUE)", na.clone()),
+        ("=HLOOKUP(0.3,G1:H2,2,TRUE)", na.clone()),
+        ("=XLOOKUP(0.3,A1:A1,A1:A1,\"nf\",-1)", s("nf")),
+        ("=XLOOKUP(0.3,A1:A1,A1:A1,\"nf\",1)", n(e)),
+        ("=XMATCH(0.3,A1:A1,-1)", na.clone()),
+        ("=XMATCH(0.3,A1:A1,1)", n(1.0)),
+        ("=MATCH(100,A3:A3,1)", na.clone()),
+        ("=MATCH(A3,A4:A4,1)", n(1.0)),
+        // Approximate match in sorted lists.
+        ("=MATCH(0.3,B1:B3,1)", n(1.0)),
+        ("=MATCH(A1,B1:B3,1)", n(2.0)),
+        ("=MATCH(0.3,C1:C3,-1)", n(2.0)),
+        ("=MATCH(0.3,D1:D3,1)", n(1.0)),
+        ("=MATCH(A1,D1:D3,1)", n(2.0)),
+        ("=MATCH(0.3,E1:E3,-1)", n(3.0)),
+        ("=MATCH(A1,E1:E3,-1)", n(2.0)),
+        ("=MATCH(0.3,J1:J5,1)", n(3.0)),
+        ("=MATCH(A1,J1:J5,1)", n(4.0)),
+        ("=MATCH(0.3,J1:J5,0)", n(3.0)),
+        ("=MATCH(A1,J1:J5,0)", n(4.0)),
+        ("=VLOOKUP(0.3,J1:K5,2,TRUE)", s("c")),
+        ("=VLOOKUP(A1,J1:K5,2,TRUE)", s("d")),
+        ("=LOOKUP(0.3,J1:J5,K1:K5)", s("c")),
+        ("=LOOKUP(A1,J1:J5,K1:K5)", s("d")),
+        // XLOOKUP / XMATCH match and search modes.
+        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",0,2)", s("nf")),
+        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",-1,2)", n(0.1)),
+        ("=XLOOKUP(0.3,B1:B3,B1:B3,\"nf\",1,2)", n(e)),
+        ("=XMATCH(0.3,B1:B3,-1,2)", n(1.0)),
+        ("=XMATCH(0.3,B1:B3,1,2)", n(2.0)),
+        ("=XMATCH(0.3,C1:C3,1,-2)", n(2.0)),
+        ("=XMATCH(0.3,C1:C3,-1,-2)", n(3.0)),
+        ("=XMATCH(0.3,C1:C3,0,-2)", na.clone()),
+        ("=XMATCH(0.3,J1:J5,0,2)", n(3.0)),
+        ("=XMATCH(A1,J1:J5,0,2)", n(4.0)),
+        ("=XMATCH(0.3,J1:J5,1,2)", n(3.0)),
+        ("=XMATCH(0.3,J1:J5,-1)", n(3.0)),
+        ("=XMATCH(0.3,J1:J5,1)", n(3.0)),
+        ("=XMATCH(A1,J1:J5,-1)", n(4.0)),
+        ("=XMATCH(0.3,B1:B3,1)", n(2.0)),
+        ("=XMATCH(0.3,B1:B3,-1)", n(1.0)),
+        ("=XMATCH(0.3,B1:B3,0,-1)", na.clone()),
+        ("=XMATCH(0.3,D1:D3,1,-1)", n(1.0)),
+        // The criteria functions keep 15 digits.
+        ("=COUNTIF(A1:A1,0.3)", n(1.0)),
+        ("=COUNTIF(A1:A1,\"<0.3\")", n(0.0)),
+        ("=COUNTIF(A1:A1,\">0.3\")", n(0.0)),
+        ("=COUNTIF(A2:A2,A1)", n(1.0)),
+        ("=COUNTIFS(A1:A1,0.3)", n(1.0)),
+        ("=SUMIF(A1:A1,0.3)", n(e)),
+        ("=SUMIFS(A1:A1,A1:A1,0.3)", n(e)),
+        ("=AVERAGEIF(A1:A1,0.3)", n(e)),
+        ("=MAXIFS(A1:A1,A1:A1,0.3)", n(e)),
+        ("=COUNTIF(A3:A3,\">100\")", n(0.0)),
+        ("=COUNTIF(J1:J5,0.3)", n(2.0)),
+        ("=ROWS(FILTER(A1:A2,A1:A2=0.3))", n(2.0)),
+        ("=MATCH(TRUE,A1:A2=0.3,0)", n(1.0)),
+    ];
+    let mut wrong = Vec::new();
+    for (formula, expected) in cases {
+        let got = crate::evaluate(&t.wb, 0, c("Z1"), formula);
+        if got != expected {
+            wrong.push(format!("{formula}: got {got:?}, Excel {expected:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
 #[test]
 fn lambda_helpers_check_shapes_and_parameters() {
     let mut t = T::new();
