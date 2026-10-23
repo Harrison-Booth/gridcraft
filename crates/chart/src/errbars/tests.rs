@@ -111,7 +111,7 @@ fn series(values: &[f64], color: Rgba, kind: ChartKind, eb: Vec<ErrorBarData>) -
 
 fn data(series: Vec<SeriesData>) -> ChartData {
     let n = series.iter().map(|s| s.values.len()).max().unwrap_or(0);
-    ChartData { palette: vec![], categories: (1..=n).map(|i| format!("c{i}")).collect(), series }
+    ChartData { palette: vec![], category_levels: vec![], categories: (1..=n).map(|i| format!("c{i}")).collect(), series }
 }
 
 fn lines(prims: &[Prim], color: Rgba) -> Vec<[[f32; 2]; 2]> {
