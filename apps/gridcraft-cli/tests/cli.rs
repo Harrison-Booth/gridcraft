@@ -174,3 +174,73 @@ fn check_exit_codes_and_json() {
     assert_eq!(run(&["check", book_s, "--tolerance", "x"]).status.code(), Some(2));
     assert_eq!(run(&["check", book_s, "--bogus"]).status.code(), Some(2));
 }
+
+#[test]
+fn check_rejects_an_empty_scan() {
+    let dir = tmpdir("check-empty");
+    std::fs::write(dir.join("notes.txt"), "not a workbook").unwrap();
+    std::fs::write(dir.join(".hidden.xlsx"), "ignored").unwrap();
+    std::fs::write(dir.join("~$locked.xlsx"), "ignored").unwrap();
+    let out = run(&["check", dir.to_str().unwrap(), "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(report["files"][0]["error"].as_str().unwrap().contains("no workbook files"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn check_reports_a_depth_limited_scan_while_checking_readable_files() {
+    let dir = tmpdir("check-depth");
+    let book = dir.join("readable.xlsx");
+    ok(&["run", "--out", book.to_str().unwrap(), "--quiet"]);
+    let mut deep = dir.clone();
+    for _ in 0..34 {
+        deep.push("d");
+    }
+    std::fs::create_dir_all(&deep).unwrap();
+    std::fs::write(deep.join("skipped.xlsx"), "not reached").unwrap();
+    let out = run(&["check", dir.to_str().unwrap(), "--json"]);
+    assert_eq!(out.status.code(), Some(1));
+    let report: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(report["totals"]["opened"], 1);
+    assert!(report["files"].as_array().unwrap().iter().any(|r| r["error"].as_str().is_some_and(|e| e.contains("depth limit"))));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A script line whose parameters are under a key `run` does not read used to run the command
+/// with no parameters at all, and the run still exited 0: three mistaken lines made Sheet2,
+/// Sheet3 and Sheet4 instead of the named sheets, and nothing said so (#2256).
+#[test]
+fn a_script_line_with_an_unknown_key_stops_the_run() {
+    let dir = tmpdir("script-keys");
+    let script = dir.join("s.jsonl");
+    let out = dir.join("t.xlsx");
+    let write = |lines: &[&str]| std::fs::write(&script, lines.join("\n")).unwrap();
+
+    write(&[r#"{"command":"file.new"}"#, r#"{"command":"home.insertSheet","args":{"name":"Report"}}"#]);
+    let o = run(&["run", "--script", script.to_str().unwrap(), "--out", out.to_str().unwrap()]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert!(!o.status.success(), "the run must stop: {err}");
+    assert!(err.contains("s.jsonl:2"), "it names the line: {err}");
+    assert!(err.contains("unknown key `args`"), "and the key: {err}");
+    assert!(!out.exists(), "and writes no workbook: {err}");
+
+    // The forms that are read still work, in one script: `params`, `id=json`, and a comment.
+    write(&[
+        r#"{"command":"file.new"}"#,
+        r#"{"command":"home.insertSheet","params":{"name":"Report"}}"#,
+        "# a comment",
+        r#"home.insertSheet={"name":"Report2"}"#,
+    ]);
+    let o = run(&["run", "--script", script.to_str().unwrap(), "--out", out.to_str().unwrap()]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let info = ok(&["info", out.to_str().unwrap()]);
+    assert!(info.contains("Report:") && info.contains("Report2:"), "the sheets are named: {info}");
+    assert!(!info.contains("Sheet2"), "and no sheet was added with a default name: {info}");
+
+    // The usage text says what a line looks like, which is how this was found.
+    let usage = String::from_utf8_lossy(&run(&[]).stderr).into_owned() + &String::from_utf8_lossy(&run(&["--help"]).stdout);
+    assert!(usage.contains(r#"{"command": "id", "params": {…}}"#), "{usage}");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
