@@ -348,6 +348,7 @@ fn month_name_text_coerces_to_a_date() {
     assert_eq!(t.get("G1"), Value::Error(CellError::Value));
 }
 
+#[test]
 fn lambda_helpers_check_shapes_and_parameters() {
     let mut t = T::new();
     let calc = Value::Error(CellError::Calc);
