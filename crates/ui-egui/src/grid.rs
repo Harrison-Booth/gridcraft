@@ -185,6 +185,8 @@ pub struct GridState {
     /// Add mode: the last area is the cell an arrow key moved to, not yet extended, so the next
     /// arrow moves it again instead of keeping it.
     pub add_pending: bool,
+    /// Add mode header drag: the areas kept from before the drag, which the dragged range joins.
+    pub header_drag_base: Vec<String>,
 }
 
 /// Excel's keyboard selection modes, shown in the status bar. In Extend mode (F8) arrow keys and
@@ -2369,6 +2371,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 return;
             }
             let range = if sel_mods.shift { RangeRef::cols(sel.anchor.col.min(c), sel.anchor.col.max(c)) } else { RangeRef::cols(c, c) };
+            app.grid.header_drag_base = add_mode_base(app);
             select_ranges(app, range, sel_mods.command, CellRef::new(geo.row_at(sh, geo.cells.top() + 1.0), c));
             app.grid.drag = Drag::Cols(if sel_mods.shift { sel.anchor.col } else { c });
             return;
@@ -2383,6 +2386,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
                 return;
             }
             let range = if sel_mods.shift { RangeRef::rows(sel.anchor.row.min(r), sel.anchor.row.max(r)) } else { RangeRef::rows(r, r) };
+            app.grid.header_drag_base = add_mode_base(app);
             select_ranges(app, range, sel_mods.command, CellRef::new(r, geo.col_at(sh, geo.cells.left() + 1.0)));
             app.grid.drag = Drag::Rows(if sel_mods.shift { sel.anchor.row } else { r });
             return;
@@ -2475,6 +2479,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
         app.grid.last_click = Some((c, now));
         if sel_mods.shift {
+            app.grid.add_pending = false;
             let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
             if let Some(d) = app.session.active_mut() {
                 d.selection.anchor = sel.anchor;
@@ -2549,14 +2554,16 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             Drag::Rows(anchor) => {
                 let r = geo.row_at(sh, p.y);
-                let _ =
-                    app.session.run("selection.set", json!({"range": RangeRef::rows(anchor.min(r), anchor.max(r)).a1(), "active": sel.active.a1()}));
+                let range = RangeRef::rows(anchor.min(r), anchor.max(r)).a1();
+                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
+                let _ = app.session.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
                 scroll_by(app, vec2(0.0, auto.y));
             }
             Drag::Cols(anchor) => {
                 let c = geo.col_at(sh, p.x);
-                let _ =
-                    app.session.run("selection.set", json!({"range": RangeRef::cols(anchor.min(c), anchor.max(c)).a1(), "active": sel.active.a1()}));
+                let range = RangeRef::cols(anchor.min(c), anchor.max(c)).a1();
+                let ranges = app.grid.header_drag_base.iter().map(String::as_str).chain([range.as_str()]).collect::<Vec<_>>().join(",");
+                let _ = app.session.run("selection.set", json!({"range": ranges, "active": sel.active.a1()}));
                 scroll_by(app, vec2(auto.x, 0.0));
             }
             Drag::MoveCols { source, .. } => {
@@ -3045,6 +3052,14 @@ fn add_mode_move(app: &mut SheetApp, dr: i64, dc: i64, shift: bool, jump: bool) 
     let range = keep.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",");
     let _ = app.session.run("selection.set", json!({"range": range, "active": active.a1()}));
     app.grid.add_pending = !kept;
+}
+
+/// The active sheet's areas in Add mode, as `selection.set` takes them; empty in other modes.
+fn add_mode_base(app: &SheetApp) -> Vec<String> {
+    if app.grid.selection_mode != SelectionMode::Add {
+        return Vec::new();
+    }
+    app.session.active().map(|d| d.selection.ranges.iter().map(|x| x.a1()).collect()).unwrap_or_default()
 }
 
 fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
