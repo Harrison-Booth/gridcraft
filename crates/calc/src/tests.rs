@@ -353,6 +353,21 @@ fn lambda_helpers_check_shapes_and_parameters() {
 }
 
 #[test]
+fn accounting_negative_text_coerces() {
+    let mut t = T::new();
+    t.set("A1", "'$(1,234)");
+    t.set("B1", "=A1+0");
+    t.set("C1", "=VALUE(A1)");
+    t.set("D1", "=--\"$ (5)\"");
+    t.set("E1", "=\"(5)%\"*100");
+    t.set("F1", "=\"(-5)\"+0");
+    t.set("G1", "$(1,234)");
+    assert_eq!((t.num("B1"), t.num("C1"), t.num("D1"), t.num("E1")), (-1234.0, -1234.0, -5.0, -5.0));
+    assert_eq!(t.get("F1"), Value::Error(CellError::Value));
+    assert_eq!(t.num("G1"), -1234.0);
+}
+
+#[test]
 fn operators() {
     let mut t = T::new();
     t.set("A1", "=\"a\"&1&TRUE");

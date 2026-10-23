@@ -1211,6 +1211,13 @@ mod tests {
         close(ev("VALUE", vec![t("12:00")]), 0.5);
         close(ev("VALUE", vec![t("2020-01-01")]), 43831.0);
         is_err(ev("VALUE", vec![t("abc")]), CellError::Value);
+        // Accounting negatives, as Excel 365 reads them.
+        close(ev("VALUE", vec![t("$(5)")]), -5.0);
+        close(ev("VALUE", vec![t("$ (1,000.50)")]), -1000.5);
+        close(ev("VALUE", vec![t("(5)%")]), -0.05);
+        for s in ["$(5)%", "$(5%)", "$5%", "(-5)", "((5))", "$(-5)", "(1/2)"] {
+            is_err(ev("VALUE", vec![t(s)]), CellError::Value);
+        }
         close(ev("NUMBERVALUE", vec![t("2.500,27"), t(","), t(".")]), 2500.27);
         close(ev("NUMBERVALUE", vec![t("3.5%")]), 0.035);
         close(ev("NUMBERVALUE", vec![t(" 1 000 ")]), 1000.0);
