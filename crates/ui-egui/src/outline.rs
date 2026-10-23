@@ -224,6 +224,10 @@ pub fn layout(geo: &Geo, sh: &Sheet) -> Layout {
 
 /// The button under `p` (logical coordinates), if any.
 pub fn hit(geo: &Geo, sh: &Sheet, p: Pos2) -> Option<Action> {
+    // Hidden symbols (or no outline) leave empty bands: a click on their edge is a cell click.
+    if geo.band_w <= 0.0 && geo.band_h <= 0.0 {
+        return None;
+    }
     let (rows, cols) = bands(geo);
     if !rows.contains(p) && !cols.contains(p) {
         return None;
@@ -261,7 +265,8 @@ pub fn paint(p: &Painter, geo: &Geo, sh: &Sheet, t: &Tokens) {
             pc.line_segment(tick, ink);
         }
     }
-    let font = theme::ui_font((10.0 * (geo.z / DISPLAY_SCALE).max(0.75)).min(14.0));
+    // The outline levels grow with the zoom like the headings beside them.
+    let font = theme::ui_font((10.0 * (geo.z / DISPLAY_SCALE)).max(7.5));
     for b in &l.buttons {
         let clip = match b.action {
             Action::Toggle { rows: true, .. } => row_clip,
