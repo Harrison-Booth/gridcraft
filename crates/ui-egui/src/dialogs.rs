@@ -1406,9 +1406,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     }
     if confirm && let Some(cmd) = d.command {
         let params = build_params(&d);
+        let recorded = crate::repeat::repeatable(cmd).then(|| params.clone());
         match app.run(cmd, params) {
             Ok(r) => {
                 open = false;
+                app.note_repeat(cmd, recorded.as_ref(), &r);
                 if d.name == "solver" {
                     app.open_dialog("solverResults", r);
                 } else if d.name == "openPassword" {

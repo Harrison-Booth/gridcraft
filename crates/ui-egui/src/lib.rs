@@ -28,6 +28,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod repeat;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -297,6 +298,8 @@ pub struct SheetApp {
     /// text noted for an unpublished cut); `None` after a copy, or once the clipboard is seen
     /// holding other text. Once the cut has been pasted, Paste leaves this text alone.
     cut_text: Option<String>,
+    /// The last command Repeat (F4, or Ctrl+Y with nothing to redo) runs again on the selection.
+    pub repeat: Option<repeat::Last>,
     /// A run of Tabs: (doc uid, sheet, column it started in, cell the last Tab landed on).
     /// Enter on that cell goes to the next row in the starting column, as in Excel (#911).
     tab_run: Option<(u64, usize, u32, CellRef)>,
@@ -347,6 +350,7 @@ impl SheetApp {
             selected_chart: None,
             clipboard_text_at_copy: None,
             cut_text: None,
+            repeat: None,
             tab_run: None,
             started: now_ms(),
             allow_close: false,
@@ -554,8 +558,40 @@ impl SheetApp {
         if id == "insert.recommendedCharts" && params.get("type").is_none() {
             return self.open_dialog("recommendedCharts", json!({}));
         }
-        if let Err(e) = self.run(id, params) {
-            self.alert(e);
+        let recorded = repeat::repeatable(id).then(|| params.clone());
+        match self.run(id, params) {
+            Ok(result) => self.note_repeat(id, recorded.as_ref(), &result),
+            Err(e) => self.alert(e),
+        }
+    }
+
+    /// Notes a command a person ran (ribbon, key tip, shortcut, menu or dialog) for Repeat:
+    /// `params` is what it ran with, when Repeat can run it again ([`repeat::repeatable`]). A
+    /// change Repeat can't run again (Clear, Sort…) leaves nothing to repeat, as in Excel;
+    /// selection, view and Undo/Redo commands leave the record alone.
+    pub fn note_repeat(&mut self, id: &str, params: Option<&Json>, result: &Json) {
+        match params.and_then(|p| repeat::record(id, p, result)) {
+            Some(last) => self.repeat = Some(last),
+            None if repeat::ends_repeat(id) => self.repeat = None,
+            None => {}
+        }
+    }
+
+    /// Repeat (F4): runs the last repeatable command again on the current selection. Does nothing
+    /// when there is none, as Excel does.
+    pub fn repeat_last(&mut self) {
+        if let Some(last) = self.repeat.clone() {
+            self.run_or_alert(&last.id, last.params);
+            self.grid.ensure_visible = true;
+        }
+    }
+
+    /// Ctrl+Y (Cmd+Y): Redo while there is something to redo, else Repeat.
+    pub fn redo_or_repeat(&mut self) {
+        if gridcraft_engine::cmd::can_redo(&self.session).is_ok() {
+            self.run_or_alert("edit.redo", json!({}));
+        } else {
+            self.repeat_last();
         }
     }
 
@@ -624,6 +660,10 @@ impl SheetApp {
         let r = match id {
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
+            "edit.repeat" => match self.repeat.clone() {
+                Some(last) => self.run(&last.id, last.params),
+                None => Err("There is no action to repeat.".into()),
+            },
             "ui.ribbonTab" => {
                 self.ui.ribbon_tab = p.get("tab").and_then(Json::as_str).unwrap_or("Home").to_string();
                 Ok(Json::Null)
@@ -1037,6 +1077,8 @@ impl SheetApp {
         };
         match r {
             Ok(_) => {
+                // Excel doesn't repeat typing, and typing leaves nothing to repeat.
+                self.repeat = None;
                 if dr != 0 || dc != 0 {
                     self.move_after_enter(dr, dc);
                 }

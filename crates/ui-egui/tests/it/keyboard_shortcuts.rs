@@ -306,3 +306,152 @@ fn ctrl_alt_letter_that_typed_text_is_not_select_all() {
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B2");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "\u{e4}");
 }
+
+// Repeat (F4, and Ctrl+Y with nothing to redo): the last repeatable action, on the new selection.
+
+fn select(h: &mut Harness, range: &str) {
+    h.state_mut().session.execute("selection.set", json!({"range": range})).unwrap();
+    h.run_steps(2);
+}
+
+fn number(h: &Harness, a1: &str) -> Option<f64> {
+    let sh = h.state().session.active().unwrap().wb.active().unwrap();
+    match sh.value_ref(CellRef::parse(a1).unwrap()) {
+        Some(gridcraft_engine::core::Value::Number(n)) => Some(*n),
+        _ => None,
+    }
+}
+
+#[test]
+fn f4_repeats_the_last_format_on_the_new_selection() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::B, CTRL);
+    assert!(style(&h, "A1").font.bold);
+    // Moving the selection is not an action: F4 still repeats Bold.
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    select(&mut h, "B2:C3");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert!(style(&h, "B2").font.bold && style(&h, "C3").font.bold);
+    // Repeat sets the state Bold set; it doesn't flip a cell that is already bold.
+    select(&mut h, "A1");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert!(style(&h, "A1").font.bold);
+    // Borders and number formats repeat with their parameters.
+    key(&mut h, Key::Num5, CTRL_SHIFT);
+    select(&mut h, "B1");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert_eq!(style(&h, "B1").num_fmt.as_str(), "0%");
+    key(&mut h, Key::Num7, CTRL_SHIFT);
+    select(&mut h, "D5");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert!(style(&h, "D5").borders.top.style != BorderStyle::None);
+    assert!(h.state().message.is_none());
+}
+
+#[test]
+fn f4_repeats_insert_rows_and_format_cells_from_menus() {
+    let mut h = harness(book("A2"));
+    h.state_mut().run_or_alert("home.insertRows", json!({}));
+    assert_eq!(number(&h, "A3"), Some(3.0));
+    select(&mut h, "A4");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert_eq!(number(&h, "A4"), None);
+    assert_eq!(number(&h, "A5"), Some(5.0));
+    // A dialog's choices (here Format Cells, as its OK button runs it) repeat as a whole.
+    h.state_mut().run_or_alert("home.formatCells", json!({"range": "A1", "style": {"font": {"italic": true}}}));
+    select(&mut h, "E7");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert!(style(&h, "E7").font.italic);
+    assert!(!style(&h, "A2").font.italic);
+}
+
+#[test]
+fn f4_does_nothing_until_something_repeatable_ran() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert!(h.state().message.is_none() && h.state().toast.is_none());
+    assert!(h.state().repeat.is_none());
+    // Typing into a cell is not repeated, and control-channel or MCP commands are not recorded.
+    h.state_mut().run("home.italic", json!({"range": "A1"})).unwrap();
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert!(h.state().repeat.is_none());
+    assert!(h.state_mut().run("edit.repeat", json!({})).is_err());
+    // The control channel reaches Repeat as `edit.repeat`.
+    key(&mut h, Key::B, CTRL);
+    select(&mut h, "C2");
+    h.state_mut().run("edit.repeat", json!({})).unwrap();
+    assert!(style(&h, "C2").font.bold);
+}
+
+#[test]
+fn ctrl_y_redoes_then_repeats_when_nothing_is_left_to_redo() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::B, CTRL);
+    key(&mut h, Key::Z, CTRL);
+    assert!(!style(&h, "A1").font.bold);
+    key(&mut h, Key::Y, CTRL);
+    assert!(style(&h, "A1").font.bold, "Ctrl+Y redoes while there is something to redo");
+    select(&mut h, "B3");
+    key(&mut h, Key::Y, CTRL);
+    assert!(style(&h, "B3").font.bold, "Ctrl+Y repeats with nothing to redo");
+}
+
+#[test]
+fn f4_while_editing_cycles_references_and_does_not_repeat() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::B, CTRL);
+    select(&mut h, "D4");
+    h.state_mut().begin_edit(Some("=A1".into()), false);
+    if let Some(ed) = h.state_mut().editor.as_mut() {
+        ed.caret = 3;
+    }
+    h.run_steps(2);
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.clone()).as_deref(), Some("=$A$1"));
+    assert!(!style(&h, "D4").font.bold);
+}
+
+#[test]
+fn f4_maps_to_repeat_and_ctrl_f4_still_closes() {
+    assert_eq!(lookup(Key::F4, Some(Key::F4), Modifiers::NONE, false), Some(Shortcut::Repeat));
+    assert_eq!(lookup(Key::F4, Some(Key::F4), Modifiers::NONE, true), Some(Shortcut::Repeat));
+    assert_eq!(lookup(Key::F4, Some(Key::F4), CTRL, false), Some(Shortcut::Run("file.close", json!({}))));
+}
+
+#[test]
+fn typing_or_clearing_leaves_nothing_to_repeat() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::B, CTRL);
+    // Delete (Clear Contents) is a change Excel can't repeat: F4 then does nothing.
+    select(&mut h, "B1");
+    key(&mut h, Key::Delete, Modifiers::NONE);
+    select(&mut h, "C2");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert!(!style(&h, "C2").font.bold);
+    // Typing into a cell ends the record too.
+    key(&mut h, Key::B, CTRL);
+    h.state_mut().begin_edit(Some("typed".into()), false);
+    assert!(h.state_mut().commit_edit(1, 0, false, false));
+    select(&mut h, "D4");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert!(!style(&h, "D4").font.bold);
+    assert!(h.state().repeat.is_none());
+}
+
+#[test]
+fn insert_dialog_entire_row_then_f4_inserts_another_row() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = harness(book("A2"));
+    // Ctrl+Shift+= opens Insert; choose Entire row and press OK.
+    key(&mut h, Key::Equals, CTRL_SHIFT);
+    h.state_mut().dialog.as_mut().unwrap().values.insert("shift".into(), json!("row"));
+    h.run_steps(4);
+    h.get_by_label("   OK   ").click();
+    h.run_steps(4);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(number(&h, "A3"), Some(3.0));
+    select(&mut h, "B4");
+    key(&mut h, Key::F4, Modifiers::NONE);
+    assert_eq!(number(&h, "A4"), None);
+    assert_eq!(number(&h, "A5"), Some(5.0));
+}
