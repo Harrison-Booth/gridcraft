@@ -1,5 +1,14 @@
 # Decisions
 
+## Bound repeated XLSX column expansion (#1022)
+
+Limit each worksheet to 1,000,000 nondefault column assignments across all `<cols>` blocks.
+This allows more than 60 full-grid passes while bounding repeated work on overlapping spans;
+counting only the final map size would not limit that work. Charge each clipped span before
+inserting it, after the existing default-record skip. Exceeding the limit returns the existing
+`IoError::TooLarge`, which aborts the import instead of silently dropping a partially read sheet.
+Keep the current last-wins semantics rather than introduce interval storage or normalization.
+
 ## Formula localization uses the existing interface preference
 
 PR #98 builds on the persisted `UiState.language` introduced by #31 and extended by #104.
@@ -19,7 +28,7 @@ The exporter inspects the parsed formula without evaluating it. It distinguishes
 
 Names are resolved using workbook/sheet scope, and structured references distinguish one table-row cell from a column. Literal `INDIRECT` and `INDEX` arguments permit tighter classification; unresolved reference dimensions are conservatively treated as potentially multiple cells. Name/AST traversal is bounded, with array preservation as the fallback. This is an export classifier, not a claim of exact Excel metadata parity for every function or user-defined function. It stays within the format crate's existing dependencies.
 
-The reader applies the same classification in reverse: a formula without dynamic-array metadata (`cm`) and not entered as a CSE array is a legacy formula, and gets the `@` Excel implies where a range meets a single-value parameter, an operator or the cell result. Inside SUMPRODUCT and other array-evaluating parameters, IF's condition and IFERROR's and IFNA's arguments are still intersected, as legacy Excel does without Ctrl+Shift+Enter; IF's results are not. The writer drops an `@` that legacy Excel would imply, or one of a single value (an edit can shrink an implied `@`'s range to one cell), and saves that formula without `cm`; any other `@` stays `_xlfn.SINGLE` in a dynamic-array formula. A legacy formula too large or deeply nested to analyse is read and saved as it is, without `cm`. Which names are built-in functions and which parameters take a single value comes from the function library, which the format crate may not depend on: the caller passes a `gridcraft_xlsx::FunctionInfo` (`read_xlsx_with`, `write_xlsx_with`; the engine supplies the library's answers), and `read_xlsx`/`write_xlsx`/`write_xlsx_as` use the crate's own table alone. See Microsoft's [Formula vs. Formula2 documentation](https://learn.microsoft.com/en-us/office/vba/excel/concepts/cells-and-ranges/range-formula-vs-formula2).
+The reader applies the same classification in reverse: a formula without dynamic-array metadata (`cm`) and not entered as a CSE array is a legacy formula, and gets the `@` Excel implies where a range meets a single-value parameter, an operator or the cell result. Inside SUMPRODUCT and other array-evaluating parameters, IF's condition and IFERROR's and IFNA's arguments are still intersected, as legacy Excel does without Ctrl+Shift+Enter; IF's results are not. The writer drops an `@` that legacy Excel would imply, or one of a single value (an edit can shrink an implied `@`'s range to one cell), and saves that formula without `cm`; any other `@` stays `_xlfn.SINGLE` in a dynamic-array formula. A formula read with `cm` keeps it on save and is not reanalysed. A legacy formula too large or deeply nested to analyse is read and saved as it is, without `cm`. Which names are built-in functions and which parameters take a single value comes from the function library, which the format crate may not depend on: the caller passes a `gridcraft_xlsx::FunctionInfo` (`read_xlsx_with`, `write_xlsx_with`; the engine supplies the library's answers), and `read_xlsx`/`write_xlsx`/`write_xlsx_as` use the crate's own table alone. See Microsoft's [Formula vs. Formula2 documentation](https://learn.microsoft.com/en-us/office/vba/excel/concepts/cells-and-ranges/range-formula-vs-formula2).
 
 ## Static cell pictures
 

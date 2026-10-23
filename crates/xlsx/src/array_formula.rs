@@ -256,6 +256,9 @@ impl<'a> Legacy<'a> {
             deepest: 0,
             at,
             functions,
+            // The budget covers every node of a formula as long as Excel allows (8,192 characters
+            // make at most about 8,200 nodes), so only names that expand a lot fall back to array
+            // evaluation.
             remaining: 16384,
             locals: Vec::new(),
             names: HashMap::new(),
@@ -396,7 +399,7 @@ impl<'a> Legacy<'a> {
             return *kind;
         }
         let (scope, bare) = match n.rsplit_once('!') {
-            Some((s, name)) => (self.wb.sheet_index(&s.trim_matches('\'').replace("''", "'")).unwrap_or(sheet), name),
+            Some((s, name)) => (self.wb.sheet_index(&gridcraft_core::unquote_sheet(s)).unwrap_or(sheet), name),
             None => (sheet, n),
         };
         if let Some(def) = self.wb.name(bare, scope) {
@@ -424,7 +427,8 @@ impl<'a> Legacy<'a> {
                 self.names.insert(key, Some(info.kind));
                 return info.kind;
             }
-            let Ok(expr) = gridcraft_formula::parse(def.formula.trim_start_matches('=')) else { return Kind::Array };
+            // A name's formula takes a top-level comma as the union operator (`Sheet1!$A$1,Sheet1!$C$1`).
+            let Ok(expr) = gridcraft_formula::parse_name(def.formula.trim_start_matches('=')) else { return Kind::Array };
             self.shared.analyses += 1;
             self.names.insert(key.clone(), None);
             // A name's own formula does not see the formula's LET variables.
@@ -532,7 +536,9 @@ impl<'a> Legacy<'a> {
             "INDEX" => {
                 let row = out.get(1);
                 let col = out.get(2);
-                let multi = !row.is_some_and(positive) || col.is_some_and(|e| !positive(e)) || (col.is_none() && !out.first().is_some_and(one_line));
+                let row_positive = row.is_some_and(|e| positive_index(e, kinds.get(1).copied()));
+                let col_positive = col.is_some_and(|e| positive_index(e, kinds.get(2).copied()));
+                let multi = !row_positive || col.is_some_and(|_| !col_positive) || (col.is_none() && !out.first().is_some_and(one_line));
                 if multi {
                     if first == Kind::Array { Kind::Array } else { Kind::Ref }
                 } else if lifted {
@@ -645,6 +651,12 @@ impl<'a> Legacy<'a> {
 
 fn positive(e: &Expr) -> bool {
     matches!(e, Expr::Number(n) if *n >= 1.0)
+}
+
+/// Whether INDEX's argument `e` (of kind `kind`) is never zero, the "whole row or column"
+/// selector. MATCH and XMATCH give a one-based position or an error, so a single-value one is.
+fn positive_index(e: &Expr, kind: Option<Kind>) -> bool {
+    positive(e) || (matches!(e, Expr::Call(name, _) if matches!(name.as_str(), "MATCH" | "XMATCH")) && kind == Some(Kind::Scalar))
 }
 
 fn one(e: &Expr) -> bool {

@@ -47,6 +47,7 @@ use gridcraft_model::Workbook;
 pub use crypto::{DecryptError, check_encryption, decrypt};
 pub use csv::{MAX_CSV_BYTES, read_csv, write_csv, write_csv_limited};
 pub use ods::read_ods;
+pub use package::MAX_PART;
 pub use passthrough::rebase_links;
 pub use xls::{read_xls, read_xls_with};
 pub use xlsb::read_xlsb;
@@ -115,6 +116,12 @@ pub fn read_xlsx_with(bytes: &[u8], functions: FunctionInfo) -> Result<(Workbook
     read::read_xlsx(bytes, functions)
 }
 
+/// The part of a zip package that declares more than [`MAX_PART`] unpacked bytes, with that size:
+/// what an [`IoError::TooLarge`] from reading the package is about when one part is too large.
+pub fn oversized_part(bytes: &[u8]) -> Option<(String, u64)> {
+    package::oversized_part(bytes)
+}
+
 /// Which member of the SpreadsheetML family a package is saved as. Only the content type of the
 /// workbook part differs (ECMA-376 Part 1 Workbook part; MS-OI29500 adds the macro-enabled types).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -173,6 +180,17 @@ pub fn write_xlsx_as(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> 
 /// [`write_xlsx_as`] with the function library's facts.
 pub fn write_xlsx_with(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
     write::write_xlsx(wb, kind, functions)
+}
+
+/// Writes a workbook as the given member of the `.xlsx` family for the file `book_name` (a bare
+/// file name, used for the workbook in a PivotChart's link to its PivotTable).
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: &str) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named_with(wb, kind, book_name, FunctionInfo::default())
+}
+
+/// [`write_xlsx_named`] with the function library's facts.
+pub fn write_xlsx_named_with(wb: &Workbook, kind: XlsxKind, book_name: &str, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write::write_xlsx_named(wb, kind, Some(book_name), functions)
 }
 
 /// CSV import options.
