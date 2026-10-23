@@ -174,8 +174,8 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 ## Revision history
 
-| Date | Change | Summary |
 | 2026-10-15 | minor | F8 Extend Selection and Shift+F8 Add or Remove Selection modes, shown in the status bar (`ui.selectionMode`) |
+| Date | Change | Summary |
 |---|---|---|
 | 2026-10-23 | minor | Frozen panes: Page Up, Ctrl+Up and Shift variants that move from the scrolled rows into the frozen ones bring the scrolled rows back to the top, so the rows in between are seen again (Page Up from far down used to end on row 1 with the view still a page down); Ctrl+Left and Alt+Page Up do the same for frozen columns. Other ways of selecting a frozen cell (click, Find, Go To, Undo, formula pointing) leave the view where it is |
 | 2026-10-23 | minor | After a left-drag of the fill handle an Auto Fill Options button sits below the filled cells; its menu redoes the fill as Copy Cells, Fill Series, Fill Formatting Only or Fill Without Formatting (undoes the drag's fill, then `edit.autoFill` in that mode). It goes away when the workbook changes or the selection moves (#1403) |
