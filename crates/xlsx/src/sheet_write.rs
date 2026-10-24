@@ -1,6 +1,6 @@
 //! Writing worksheet parts and the parts they own (tables, comments, drawings, charts).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 
 use gridcraft_core::{CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value};
@@ -17,7 +17,7 @@ use crate::write::{
     CT_CHART, CT_COMMENTS, CT_DRAWING, CT_QUERY_TABLE, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels,
     XML_DECL,
 };
-use crate::xml::{encode_xstring, esc, esc_attr, num};
+use crate::xml::{encode_xstring, esc, esc_attr, num, parse};
 
 fn sqref(ranges: &[RangeRef]) -> String {
     ranges.iter().map(|r| r.a1()).collect::<Vec<_>>().join(" ")
@@ -599,7 +599,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
             if let Some(q) = &t.query_table {
                 let qname = out.kept.claim(&format!("xl/queryTables/queryTable{n}.xml"));
-                out.part(&qname, Some(CT_QUERY_TABLE), q.clone().into_bytes());
+                out.part(&qname, Some(CT_QUERY_TABLE), remap_query_fields(q, t).into_bytes());
                 let mut trels = Rels::default();
                 trels.add("queryTable", &format!("/{qname}"));
                 out.part(&format!("xl/tables/_rels/table{n}.xml.rels"), None, trels.xml().into_bytes());
@@ -1056,6 +1056,37 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
     }
     s.push_str("</autoFilter>");
     s
+}
+
+/// Points each retained `queryTableField` at its column's new `tableColumn` id. The two link through
+/// the field id each column keeps (`TableColumn::query_field_id`), so a column moved or inserted
+/// still reads from its own field. shortcut: a field whose column was deleted keeps its old
+/// `tableColumnId`, Excel may repair the part; drop such fields once deleting a column is wired here.
+fn remap_query_fields(query: &str, t: &Table) -> String {
+    let Ok(root) = parse(query.as_bytes()) else { return query.to_string() };
+    let new_id: HashMap<u32, u32> = t.columns.iter().enumerate().filter_map(|(i, c)| Some((c.query_field_id?, u32::try_from(i + 1).ok()?))).collect();
+    let mut old_to_new: HashMap<u32, u32> = HashMap::new();
+    for f in root.path(&["queryTableRefresh", "queryTableFields"]).into_iter().flat_map(|fs| fs.kids("queryTableField")) {
+        if let (Some(old), Some(new)) = (f.attr_u32("tableColumnId"), f.attr_u32("id").and_then(|id| new_id.get(&id).copied())) {
+            old_to_new.insert(old, new);
+        }
+    }
+    // One pass over the text, so a new id is never read as an old one.
+    const KEY: &str = "tableColumnId=\"";
+    let mut out = String::with_capacity(query.len());
+    let mut rest = query;
+    while let Some(at) = rest.find(KEY) {
+        let (head, tail) = rest.split_at(at + KEY.len());
+        out.push_str(head);
+        let (value, after) = tail.split_at(tail.find('"').unwrap_or(tail.len()));
+        match value.parse::<u32>().ok().and_then(|v| old_to_new.get(&v)) {
+            Some(new) => out.push_str(&new.to_string()),
+            None => out.push_str(value),
+        }
+        rest = after;
+    }
+    out.push_str(rest);
+    out
 }
 
 fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {

@@ -11,6 +11,8 @@ use gridcraft_model::{
     NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
     ValidationKind, XmlColumnPr,
 };
+use quick_xml::Reader;
+use quick_xml::events::Event;
 
 use crate::IoError;
 use crate::fmla::from_file;
@@ -18,6 +20,7 @@ use crate::package::Rel;
 use crate::read::Ctx;
 use crate::styles::read_color;
 use crate::tables::{col_width_to_px, paper_name, pt_to_px};
+use crate::write::NS_MAIN;
 use crate::xml::{self, El};
 
 struct Shared {
@@ -967,7 +970,7 @@ fn read_query_table(cx: &mut Ctx<'_>, part: &str, x: &El, t: &mut Table) {
         // Its own relationships (none in practice) would need to be kept with it.
         let own_rels = cx.pkg.rels(&n).ok().is_none_or(|r| !r.is_empty());
         let text = String::from_utf8(bytes).ok()?;
-        (!own_rels && xml::parse(text.as_bytes()).is_ok()).then_some(text)
+        (!own_rels && xml::parse(text.as_bytes()).is_ok() && is_query_table_root(&text)).then_some(text)
     });
     match kept {
         Some(text) => {
@@ -976,6 +979,24 @@ fn read_query_table(cx: &mut Ctx<'_>, part: &str, x: &El, t: &mut Table) {
             t.connection_id = x.attr_u32("connectionId");
         }
         None => cx.warn(format!("table \"{}\": its query table could not be kept; the table was kept as a plain table", t.name)),
+    }
+}
+
+/// Whether a part's root is `queryTable` in the SpreadsheetML namespace. `El` drops namespaces, so
+/// this reads the root start tag itself. A prefixed root is refused and falls back to a plain table.
+fn is_query_table_root(text: &str) -> bool {
+    let mut reader = Reader::from_reader(text.as_bytes());
+    let mut buf = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                return e.name().as_ref() == b"queryTable"
+                    && e.attributes().flatten().any(|a| a.key.as_ref() == b"xmlns" && a.value.as_ref() == NS_MAIN.as_bytes());
+            }
+            Ok(Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::DocType(_)) => {}
+            _ => return false,
+        }
+        buf.clear();
     }
 }
 

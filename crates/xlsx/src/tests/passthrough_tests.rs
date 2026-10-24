@@ -635,6 +635,32 @@ fn a_query_table_that_cannot_be_kept_leaves_a_plain_table() {
     assert!(t.child("tableColumns").unwrap().kids("tableColumn").all(|c| c.attr("queryTableFieldId").is_none()));
 }
 
+#[test]
+fn a_query_table_root_outside_the_spreadsheet_namespace_leaves_a_plain_table() {
+    let mut zip = Unpacked::new(&query_table_package()).parts;
+    zip.insert("xl/queryTables/queryTable1.xml".to_string(), br#"<?xml version="1.0"?><queryTable name="ExternalData_1"/>"#.to_vec());
+    let items: Vec<(&str, &[u8])> = zip.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (wb, rep) = read_xlsx(&make_zip(&items)).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("query table")), "{:?}", rep.warnings);
+    assert_eq!(wb.sheets[0].tables[0].table_type, None);
+}
+
+#[test]
+fn a_query_table_keeps_its_field_links_when_columns_move() {
+    let (mut wb, _) = read_xlsx(&query_table_package()).unwrap();
+    wb.sheets[0].tables[0].columns.swap(0, 1);
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let (_, query) = u.rels(&table).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/queryTable")).unwrap();
+    // Id is now the second column, Name the first: each field follows its column to the new id.
+    let text = u.text(&query);
+    assert!(text.contains("<queryTableField id=\"1\" name=\"Id\" tableColumnId=\"2\"/>"), "{text}");
+    assert!(text.contains("<queryTableField id=\"2\" name=\"Name\" tableColumnId=\"1\"/>"), "{text}");
+}
+
 /// Where a link with `target`, in a workbook read from `from`, points once saved into `to`.
 #[cfg(unix)]
 fn rebased(target: &str, from: &str, to: &str) -> String {
