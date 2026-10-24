@@ -877,6 +877,7 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
                 totals_label: None,
                 formula: None,
                 unique_name: None,
+                query_field_id: None,
                 xml: None,
             }));
         }

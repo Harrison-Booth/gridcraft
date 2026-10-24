@@ -14,7 +14,8 @@ use crate::fmla::text_to_file;
 use crate::styles::{color_attrs, dxf_id};
 use crate::tables::{paper_id, px_to_col_width, px_to_pt};
 use crate::write::{
-    CT_CHART, CT_COMMENTS, CT_DRAWING, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels, XML_DECL,
+    CT_CHART, CT_COMMENTS, CT_DRAWING, CT_QUERY_TABLE, CT_TABLE, CT_THREADED_COMMENTS, NS_MAIN, NS_REL, NS_THREADED, Out, REL_THREADED_COMMENT, Rels,
+    XML_DECL,
 };
 use crate::xml::{encode_xstring, esc, esc_attr, num};
 
@@ -596,6 +597,13 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
             let name = table_name(&t.name, &mut used_names, out.table_id);
             let xml = table_xml(t, cols, &name, out.table_id, out);
             out.part(&format!("xl/tables/table{n}.xml"), Some(CT_TABLE), xml.into_bytes());
+            if let Some(q) = &t.query_table {
+                let qname = out.kept.claim(&format!("xl/queryTables/queryTable{n}.xml"));
+                out.part(&qname, Some(CT_QUERY_TABLE), q.clone().into_bytes());
+                let mut trels = Rels::default();
+                trels.add("queryTable", &format!("/{qname}"));
+                out.part(&format!("xl/tables/_rels/table{n}.xml.rels"), None, trels.xml().into_bytes());
+            }
             let rid = rels.add("table", &format!("../tables/table{n}.xml"));
             let _ = write!(parts, "<tablePart r:id=\"{rid}\"/>");
         }
@@ -1061,10 +1069,11 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
     } else {
         s.push_str(" totalsRowShown=\"0\"");
     }
-    if let Some(ty) = &t.table_type {
+    // `queryTable` needs its part: without it the table is plain.
+    if let Some(ty) = t.table_type.as_ref().filter(|ty| *ty != "queryTable" || t.query_table.is_some()) {
         let _ = write!(s, " tableType=\"{}\"", esc_attr(ty));
     }
-    if let Some(c) = t.connection_id {
+    if let Some(c) = t.connection_id.filter(|_| t.table_type.as_deref() != Some("queryTable") || t.query_table.is_some()) {
         let _ = write!(s, " connectionId=\"{c}\"");
     }
     s.push('>');
@@ -1081,6 +1090,11 @@ fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> 
             let _ = write!(s, " uniqueName=\"{}\"", esc_attr(u));
         }
         let _ = write!(s, " name=\"{}\"", esc_attr(&encode_xstring(name)));
+        if t.query_table.is_some()
+            && let Some(f) = col.and_then(|c| c.query_field_id)
+        {
+            let _ = write!(s, " queryTableFieldId=\"{f}\"");
+        }
         let totals = col.map(|c| c.totals).unwrap_or_default();
         if t.totals_row {
             let f = match totals {
