@@ -79,7 +79,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
   RC4-encrypted files are still refused with a message.
 - **Impact:** common in finance, government and anything older than 2007; encrypted files are
   routine in business.
-- **Estimate:** 12–18 h (`.xls` objects 8–12, encryption 4–6). [file-format-parity.md](file-format-parity.md)
+- **Estimate:** 14–21 h (`.xls` objects 10–15, encryption 4–6). [file-format-parity.md](file-format-parity.md)
 
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
