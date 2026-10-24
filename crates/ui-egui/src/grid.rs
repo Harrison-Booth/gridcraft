@@ -184,7 +184,7 @@ pub struct GridState {
     pub selection_mode: SelectionMode,
     /// Add mode: the last area is the cell an arrow key moved to, not yet extended, so the next
     /// arrow moves it again instead of keeping it.
-    pub add_pending: bool,
+    pub add_pending: Option<RangeRef>,
     /// Add mode header drag: the areas kept from before the drag, which the dragged range joins.
     pub header_drag_base: Vec<String>,
 }
@@ -239,7 +239,7 @@ impl GridState {
 
     pub fn set_selection_mode(&mut self, mode: SelectionMode) {
         self.selection_mode = mode;
-        self.add_pending = false;
+        self.add_pending = None;
     }
 }
 
@@ -2494,10 +2494,11 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         if sel_mods.shift {
             // Add mode keeps the areas already selected and drops only the provisional area it made itself.
             let mut ranges = add_mode_base(app);
-            if app.grid.add_pending {
+            if let Some(p) = app.grid.add_pending.take()
+                && ranges.last() == Some(&p.a1())
+            {
                 ranges.pop();
             }
-            app.grid.add_pending = false;
             ranges.push(RangeRef::new(sel.anchor, c).a1());
             let _ = app.session.run("selection.set", json!({"range": ranges.join(","), "active": sel.active.a1()}));
             if let Some(d) = app.session.active_mut() {
@@ -3058,24 +3059,27 @@ fn add_mode_move(app: &mut SheetApp, dr: i64, dc: i64, shift: bool, jump: bool) 
     app.grid.ensure_visible = true;
     app.grid.reveal_moving_end = shift;
     if shift {
-        let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": true, "jump": jump}));
-        app.grid.add_pending = false;
+        let _ = app.run("selection.move", json!({"dr": dr, "dc": dc, "extend": true, "jump": jump}));
+        app.grid.add_pending = None;
         return;
     }
     let Some(mut keep) = app.session.active().map(|d| d.selection.ranges.clone()) else { return };
-    if app.grid.add_pending {
+    // Only the provisional area this mode made is dropped, and only while it is still the last area.
+    if let Some(p) = app.grid.add_pending.take()
+        && keep.last() == Some(&p)
+    {
         keep.pop();
     }
     // The engine works out where the cell lands (hidden rows, merged cells, Ctrl+arrow jumps).
-    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": false, "jump": jump}));
+    let _ = app.run("selection.move", json!({"dr": dr, "dc": dc, "extend": false, "jump": jump}));
     let Some((area, active)) = app.session.active().map(|d| (d.selection.current(), d.selection.active)) else { return };
     // Landing on an area already kept leaves it kept: the next arrow doesn't drop it.
     let kept = keep.contains(&area);
     keep.retain(|r| *r != area);
     keep.push(area);
     let range = keep.iter().map(|r| r.a1()).collect::<Vec<_>>().join(",");
-    let _ = app.session.run("selection.set", json!({"range": range, "active": active.a1()}));
-    app.grid.add_pending = !kept;
+    let _ = app.run("selection.set", json!({"range": range, "active": active.a1()}));
+    app.grid.add_pending = (!kept).then_some(area);
 }
 
 /// The active sheet's areas in Add mode, as `selection.set` takes them; empty in other modes.
@@ -3088,7 +3092,7 @@ fn add_mode_base(app: &SheetApp) -> Vec<String> {
 
 fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
     // A clicked area is kept: the next Add mode arrow starts a new one.
-    app.grid.add_pending = false;
+    app.grid.add_pending = None;
     let current: Vec<RangeRef> = if add { app.session.active().map(|d| d.selection.ranges.clone()).unwrap_or_default() } else { vec![] };
     let clicked = r.a1();
     // A click on a cell inside a larger kept area removes that area, as a click on a single-cell area does.
