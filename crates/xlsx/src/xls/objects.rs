@@ -39,7 +39,7 @@ const MAX_NOTES: usize = 65_536;
 const MAX_LINKS: usize = 65_536;
 /// Cells given a hyperlink per sheet at most (as for .xlsx).
 const MAX_LINK_CELLS: usize = 10_000;
-/// Bytes of hyperlink targets copied onto a sheet's cells at most (a target is copied per cell).
+/// Bytes of hyperlink targets and tooltips copied onto a sheet's cells at most (copied per cell).
 const MAX_LINK_BYTES: usize = 16 * 1024 * 1024;
 /// `..\` steps of a relative file link at most.
 const MAX_ANTI: usize = 64;
@@ -334,12 +334,14 @@ impl Objects {
                     report.warn(format!("Hyperlinks past the first {MAX_LINK_CELLS} cells of a sheet were dropped."));
                     break 'links;
                 }
-                if bytes.saturating_add(link.target.len()) > MAX_LINK_BYTES {
-                    report.warn(format!("Hyperlink targets past {MAX_LINK_BYTES} bytes of a sheet were dropped."));
+                // Each copy holds the target and the tooltip, which can span Continue records.
+                let copied = link.target.len().saturating_add(link.tooltip.as_ref().map_or(0, String::len));
+                if bytes.saturating_add(copied) > MAX_LINK_BYTES {
+                    report.warn(format!("Hyperlink data past {MAX_LINK_BYTES} bytes of a sheet were dropped."));
                     break 'links;
                 }
                 cells += 1;
-                bytes += link.target.len();
+                bytes += copied;
                 sheet.hyperlinks.insert(at, link.clone());
             }
         }

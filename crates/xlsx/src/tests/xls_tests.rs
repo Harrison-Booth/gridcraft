@@ -814,19 +814,15 @@ fn hostile_object_records_never_panic() {
 
 #[test]
 fn hyperlink_targets_copied_onto_cells_are_capped_by_bytes() {
-    // Each target is 4,000 characters (8,000 bytes as UTF-16, within one BIFF record) on its own
-    // cell. The sheet copies at most 16 MiB of target text: 4,194 copies of 4,000 bytes.
-    let long = "a".repeat(4_000);
-    let mut sheet = bof(0x0010);
-    for r in 0..4_300u16 {
-        sheet.extend(hlink([r, r, 0, 0], 0x03, &url_moniker(&long)));
-    }
-    sheet.extend(eof());
+    // A 1,700-byte target over 9,999 cells: the sheet copies at most 16 MiB of target text, so
+    // 9,868 copies fit before the 10,000-cell cap is reached. Kept small: the test writer's
+    // compound file can't hold a stream of many megabytes.
+    let long = "a".repeat(1_700);
+    let sheet = cat(&[&bof(0x0010), &hlink([0, 9_998, 0, 0], 0x03, &url_moniker(&long)), &eof()]);
     let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
     let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
-    assert_eq!(wb.sheets[0].hyperlinks.len(), 4_194);
-    assert!(report.warnings.iter().any(|w| w.contains("bytes")), "{:?}", report.warnings);
-}
+    assert_eq!(wb.sheets[0].hyperlinks.len(), 9_868);
+    assert!(report.warnings.iter().any(|w| w.contains("bytes")), "{:?}", report.warnings);}
 
 #[test]
 fn tooltip_goes_to_the_last_link_on_its_range() {
