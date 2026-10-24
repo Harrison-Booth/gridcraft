@@ -903,7 +903,14 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
             // A column that stays keeps its settings (totals, calculated formula): with a header
             // row it's found by name, without one by position.
             let existing = if header_row {
-                old_cols.iter().find(|x| x.name.eq_ignore_ascii_case(name))
+                // A header that was normalized into a generated name keeps the settings of the
+                // column at its address, not of whichever column already has that name.
+                let raw = texts.get((c - r.start.col) as usize).and_then(|x| x.as_deref());
+                if c >= old.start.col && c <= old.end.col && raw != Some(name.as_str()) {
+                    old_cols.get((c - old.start.col) as usize)
+                } else {
+                    old_cols.iter().find(|x| x.name.eq_ignore_ascii_case(name))
+                }
             } else if c >= old.start.col && c <= old.end.col {
                 old_cols.get((c - old.start.col) as usize)
             } else {
