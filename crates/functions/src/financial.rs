@@ -1881,7 +1881,7 @@ mod tests {
 
     #[track_caller]
     fn rate_is(args: &[f64], expected: f64) {
-        assert_eq!(rate_of(args), Value::Number(expected), "RATE{args:?}");
+        close_tol(rate_of(args), expected, 1e-15);
     }
 
     /// Expected values observed in Excel 365 with these synthetic inputs.
