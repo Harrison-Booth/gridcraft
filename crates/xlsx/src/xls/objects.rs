@@ -308,7 +308,16 @@ impl Objects {
             let text = note_text(raw, &n.author);
             sheet.comments.insert(
                 n.pos,
-                Comment { author: n.author, text, replies: vec![], threaded: false, resolved: false, visible: n.shown, dates: vec![] },
+                Comment {
+                    author: n.author,
+                    text,
+                    replies: vec![],
+                    threaded: false,
+                    resolved: false,
+                    visible: n.shown,
+                    dates: vec![],
+                    note_box: None,
+                },
             );
         }
         let mut cells = 0usize;
