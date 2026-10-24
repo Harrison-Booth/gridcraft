@@ -4147,7 +4147,7 @@ fn a_password_to_modify_asks_for_it_or_a_read_only_open() {
     const PW: &str = "synthetic-modify-pw";
     let mut src = s();
     src.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
-    src.doc_mut().unwrap().wb.write_reservation = Some(gridcraft_model::WriteReservation {
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).write_reservation = Some(gridcraft_model::WriteReservation {
         password: Some(gridcraft_model::PasswordHash::new_sha512(PW, b"0123456789abcdef")),
         ..Default::default()
     });

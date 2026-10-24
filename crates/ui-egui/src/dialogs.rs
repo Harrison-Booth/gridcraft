@@ -351,7 +351,7 @@ impl Dialog {
                 if p("modify").as_bool().unwrap_or(false) {
                     values["modifyPassword"] = json!("");
                     values["readOnly"] = json!(false);
-                    return Dialog::form(
+                    return Some(Dialog::form(
                         "openPassword",
                         "Password",
                         "file.open",
@@ -361,7 +361,7 @@ impl Dialog {
                             Check { key: "readOnly", label: "Read Only" },
                         ],
                         values,
-                    );
+                    ));
                 }
                 values["password"] = json!("");
                 Dialog::form(
