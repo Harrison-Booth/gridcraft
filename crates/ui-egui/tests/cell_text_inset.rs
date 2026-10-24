@@ -142,7 +142,7 @@ fn wrapped_text_uses_the_same_insets_as_a_single_line() {
 fn text_starting_with_a_newline_keeps_the_same_bottom_inset() {
     let h = harness();
     let (_, std_bot, _) = baselines(&h, "StdBot");
-    let (_, lead, _) = baselines(&h, "Lead");
+    let (_, lead, _) = baselines(&h, "\nLead");
     let (std_row, lead_row) = (cell(&h, "C4"), cell(&h, "B8"));
     // Same row height, so bottom aligned text keeps the same inset whether or not it starts with a newline.
     let (std_inset, lead_inset) = (std_row.bottom() - std_bot, lead_row.bottom() - lead);
