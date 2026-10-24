@@ -115,7 +115,7 @@ fn filtering_a_reopened_table_again_keeps_both_criteria() {
     s.execute("data.filterBy", json!({"column":"A","values":["a","c","e","f"]})).unwrap();
     let back = reopened(wb(&s));
     let mut s = Session::new();
-    s.add_document(gridcraft_engine::DocState::new(back, None, "t".into()));
+    s.add_document(gridcraft_engine::DocState::new(back, None, "t".into(), gridcraft_engine::Trust::FromFile));
     s.execute("selection.set", json!({"cell":"A2"})).unwrap();
     s.execute("data.filterBy", json!({"column":"B","custom":{"op":">","value":"50"}})).unwrap();
     let sh = wb(&s).active().unwrap();
