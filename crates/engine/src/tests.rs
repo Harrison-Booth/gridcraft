@@ -4410,9 +4410,9 @@ fn precision_as_displayed_rounds_a_legacy_array_by_each_cell() {
 #[test]
 fn precision_as_displayed_rounds_numbers_written_to_a_new_sheet() {
     let mut s = s();
-    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [4], [7], [3], [5], [9], [2]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [4], [7], [3], [5]]})).unwrap();
     // Histogram output on a new sheet, with the option off, keeps full precision.
-    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "Sheet1!A1:A8", "cumulative": true, "newSheet": "Raw"})).unwrap();
+    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "Sheet1!A1:A6", "cumulative": true, "newSheet": "Raw"})).unwrap();
     let raw: Vec<(CellRef, f64)> = {
         let d = s.doc().unwrap();
         let sh = d.wb.sheet(d.wb.sheet_index("Raw").unwrap()).unwrap();
@@ -4425,7 +4425,7 @@ fn precision_as_displayed_rounds_numbers_written_to_a_new_sheet() {
             .collect()
     };
     s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
-    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "Sheet1!A1:A8", "cumulative": true, "newSheet": "Rounded"})).unwrap();
+    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "Sheet1!A1:A6", "cumulative": true, "newSheet": "Rounded"})).unwrap();
     let d = s.doc().unwrap();
     let si = d.wb.sheet_index("Rounded").unwrap();
     let sh = d.wb.sheet(si).unwrap();
@@ -4436,6 +4436,7 @@ fn precision_as_displayed_rounds_numbers_written_to_a_new_sheet() {
         assert_eq!(sh.value(*c), Value::Number(want), "{c:?}");
         rounded += usize::from(want != *n);
     }
+    // Cumulative shares of six values are sixths, which the percent format rounds.
     assert!(rounded > 0, "the histogram's formatted cells should be rounded");
 }
 
