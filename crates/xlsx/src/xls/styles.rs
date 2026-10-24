@@ -3,7 +3,7 @@
 //! decoded on its own: a cell XF stores its complete formatting (the fAtr* bits only say whether
 //! later changes to the parent style propagate), so nothing is inherited from `ixfParent`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gridcraft_model::style::Protection;
 use gridcraft_model::{
@@ -377,12 +377,15 @@ pub(super) fn build(r: &StyleRecords, formats: &HashMap<u16, String>, wb: &mut W
     // User-defined named styles. Excel 2007 and later write every built-in style into each .xls
     // (about fifty, their colours approximated to the palette); GridCraft defines those itself.
     let mut named: Vec<(String, Style)> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     for ns in &r.styles {
-        if ns.builtin.is_some() || ns.name.eq_ignore_ascii_case("Normal") || named.iter().any(|(n, _)| n.eq_ignore_ascii_case(&ns.name)) {
+        if ns.builtin.is_some() || ns.name.eq_ignore_ascii_case("Normal") {
             continue;
         }
         if let Some(xf) = r.xfs.get(usize::from(ns.ixf)) {
-            named.push((ns.name.clone(), xf_style(xf, &fonts, formats, &table)));
+            if seen.insert(ns.name.to_ascii_lowercase()) {
+                named.push((ns.name.clone(), xf_style(xf, &fonts, formats, &table)));
+            }
         }
     }
     wb.cell_styles = named;

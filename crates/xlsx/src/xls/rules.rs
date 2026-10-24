@@ -29,6 +29,8 @@ const MAX_RULES: usize = 65_536;
 const MAX_REFS: usize = 8_192;
 /// Data validations kept per sheet at most.
 const MAX_VALIDATIONS: usize = 65_536;
+/// Cell ranges copied into conditional formats per sheet at most; each rule copies its block's ranges.
+const MAX_CF_RANGES: usize = 1_000_000;
 /// Colour-scale stops and icon-set thresholds read at most (Excel uses up to 3 and 5).
 const MAX_STOPS: usize = 16;
 
@@ -308,7 +310,7 @@ impl SheetRules {
             CFEX => self.cf_ex(&mut r, table, formats),
             DV => match self.dv(&mut r) {
                 Some(dv) => {
-                    budget.text(dv.titles.iter().map(String::len).sum())?;
+                    budget.text(dv.titles.iter().map(String::len).sum::<usize>() + dv.f1.len() + dv.f2.len())?;
                     if self.validations.len() < MAX_VALIDATIONS {
                         self.validations.push(dv);
                     } else {
@@ -431,6 +433,8 @@ impl SheetRules {
         let mut order = 0u32;
         let mut explicit = false;
         let mut out: Vec<CondFormat> = vec![];
+        let mut ranges_left = MAX_CF_RANGES;
+        let mut over_cap = false;
         for block in &self.blocks {
             let Some(first) = block.ranges.first().map(|r| r.start) else { continue };
             for (icf, raw) in block.rules.iter().enumerate() {
@@ -443,7 +447,11 @@ impl SheetRules {
                 // Excel 97-2003 applies the first rule that matches, as "stop if true" does.
                 let stop = ext.map(|e| e.stop).or(raw.stop).unwrap_or(true);
                 match rule(raw, template, style, first, &cx) {
-                    Ok(rule) => out.push(CondFormat { ranges: block.ranges.clone(), rule, priority: priority.unwrap_or(order), stop_if_true: stop }),
+                    Ok(rule) if block.ranges.len() <= ranges_left => {
+                        ranges_left -= block.ranges.len();
+                        out.push(CondFormat { ranges: block.ranges.clone(), rule, priority: priority.unwrap_or(order), stop_if_true: stop });
+                    }
+                    Ok(_) => over_cap = true,
                     Err(why) => {
                         if !skipped.contains(&why) {
                             skipped.push(why);
@@ -475,6 +483,9 @@ impl SheetRules {
         }
         if self.too_many {
             report.warn(format!("Sheet '{}': conditional formatting or data validation rules past the first {MAX_RULES} were skipped.", sheet.name));
+        }
+        if over_cap {
+            report.warn(format!("Sheet '{}': conditional formats past {MAX_CF_RANGES} cell ranges in all were skipped.", sheet.name));
         }
         for why in skipped {
             report.warn(format!("Sheet '{}': some conditional formatting or data validation rules use {why} and were skipped.", sheet.name));
