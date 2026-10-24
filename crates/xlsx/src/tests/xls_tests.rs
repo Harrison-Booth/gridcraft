@@ -812,6 +812,29 @@ fn hostile_object_records_never_panic() {
     assert!(wb.sheets[0].comments.contains_key(&CellRef::new(0, 0)));
 }
 
+#[test]
+fn hyperlink_targets_copied_onto_cells_are_capped_by_bytes() {
+    // Twenty cells share a 1 MiB target: only sixteen copies fit in the 16 MiB sheet cap.
+    let long = "a".repeat(1 << 20);
+    let sheet = cat(&[&bof(0x0010), &hlink([0, 19, 0, 0], 0x03, &url_moniker(&long)), &eof()]);
+    let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
+    let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
+    assert_eq!(wb.sheets[0].hyperlinks.len(), 16);
+    assert!(report.warnings.iter().any(|w| w.contains("bytes")), "{:?}", report.warnings);
+}
+
+#[test]
+fn tooltip_goes_to_the_last_link_on_its_range() {
+    let first = hlink([0, 0, 0, 0], 0x03, &url_moniker("https://first.example/"));
+    let second = hlink([0, 0, 0, 0], 0x03, &url_moniker("https://second.example/"));
+    let sheet = cat(&[&bof(0x0010), &first, &second, &tooltip([0, 0, 0, 0], "Second tip"), &eof()]);
+    let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
+    let (wb, _) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
+    let link = wb.sheets[0].hyperlinks.get(&CellRef::new(0, 0)).unwrap();
+    assert_eq!(link.target, "https://second.example/");
+    assert_eq!(link.tooltip.as_deref(), Some("Second tip"));
+}
+
 fn one_sheet_with(sheet_records: &[u8]) -> Vec<u8> {
     let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])), &eof()]);
     let sheet = cat(&[&bof(0x0010), sheet_records, &rec(0x0203, &cat(&[&cell(0, 0, 0), &7.0f64.to_le_bytes()])), &eof()]);

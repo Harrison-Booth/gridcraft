@@ -39,6 +39,8 @@ const MAX_NOTES: usize = 65_536;
 const MAX_LINKS: usize = 65_536;
 /// Cells given a hyperlink per sheet at most (as for .xlsx).
 const MAX_LINK_CELLS: usize = 10_000;
+/// Bytes of hyperlink targets copied onto a sheet's cells at most (a target is copied per cell).
+const MAX_LINK_BYTES: usize = 16 * 1024 * 1024;
 /// `..\` steps of a relative file link at most.
 const MAX_ANTI: usize = 64;
 
@@ -71,6 +73,8 @@ pub(super) struct Objects {
     texts: HashMap<u16, String>,
     notes: Vec<Note>,
     links: Vec<(RangeRef, Hyperlink)>,
+    /// Index in `links` of the last link for each range, for the tooltips that follow.
+    link_at: HashMap<RangeRef, usize>,
     drawing: bool,
     any_object: bool,
     other_objects: bool,
@@ -260,6 +264,7 @@ impl Objects {
             HLINK => match hlink(&mut c) {
                 Ok(Some(link)) if self.links.len() < MAX_LINKS => {
                     budget.text(link.1.target.len())?;
+                    self.link_at.insert(link.0, self.links.len());
                     self.links.push(link);
                 }
                 Err(e) if fatal(&e) => return Err(e),
@@ -274,7 +279,8 @@ impl Objects {
                 })();
                 if let Ok((Some(range), tip)) = tip
                     && !tip.is_empty()
-                    && let Some((_, link)) = self.links.iter_mut().rev().find(|(r, _)| *r == range)
+                    && let Some(&i) = self.link_at.get(&range)
+                    && let Some((_, link)) = self.links.get_mut(i)
                 {
                     budget.text(tip.len())?;
                     link.tooltip = Some(tip);
@@ -321,13 +327,19 @@ impl Objects {
             );
         }
         let mut cells = 0usize;
+        let mut bytes = 0usize;
         'links: for (range, link) in self.links {
             for at in range.iter() {
                 if cells >= MAX_LINK_CELLS {
                     report.warn(format!("Hyperlinks past the first {MAX_LINK_CELLS} cells of a sheet were dropped."));
                     break 'links;
                 }
+                if bytes.saturating_add(link.target.len()) > MAX_LINK_BYTES {
+                    report.warn(format!("Hyperlink targets past {MAX_LINK_BYTES} bytes of a sheet were dropped."));
+                    break 'links;
+                }
                 cells += 1;
+                bytes += link.target.len();
                 sheet.hyperlinks.insert(at, link.clone());
             }
         }
