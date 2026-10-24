@@ -350,7 +350,6 @@ pub fn read_chart(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: root.path(&["pivotSource", "name"]).map(|n| strip_book(n.text.trim()).to_string()).filter(|n| !n.is_empty()),
-        pivot: root.path(&["pivotSource", "name"]).map(|n| n.text.trim().to_string()).filter(|n| !n.is_empty()),
         vary_colors: {
             // An absent varyColors is on (the CT_Boolean default; Excel draws it so). Only a
             // value other than the kind's default is kept.
