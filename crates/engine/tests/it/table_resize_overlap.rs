@@ -116,7 +116,7 @@ fn resize_onto_merged_cells_pivot_or_array_is_rejected() {
 
     let mut s = table();
     s.execute("range.setValues", json!({"range": "H1", "values": [["k", "v"], ["x", "1"], ["y", "2"]]})).unwrap();
-    s.execute("insert.pivotTable", json!({"source": "Sheet1!$H$1:$I$3", "destination": "Sheet1!D1", "rows": ["k"], "values": ["v"]})).unwrap();
+    s.execute("insert.pivotTable", json!({"source": "Sheet1!$H$1:$I$3", "destination": "Sheet1!D3", "filters": ["k"], "values": ["v"]})).unwrap();
     assert!(!sheet(&s).pivots.is_empty());
     let e = s.execute("table.resize", json!({"table": "T", "range": "A1:E2"})).unwrap_err().to_string();
     assert!(e.contains("PivotTable"), "{e}");
