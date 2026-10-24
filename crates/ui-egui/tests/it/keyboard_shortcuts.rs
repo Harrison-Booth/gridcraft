@@ -218,6 +218,38 @@ fn clicks_extend_or_add_in_the_selection_modes() {
     assert_eq!(selection_a1(&h), "B2:D4,H8,H9");
 }
 
+/// A point in the column header band, above `col`'s cells.
+fn column_header_point(h: &Harness, col: &str) -> egui::Pos2 {
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    let x = geo.cell_rect(sheet, CellRef::parse(&format!("{col}1")).unwrap()).center().x;
+    egui::pos2(x, geo.head_top() + 4.0)
+}
+
+fn drag(h: &mut Harness, from: egui::Pos2, to: egui::Pos2) {
+    h.input_mut().events.push(Event::PointerMoved(from));
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.input_mut().events.push(Event::PointerMoved(to));
+    h.run_steps(2);
+    h.input_mut().events.push(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+}
+
+#[test]
+fn add_mode_header_drag_keeps_the_earlier_areas() {
+    let mut h = harness(book("B2"));
+    key(&mut h, Key::F8, Modifiers::SHIFT);
+    click(&mut h, "F6");
+    assert_eq!(selection_a1(&h), "B2,F6");
+    h.state_mut().grid.last_click = None;
+    let (from, to) = (column_header_point(&h, "H"), column_header_point(&h, "J"));
+    drag(&mut h, from, to);
+    assert_eq!(selection_a1(&h), "B2,F6,H:J", "a header drag in Add mode adds its columns and keeps the areas already selected");
+}
+
 #[test]
 fn selection_mode_command_sets_and_reports_without_a_dialog() {
     let mut h = harness(book("A1"));
