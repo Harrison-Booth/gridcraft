@@ -648,7 +648,7 @@ fn a_query_table_root_outside_the_spreadsheet_namespace_leaves_a_plain_table() {
 #[test]
 fn a_query_table_keeps_its_field_links_when_columns_move() {
     let (mut wb, _) = read_xlsx(&query_table_package()).unwrap();
-    wb.sheets[0].tables[0].columns.swap(0, 1);
+    Arc::make_mut(&mut wb.sheets[0]).tables[0].columns.swap(0, 1);
     let out = write_xlsx(&wb).unwrap();
     let u = Unpacked::new(&out);
     u.assert_valid();
