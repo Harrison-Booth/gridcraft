@@ -2502,14 +2502,31 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mu
 /// edited, or to start one (`=Name`) when no cell is being edited.
 fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     let list = app.session.run("formulas.nameManager", json!({})).unwrap_or(Json::Null);
-    let names: Vec<String> = list.as_array().into_iter().flatten().filter_map(|n| n.get("name").and_then(Json::as_str)).map(str::to_string).collect();
+    let active_sheet = app.session.active().and_then(|doc| doc.wb.active().map(|s| s.name.clone())).unwrap_or_default();
+    // (name, scope, text to paste): a name scoped to another sheet is pasted qualified, since the
+    // bare name would resolve to a different definition (or none).
+    let names: Vec<(String, String, String)> = list
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|n| {
+            let name = n.get("name").and_then(Json::as_str)?;
+            let scope = n.get("scope").and_then(Json::as_str).unwrap_or("Workbook");
+            let text = if scope == "Workbook" || scope == active_sheet {
+                name.to_string()
+            } else {
+                format!("{}!{name}", gridcraft_engine::formula::quote_sheet(scope))
+            };
+            Some((name.to_string(), scope.to_string(), text))
+        })
+        .collect();
     ui.label("Paste name:");
     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
         if names.is_empty() {
             ui.label(egui::RichText::new("No names defined").italics());
         }
-        for (i, n) in names.iter().enumerate() {
-            let r = ui.add(egui::Button::selectable(i == d.list_index, n).min_size(vec2(480.0, 20.0)));
+        for (i, (n, scope, _)) in names.iter().enumerate() {
+            let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{n:<24} {scope}")).min_size(vec2(480.0, 20.0)));
             if r.clicked() {
                 d.list_index = i;
             }
@@ -2521,10 +2538,10 @@ fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     });
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some(n) = names.get(d.list_index) {
+    if *confirm && let Some((_, _, text)) = names.get(d.list_index) {
         match app.editor.as_mut() {
-            Some(ed) => ed.paste_text(n),
-            None => app.begin_edit(Some(format!("={n}")), false),
+            Some(ed) => ed.paste_text(text),
+            None => app.begin_edit(Some(format!("={text}")), false),
         }
     }
     if !open {
