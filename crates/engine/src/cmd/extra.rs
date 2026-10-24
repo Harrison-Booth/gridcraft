@@ -889,7 +889,7 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
                 let v = sheet.value(at);
                 let text = match v.as_text() {
                     Some(x) => x.to_string(),
-                    None => crate::display::cell_text(wb, sheet, at),
+                    None => crate::display::value_text(wb, sheet, at),
                 };
                 (!text.trim().is_empty()).then_some(text)
             })
@@ -930,7 +930,7 @@ fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
                 let constant_text = sheet.value(at).as_text() == Some(col.name.as_str()) && sheet.cell(at).is_some_and(|x| x.formula.is_none());
                 if !constant_text {
                     let style = sheet.style_id(at);
-                    sheet.cells.set(at, Cell { value: Value::text(col.name.as_str()), style, ..Default::default() });
+                    sheet.set_cell(at, Cell { value: Value::text(col.name.as_str()), style, ..Default::default() });
                 }
             }
         }

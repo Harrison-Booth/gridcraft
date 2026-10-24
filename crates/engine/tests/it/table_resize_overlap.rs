@@ -193,3 +193,29 @@ fn resizing_a_table_without_a_header_row_keeps_its_names_and_data() {
     assert_eq!(names(&s, 0), ["a", "b", "Column1"]);
     assert_eq!(sheet(&s).value(r.start).display(), first);
 }
+
+#[test]
+fn resized_formula_header_is_named_by_its_value_when_formulas_show() {
+    let mut s = with_headers("A1:B3", &["x", "y"]);
+    s.execute("cell.set", json!({"cell": "C1", "input": "=1+1"})).unwrap();
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        std::sync::Arc::make_mut(&mut wb.sheets[0]).show_formulas = true;
+    }
+    s.execute("table.resize", json!({"table": "T", "range": "A1:C3"})).unwrap();
+    assert_eq!(names(&s, 0), ["x", "y", "2"]);
+    assert_eq!(headers(&s, 0), names(&s, 0));
+}
+
+#[test]
+fn resized_picture_header_is_replaced_and_its_picture_removed() {
+    let mut s = with_headers("A1:B3", &["x", "y"]);
+    {
+        let wb = std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb);
+        let picture = gridcraft_engine::model::CellPicture { data: vec![1, 2, 3], mime: "image/png".into(), alt: String::new() };
+        std::sync::Arc::make_mut(&mut wb.sheets[0]).set_picture(gridcraft_core::CellRef::new(0, 2), std::sync::Arc::new(picture));
+    }
+    s.execute("table.resize", json!({"table": "T", "range": "A1:C3"})).unwrap();
+    assert!(!sheet(&s).cell_pictures.contains_key(&gridcraft_core::CellRef::new(0, 2)));
+    assert_eq!(headers(&s, 0), names(&s, 0));
+}
