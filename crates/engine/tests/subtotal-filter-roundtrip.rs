@@ -1,4 +1,4 @@
-//! SUBTOTAL over filtered rows keeps its value through an XLSX save and reopen (ft-3ir.10.24).
+//! SUBTOTAL over filtered rows keeps its value through an XLSX save and reopen.
 //!
 //! Excel (observed in Windows Excel 16 with synthetic workbooks) saves rows a filter hides as plain
 //! `hidden="1"` rows; a hidden row counts as filtered when it lies in an AutoFilter (sheet or table)
