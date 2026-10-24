@@ -8,7 +8,7 @@ use crate::DocState;
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(noundo "file.new", "New Workbook", ["File"], Some("Cmd+N"), "{sample?: \"budget\"|\"sales\"|\"grades\"}", always, new_workbook),
-        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
+        cmd!(noundo "file.open", "Open…", ["File"], Some("Cmd+O"), "{path} | {name, base64}, plus {password} for a password-protected workbook, {modifyPassword} for one with a password to modify (or {readOnly: true} to open it without; Save then asks for a new file), and {csvAsText?: bool} to keep every csv/tsv/txt field as text, with no number or date conversion (xlsx, xlsm, xls import, xlsb and ods data import, csv, tsv, txt, json)", always, open),
         cmd!(noundo "file.save", "Save", ["File"], Some("Cmd+S"), "{path?} (xlsx by default; .csv/.tsv/.json/.html/.pdf by extension)", has_doc, save),
         cmd!(noundo "file.saveAs", "Save As…", ["File"], Some("Cmd+Shift+S"), "{path} (.xlsx, .csv, .tsv, .json, .html, or .pdf: a PDF of the active sheet)", has_doc, save_as),
         cmd!(query "file.saveBytes", "Encode Workbook", [], None, "{format?: xlsx|csv|tsv|json|html} → {base64}", has_doc, save_bytes),
@@ -57,6 +57,19 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     };
     let encrypted = gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Encrypted;
     let (mut wb, warnings) = crate::io::open_bytes_with(&name, &bytes, str_param(p, "password"), bool_param(p, "csvAsText").unwrap_or(false))?;
+    // A password to modify: the right one or a read-only open, or the workbook doesn't open.
+    let mut read_only = false;
+    if let Some(hash) = wb.write_reservation.as_ref().and_then(|r| r.password.as_ref()) {
+        read_only = bool_param(p, "readOnly").unwrap_or(false);
+        match str_param(p, "modifyPassword") {
+            _ if read_only => {}
+            None => return Err(EngineError::Other(format!("'{name}' {}", crate::io::MODIFY_PASSWORD_REQUIRED))),
+            Some(pw) if !hash.verify(pw).map_err(|e| bad("file.open", e))? => {
+                return Err(EngineError::Other(crate::io::WRONG_PASSWORD.into()));
+            }
+            Some(_) => {}
+        }
+    }
     wb.source_dir = str_param(p, "path").and_then(crate::io::source_dir);
     // What `CELL("filename")` reports (#1489). A workbook opened from bytes knows its name but
     // never a folder, so it reports `[name]Sheet` with none; an import reports the file it came
@@ -76,7 +89,7 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     // An import has no save target: ordinary Save must ask for a new destination. Neither does a
     // workbook decrypted with its password, so Save never replaces the encrypted original with
     // an unprotected copy.
-    let path = str_param(p, "path").filter(|_| !imported && !encrypted).map(str::to_string);
+    let path = str_param(p, "path").filter(|_| !imported && !encrypted && !read_only).map(str::to_string);
     // Replace an untouched blank Book1 like Excel does.
     if s.documents().len() == 1
         && s.active().is_some_and(|d| d.path.is_none() && !d.is_dirty() && d.undo.is_empty() && d.wb.sheets.iter().all(|sh| sh.cells.is_empty()))

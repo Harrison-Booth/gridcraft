@@ -4143,6 +4143,46 @@ fn encrypted_book(password: &str) -> Vec<u8> {
 }
 
 #[test]
+fn a_password_to_modify_asks_for_it_or_a_read_only_open() {
+    const PW: &str = "synthetic-modify-pw";
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    src.doc_mut().unwrap().wb.write_reservation = Some(gridcraft_model::WriteReservation {
+        password: Some(gridcraft_model::PasswordHash::new_sha512(PW, b"0123456789abcdef")),
+        ..Default::default()
+    });
+    let bytes = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+    let b64 = crate::io::base64_encode(&bytes);
+    let open = |s: &mut Session, extra: serde_json::Value| {
+        let mut p = json!({"name": "Reserved.xlsx", "base64": b64});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        s.execute("file.open", p)
+    };
+    let mut s = Session::new();
+    let err = open(&mut s, json!({})).unwrap_err().to_string();
+    assert!(err.contains(crate::io::MODIFY_PASSWORD_REQUIRED), "{err}");
+    assert!(s.take_ui_requests().is_empty(), "programmatic calls never open dialogs");
+    for wrong in ["not-it", ""] {
+        let err = open(&mut s, json!({"modifyPassword": wrong})).unwrap_err().to_string();
+        assert!(err.contains(crate::io::WRONG_PASSWORD), "{err}");
+    }
+    assert!(s.documents().is_empty());
+
+    // Read-only: opens, keeps the reservation, but has no file to save over.
+    open(&mut s, json!({"readOnly": true})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    assert!(s.doc().unwrap().wb.write_reservation.is_some());
+
+    // The password: opens, and the reservation survives a save.
+    let mut s = Session::new();
+    open(&mut s, json!({"modifyPassword": PW})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    let saved = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+    let (back, _) = crate::io::open_bytes("book.xlsx", &saved).unwrap();
+    assert!(back.write_reservation.and_then(|r| r.password).is_some_and(|h| h.verify(PW) == Ok(true)));
+}
+
+#[test]
 fn encrypted_workbooks_open_with_their_password() {
     const PW: &str = "synthetic-pw-5521";
     let b64 = crate::io::base64_encode(&encrypted_book(PW));

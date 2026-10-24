@@ -347,6 +347,22 @@ impl Dialog {
                 // An empty password from the start, so OK on the untouched field says "incorrect"
                 // rather than asking for the password again.
                 let mut values = params.clone();
+                // A workbook with a password to modify asks for that, or a read-only open.
+                if p("modify").as_bool().unwrap_or(false) {
+                    values["modifyPassword"] = json!("");
+                    values["readOnly"] = json!(false);
+                    return Dialog::form(
+                        "openPassword",
+                        "Password",
+                        "file.open",
+                        vec![
+                            Note(format!("'{file}' is reserved by its author. Enter the password to modify it, or open it read-only.")),
+                            Password { key: "modifyPassword", label: "Password:" },
+                            Check { key: "readOnly", label: "Read Only" },
+                        ],
+                        values,
+                    );
+                }
                 values["password"] = json!("");
                 Dialog::form(
                     "openPassword",
@@ -1504,7 +1520,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             }
             // A wrong password: say so, clear the field and stay open for another try.
             Err(e) if d.name == "openPassword" => {
-                d.values.insert("password".into(), json!(""));
+                let field = if d.values.contains_key("modifyPassword") { "modifyPassword" } else { "password" };
+                d.values.insert(field.into(), json!(""));
                 app.message = Some((d.title.clone(), crate::clean_error(&e)));
             }
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
