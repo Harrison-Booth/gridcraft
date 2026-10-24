@@ -1004,8 +1004,8 @@ const GRIDLINE_W: f32 = 1.0;
 pub(crate) fn cell_text_lead(galley: &egui::Galley, font_size: f32) -> f32 {
     galley
         .rows
-        .first()
-        .and_then(|row| row.glyphs.first())
+        .iter()
+        .find_map(|row| row.glyphs.first())
         .map(|g| g.font_height - g.font_ascent - CELL_TEXT_DESCENT_EM * font_size)
         .filter(|lead| lead.is_finite())
         .map_or(0.0, |lead| lead.clamp(0.0, font_size.max(0.0)))

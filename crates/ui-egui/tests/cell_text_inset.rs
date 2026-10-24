@@ -32,6 +32,8 @@ fn harness() -> Harness {
     // lines that fit the row with any fallback font (long words break mid-word and overflow).
     set(&mut s, "B6", "Top1 Top2");
     set(&mut s, "C6", "Bot1 Bot2");
+    // Row 8: a standard row, bottom aligned, whose text starts with a newline (an empty first row).
+    set(&mut s, "B8", "\nLead");
     for (cmd, range) in [
         ("home.alignTop", "B2"),
         ("home.alignMiddle", "C2"),
@@ -40,6 +42,7 @@ fn harness() -> Harness {
         ("home.alignBottom", "C4"),
         ("home.alignTop", "B6"),
         ("home.alignBottom", "C6"),
+        ("home.alignBottom", "B8"),
     ] {
         s.execute(cmd, json!({"range": range})).unwrap();
     }
@@ -67,7 +70,10 @@ fn baselines(h: &Harness, text: &str) -> (f32, f32, f32) {
             Shape::Text(t) if t.galley.job.text == text => {
                 let size = t.galley.job.sections.first()?.format.font_id.size;
                 let base = |row: &egui::epaint::text::PlacedRow| Some(t.pos.y + row.pos.y + row.glyphs.first()?.pos.y);
-                Some((size, base(t.galley.rows.first()?)?, base(t.galley.rows.last()?)?))
+                // Skip the empty rows a leading newline leaves above the text.
+                let mut rows = t.galley.rows.iter().filter(|r| !r.glyphs.is_empty());
+                let (first, last) = (rows.clone().next()?, rows.next_back()?);
+                Some((size, base(first)?, base(last)?))
             }
             _ => None,
         })
@@ -130,4 +136,15 @@ fn wrapped_text_uses_the_same_insets_as_a_single_line() {
         wrap_row.bottom() - wrap_bot,
         row.bottom() - bot
     );
+}
+
+#[test]
+fn text_starting_with_a_newline_keeps_the_same_bottom_inset() {
+    let h = harness();
+    let (_, std_bot, _) = baselines(&h, "StdBot");
+    let (_, lead, _) = baselines(&h, "Lead");
+    let (std_row, lead_row) = (cell(&h, "C4"), cell(&h, "B8"));
+    // Same row height, so bottom aligned text keeps the same inset whether or not it starts with a newline.
+    let (std_inset, lead_inset) = (std_row.bottom() - std_bot, lead_row.bottom() - lead);
+    assert!((lead_inset - std_inset).abs() <= 1.0, "bottom inset {lead_inset} with a leading newline vs {std_inset}");
 }
