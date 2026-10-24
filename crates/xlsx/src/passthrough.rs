@@ -1366,7 +1366,7 @@ impl KeptReader {
         if !self.on {
             return;
         }
-        for (id, part, chartex) in list {
+        for (id, part, chartex, shapes) in list {
             let Some(ch) = sheet.charts.iter_mut().find(|c| c.id == id) else { continue };
             let rels = match raw_rels(cx, &part) {
                 Ok(r) => r,
@@ -1378,8 +1378,9 @@ impl KeptReader {
             let mut p = Preserved::default();
             let mut seen = HashSet::from([normalize(&part)]);
             for r in rels.iter().filter(|r| !r.external && is_kind(r, CHART_PARTS)) {
-                // A chartex part has no element that refers to user shapes.
-                if chartex && is_kind(r, USER_SHAPES) {
+                // A chartex part has no element that refers to user shapes, and a chart keeps only
+                // the shapes its `<c:userShapes>` names: another one would take that element's place.
+                if is_kind(r, USER_SHAPES) && (chartex || shapes.as_deref() != Some(r.id.as_str())) {
                     continue;
                 }
                 if let Err(e) = self.keep_through(cx, &mut p, std::slice::from_ref(r), &mut seen, CHART_PARTS) {

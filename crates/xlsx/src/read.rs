@@ -33,8 +33,9 @@ pub struct Ctx<'a> {
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
     /// Charts of the current sheet read so far: model id, chart part name, whether it is a chartex
-    /// part. Their style, colour and user-shape parts are kept once the sheet is read.
-    pub chart_parts: Vec<(u32, String, bool)>,
+    /// part, and the relationship id its `<c:userShapes>` names. Their style, colour and user-shape
+    /// parts are kept once the sheet is read.
+    pub chart_parts: Vec<(u32, String, bool, Option<String>)>,
 }
 
 impl Ctx<'_> {

@@ -1094,6 +1094,30 @@ fn chart_shapes_that_refer_to_rewritten_content_are_dropped() {
 }
 
 #[test]
+fn an_unnamed_user_shapes_part_is_not_kept() {
+    // The chart has a second shapes part that its `<c:userShapes>` does not name (rId9 does).
+    let mut u = Unpacked::new(&styled_chart_package(("image", "../media/image9.png")));
+    let stray = format!(r#"<Relationship Id="rId8" Type="{REL_2011}/chartUserShapes" Target="../drawings/drawing8.xml"/></Relationships>"#);
+    let chart_rels = u.text("xl/charts/_rels/chart1.xml.rels").replace("</Relationships>", &stray);
+    u.parts.insert("xl/charts/_rels/chart1.xml.rels".into(), chart_rels.into_bytes());
+    u.parts.insert("xl/drawings/drawing8.xml".into(), shapes_part("stray").into_bytes());
+    let types = u
+        .text("[Content_Types].xml")
+        .replace("</Types>", &format!(r#"<Override PartName="/xl/drawings/drawing8.xml" ContentType="{CT_SHAPES}"/></Types>"#));
+    u.parts.insert("[Content_Types].xml".into(), types.into_bytes());
+    let files: Vec<(&str, &[u8])> = u.parts.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (wb, report) = read_xlsx(&make_zip(&files)).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let saved = Unpacked::new(&write_xlsx(&wb).unwrap());
+    saved.assert_valid();
+    let chart = written_chart(&saved, "chart");
+    let (rid, shapes) = chart_rel_data(&saved, &chart, "chartUserShapes").unwrap();
+    assert_eq!(shapes, shapes_part("shapes").as_bytes());
+    assert!(saved.text(&chart).ends_with(&format!(r#"</c:chart><c:userShapes r:id="{rid}"/></c:chartSpace>"#)));
+    assert!(!saved.parts.values().any(|v| v == shapes_part("stray").as_bytes()));
+}
+
+#[test]
 fn a_restyled_or_retyped_chart_drops_its_style_and_colours_but_keeps_its_shapes() {
     use gridcraft_model::ChartKind;
     let (mut wb, _) = read_xlsx(&styled_chart_package(("image", "../media/image9.png"))).unwrap();
