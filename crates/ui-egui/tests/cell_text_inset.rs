@@ -143,6 +143,12 @@ fn text_starting_with_a_newline_keeps_the_same_bottom_inset() {
     let h = harness();
     let (_, std_bot, _) = baselines(&h, "StdBot");
     let (_, lead, _) = baselines(&h, "\nLead");
+    // The text really does start with an empty galley row, which is what the lead must skip.
+    let first_row_empty = h.output().shapes.iter().any(|s| match &s.shape {
+        Shape::Text(t) if t.galley.job.text == "\nLead" => t.galley.rows.first().is_some_and(|r| r.glyphs.is_empty()),
+        _ => false,
+    });
+    assert!(first_row_empty, "the newline leaves an empty first row");
     let (std_row, lead_row) = (cell(&h, "C4"), cell(&h, "B8"));
     // Same row height, so bottom aligned text keeps the same inset whether or not it starts with a newline.
     let (std_inset, lead_inset) = (std_row.bottom() - std_bot, lead_row.bottom() - lead);
