@@ -109,6 +109,29 @@ fn a_sheet_with_only_kept_extensions_gets_an_ext_list() {
 }
 
 #[test]
+fn a_modelled_extension_with_an_unmodelled_child_is_reported_dropped() {
+    let sheet = format!(
+        r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}"><sheetData/><extLst><ext uri="{{05C60535-1F16-4fd2-B633-F4F36F0B64E0}}" xmlns:x14="{NS_X14}"><x14:sparklineGroups/><x14:unknownThing/></ext></extLst></worksheet>"#
+    );
+    let rels = format!(
+        r#"<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="{NS_R}/worksheet" Target="worksheets/sheet1.xml"/></Relationships>"#
+    );
+    let workbook = format!(
+        r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheets><sheet name="A" sheetId="1" r:id="rId1"/></sheets></workbook>"#
+    );
+    let bytes = make_zip(&[
+        ("[Content_Types].xml", CT.as_bytes()),
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+    ]);
+    let (_, report) = read_xlsx(&bytes).unwrap();
+    let w = report.warnings.iter().find(|w| w.starts_with("sheet \"A\":")).unwrap_or_else(|| panic!("{:?}", report.warnings));
+    assert!(w.contains("{05C60535-1F16-4fd2-B633-F4F36F0B64E0}"), "{w}");
+}
+
+#[test]
 fn a_new_workbook_has_no_ext_lists() {
     let saved = write_xlsx(&gridcraft_model::Workbook::new()).unwrap();
     assert!(!part(&saved, "xl/workbook.xml").contains("extLst"));

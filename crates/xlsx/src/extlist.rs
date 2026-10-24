@@ -169,6 +169,10 @@ pub(crate) fn keep_workbook(cx: &mut Ctx<'_>, ext_lst: Option<&El>, p: &mut Pres
 /// sheet reader.
 pub(crate) fn read_sheet_ext(cx: &mut Ctx<'_>, ext: &El) {
     if ext.children.iter().any(|c| SHEET_MODELLED.contains(&c.name.as_str())) {
+        // The sheet reader keeps its modelled children; any other child of this extension is lost.
+        if ext.children.iter().any(|c| !SHEET_MODELLED.contains(&c.name.as_str())) {
+            dropped(&mut cx.sheet_exts_dropped, uri(ext));
+        }
         return;
     }
     let u = uri(ext);
