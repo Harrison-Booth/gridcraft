@@ -1373,7 +1373,6 @@ impl SheetApp {
     /// asks for a frame when the gate opens, so an idle window still saves it.
     fn autosave(&mut self, ctx: &egui::Context) {
         const GATE_MS: f64 = 2000.0;
-        let gate = GATE_MS * f64::from(1u32 << self.autosave_failures.min(5));
         if let Some(job) = &self.autosave_job {
             match job.poll() {
                 Some(result) => {
@@ -1385,6 +1384,8 @@ impl SheetApp {
                 None => return,
             }
         }
+        // After the poll: a finished save may have reset the failure count.
+        let gate = GATE_MS * f64::from(1u32 << self.autosave_failures.min(5));
         let pending =
             self.ui.autosave && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")));
         if !pending {
@@ -1480,7 +1481,19 @@ impl SheetApp {
                 keytips::Action::Command(id @ ("edit.copy" | "edit.cut")) => self.copy_to_clipboard(ctx, id),
                 keytips::Action::Command("edit.paste") => self.paste_from_clipboard(),
                 keytips::Action::Command(id) => self.run_or_alert(id, json!({})),
+                keytips::Action::CommandWith(id, params) => {
+                    let params: Json = serde_json::from_str(params).unwrap_or_else(|_| json!({}));
+                    // A Borders preset picked by key tip becomes the split button's face, as a
+                    // click on the same menu item does.
+                    if id == "home.borders"
+                        && let Some(preset) = params.get("preset").and_then(Json::as_str)
+                    {
+                        self.grid.last_border = preset.to_string();
+                    }
+                    self.run_or_alert(id, params);
+                }
                 keytips::Action::Dialog(name) => self.open_dialog(name, json!({})),
+                keytips::Action::DialogWith(name, params) => self.open_dialog(name, serde_json::from_str(params).unwrap_or_else(|_| json!({}))),
                 // Reserved sequence: fires silently while its command is missing. When the
                 // command lands in the catalog it goes live with no table edit.
                 keytips::Action::Pending(id) => {
@@ -1657,6 +1670,35 @@ mod autosave_gate_tests {
         app.grid.last_autosave = now_ms() - 2500.0;
         frame(&mut app);
         assert!(app.autosave_job.is_none(), "the retry backs off after a failure");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn retry_that_succeeds_uses_the_base_gate_for_an_edit_made_during_it() {
+        let dir = temp_dir("autosave-retry");
+        std::fs::write(dir.join("blocker.txt"), b"not a folder").unwrap();
+        let mut app = dirty_app(&dir.join("blocker.txt").join("book.xlsx"));
+        app.ui.autosave = true;
+        app.grid.last_autosave = 0.0;
+        frame(&mut app);
+        app.finish_pending_autosave();
+        assert_eq!(app.autosave_failures, 1);
+        // Clear the blocker so the retry succeeds, and edit while the retry is written.
+        std::fs::remove_file(dir.join("blocker.txt")).unwrap();
+        std::fs::create_dir(dir.join("blocker.txt")).unwrap();
+        app.grid.last_autosave = now_ms() - 5000.0;
+        frame(&mut app);
+        app.run("cell.set", json!({"cell": "A1", "input": "typed during the retry"})).unwrap();
+        // The frame that collects the finished retry must ask for the base 2 s gate, not the backed-off one.
+        let mut delay = autosave_step(&mut app);
+        while app.autosave_job.is_some() {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            delay = autosave_step(&mut app);
+        }
+        assert_eq!(app.autosave_failures, 0);
+        assert_eq!(app.perf.autosaves, 1);
+        assert!(app.session.active().unwrap().is_dirty(), "the newer edit is not in the file yet");
+        assert!(delay <= std::time::Duration::from_millis(2001), "the idle window must save the edit within the base gate, got {delay:?}");
         std::fs::remove_dir_all(dir).unwrap();
     }
 
