@@ -4412,7 +4412,7 @@ fn precision_as_displayed_rounds_numbers_written_to_a_new_sheet() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [4], [7], [3], [5], [9], [2]]})).unwrap();
     // Histogram output on a new sheet, with the option off, keeps full precision.
-    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "A1:A8", "cumulative": true, "newSheet": "Raw"})).unwrap();
+    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "Sheet1!A1:A8", "cumulative": true, "newSheet": "Raw"})).unwrap();
     let raw: Vec<(CellRef, f64)> = {
         let d = s.doc().unwrap();
         let sh = d.wb.sheet(d.wb.sheet_index("Raw").unwrap()).unwrap();
@@ -4425,7 +4425,7 @@ fn precision_as_displayed_rounds_numbers_written_to_a_new_sheet() {
             .collect()
     };
     s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
-    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "A1:A8", "cumulative": true, "newSheet": "Rounded"})).unwrap();
+    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "Sheet1!A1:A8", "cumulative": true, "newSheet": "Rounded"})).unwrap();
     let d = s.doc().unwrap();
     let si = d.wb.sheet_index("Rounded").unwrap();
     let sh = d.wb.sheet(si).unwrap();
