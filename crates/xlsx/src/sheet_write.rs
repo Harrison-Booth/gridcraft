@@ -8,6 +8,8 @@ use gridcraft_model::{
     Cell, CfOperator, CfRule, CfValueKind, Color, CondFormat, ErrorStyle, FilterCriterion, LineInfo, NoteBox, NoteCorner, Orientation, Sheet,
     SparklineKind, Style, Table, TotalsFn, Validation, ValidationKind, Workbook, default_icon_thresholds, icon_count,
 };
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::{Reader, Writer};
 
 use crate::drawing::{Obj, image_content_type, image_ext};
 use crate::fmla::text_to_file;
@@ -1058,34 +1060,81 @@ fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)], out: &mu
     s
 }
 
-/// Points each retained `queryTableField` at its column's new `tableColumn` id. The two link through
-/// the field id each column keeps (`TableColumn::query_field_id`), so a column moved or inserted
-/// still reads from its own field. shortcut: a field whose column was deleted keeps its old
-/// `tableColumnId`, Excel may repair the part; drop such fields once deleting a column is wired here.
+/// Rewrites a retained query table part for the columns as saved. Each `queryTableField` takes its
+/// column's new `tableColumn` id, linked through the field id a column keeps
+/// (`TableColumn::query_field_id`). A field whose column is gone is dropped, and the count follows.
 fn remap_query_fields(query: &str, t: &Table) -> String {
-    let Ok(root) = parse(query.as_bytes()) else { return query.to_string() };
     let new_id: HashMap<u32, u32> = t.columns.iter().enumerate().filter_map(|(i, c)| Some((c.query_field_id?, u32::try_from(i + 1).ok()?))).collect();
-    let mut old_to_new: HashMap<u32, u32> = HashMap::new();
-    for f in root.path(&["queryTableRefresh", "queryTableFields"]).into_iter().flat_map(|fs| fs.kids("queryTableField")) {
-        if let (Some(old), Some(new)) = (f.attr_u32("tableColumnId"), f.attr_u32("id").and_then(|id| new_id.get(&id).copied())) {
-            old_to_new.insert(old, new);
+    let Ok(root) = parse(query.as_bytes()) else { return query.to_string() };
+    let kept = root
+        .path(&["queryTableRefresh", "queryTableFields"])
+        .map_or(0, |fs| fs.kids("queryTableField").filter(|f| f.attr_u32("id").is_some_and(|id| new_id.contains_key(&id))).count());
+    let mut reader = Reader::from_reader(query.as_bytes());
+    let mut writer = Writer::new(Vec::new());
+    let mut buf = Vec::new();
+    // Depth inside a dropped field, whose children go with it.
+    let mut dropped = 0usize;
+    loop {
+        buf.clear();
+        let ev = match reader.read_event_into(&mut buf) {
+            Ok(Event::Eof) => break,
+            Ok(ev) => ev,
+            Err(_) => return query.to_string(),
+        };
+        if dropped > 0 {
+            match ev {
+                Event::Start(_) => dropped += 1,
+                Event::End(_) => dropped -= 1,
+                _ => {}
+            }
+            continue;
+        }
+        let out = match ev {
+            Event::Start(e) if e.name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
+                Some(f) => Event::Start(f),
+                None => {
+                    dropped = 1;
+                    continue;
+                }
+            },
+            Event::Empty(e) if e.name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
+                Some(f) => Event::Empty(f),
+                None => continue,
+            },
+            Event::Start(e) if e.name().as_ref() == b"queryTableFields" => Event::Start(set_attr(&e, b"count", &kept.to_string())),
+            Event::Empty(e) if e.name().as_ref() == b"queryTableFields" => Event::Empty(set_attr(&e, b"count", &kept.to_string())),
+            other => other,
+        };
+        if writer.write_event(out).is_err() {
+            return query.to_string();
         }
     }
-    // One pass over the text, so a new id is never read as an old one.
-    const KEY: &str = "tableColumnId=\"";
-    let mut out = String::with_capacity(query.len());
-    let mut rest = query;
-    while let Some(at) = rest.find(KEY) {
-        let (head, tail) = rest.split_at(at + KEY.len());
-        out.push_str(head);
-        let (value, after) = tail.split_at(tail.find('"').unwrap_or(tail.len()));
-        match value.parse::<u32>().ok().and_then(|v| old_to_new.get(&v)) {
-            Some(new) => out.push_str(&new.to_string()),
-            None => out.push_str(value),
+    String::from_utf8(writer.into_inner()).unwrap_or_else(|_| query.to_string())
+}
+
+/// A `queryTableField` with its `tableColumnId` set to its column's new id; None when the column is gone.
+fn query_field_el(e: &BytesStart, new_id: &HashMap<u32, u32>) -> Option<BytesStart<'static>> {
+    let id = e.attributes().flatten().find(|a| a.key.as_ref() == b"id")?;
+    let new = new_id.get(&std::str::from_utf8(&id.value).ok()?.trim().parse::<u32>().ok()?)?;
+    Some(set_attr(e, b"tableColumnId", &new.to_string()))
+}
+
+/// The element with attribute `key` set to `value`, every other attribute kept in order.
+fn set_attr(e: &BytesStart, key: &[u8], value: &str) -> BytesStart<'static> {
+    let mut out = e.to_owned();
+    out.clear_attributes();
+    let mut set = false;
+    for a in e.attributes().flatten() {
+        if a.key.as_ref() == key {
+            out.push_attribute((key, value.as_bytes()));
+            set = true;
+        } else {
+            out.push_attribute(a);
         }
-        rest = after;
     }
-    out.push_str(rest);
+    if !set {
+        out.push_attribute((key, value.as_bytes()));
+    }
     out
 }
 

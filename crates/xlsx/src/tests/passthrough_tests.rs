@@ -661,6 +661,41 @@ fn a_query_table_keeps_its_field_links_when_columns_move() {
     assert!(text.contains("<queryTableField id=\"2\" name=\"Name\" tableColumnId=\"1\"/>"), "{text}");
 }
 
+#[test]
+fn a_query_field_whose_column_is_gone_is_dropped_on_save() {
+    let (mut wb, _) = read_xlsx(&query_table_package()).unwrap();
+    Arc::make_mut(&mut wb.sheets[0]).tables[0].columns.pop();
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let (_, query) = u.rels(&table).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/queryTable")).unwrap();
+    let text = u.text(&query);
+    assert!(text.contains("<queryTableField id=\"1\" name=\"Id\" tableColumnId=\"1\"/>"), "{text}");
+    assert!(!text.contains("name=\"Name\""), "{text}");
+    assert!(text.contains("<queryTableFields count=\"1\">"), "{text}");
+}
+
+#[test]
+fn a_query_field_with_single_quoted_attributes_follows_its_column() {
+    let mut zip = Unpacked::new(&query_table_package()).parts;
+    let query = String::from_utf8(zip["xl/queryTables/queryTable1.xml"].clone()).unwrap().replace('"', "'");
+    zip.insert("xl/queryTables/queryTable1.xml".to_string(), query.into_bytes());
+    let items: Vec<(&str, &[u8])> = zip.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (mut wb, _) = read_xlsx(&make_zip(&items)).unwrap();
+    Arc::make_mut(&mut wb.sheets[0]).tables[0].columns.swap(0, 1);
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let (_, query) = u.rels(&table).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/queryTable")).unwrap();
+    let text = u.text(&query);
+    assert!(text.contains("<queryTableField id=\"1\" name=\"Id\" tableColumnId=\"2\"/>"), "{text}");
+    assert!(text.contains("<queryTableField id=\"2\" name=\"Name\" tableColumnId=\"1\"/>"), "{text}");
+}
+
 /// Where a link with `target`, in a workbook read from `from`, points once saved into `to`.
 #[cfg(unix)]
 fn rebased(target: &str, from: &str, to: &str) -> String {
