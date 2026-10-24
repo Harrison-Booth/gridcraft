@@ -1,6 +1,7 @@
 //! Excel keyboard shortcuts (crate::keymap) dispatched through real egui key events.
 
 use egui::{Event, Key, Modifiers};
+use egui_kittest::kittest::Queryable as _;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_engine::model::BorderStyle;
