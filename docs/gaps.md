@@ -44,7 +44,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 ### 4. Charts lose options on round trip; shallow chart model (F, FF)
 - **Missing:** axis scaling, label options, error bars, per-point formatting.
-- **Evidence:** `Chart` and `Series` (`crates/model/src/features.rs`) have one data-label flag, one gridline flag, no axis bounds and series colour only. All 2-D kinds survive XLSX round trip (#158, #161, both merged). Smooth lines (#62), Switch Row/Column (#116), trendlines (six types, read, written, drawn) and multi-level category axes are in; charts resize from their corner handle.
+- **Evidence:** `Chart` and `Series` (`crates/model/src/features.rs`) have one data-label flag, one gridline flag, no axis bounds and limited per-series formatting, including colour, smoothing and trendlines. All 2-D kinds survive XLSX round trip (#158, #161, both merged). Smooth lines (#62), Switch Row/Column (#116), trendlines (six types, read, written, drawn) and multi-level category axes are in; charts resize from their corner handle.
 - **Impact:** charts are in most business workbooks.
 - **Estimate:** 25–35 h for beta (40–60 h full). [chart-parity.md](chart-parity.md)
 
@@ -171,6 +171,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | trivial | Docs: review fixes: §4 says per-series formatting covers colour, smoothing and trendlines |
 | 2026-10-24 | trivial | Docs: §4 (chart PRs #158 and #161 are merged; charts resize from their corner handle, so that is no longer missing), §9 (key tips cover every ribbon tab; estimate from ui-parity's remaining work), §15 (one count, 18 missing and 9 stubs, as function-parity.md has it), §19 (`.xltx` saves with its template type) refreshed; duplicate text removed |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
