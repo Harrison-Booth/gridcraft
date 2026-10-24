@@ -773,3 +773,14 @@ fn border_keytips_without_a_command_stay_silent() {
         assert_eq!(borders(&h, "A1"), Default::default(), "H,B,{k:?} must not draw a border");
     }
 }
+
+#[test]
+fn f6_and_shift_f6_move_to_the_ribbon_and_back() {
+    let mut h = harness(blank());
+    key(&mut h, Key::F6);
+    assert_eq!(h.state().keytips.prefix(), Some(""));
+    key(&mut h, Key::F6);
+    assert_eq!(h.state().keytips.prefix(), None);
+    events(&mut h, [key_event(Key::F6, true, Modifiers::SHIFT), key_event(Key::F6, false, Modifiers::SHIFT)]);
+    assert_eq!(h.state().keytips.prefix(), Some(""));
+}
