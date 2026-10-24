@@ -382,10 +382,9 @@ pub(super) fn build(r: &StyleRecords, formats: &HashMap<u16, String>, wb: &mut W
         if ns.builtin.is_some() || ns.name.eq_ignore_ascii_case("Normal") {
             continue;
         }
-        if let Some(xf) = r.xfs.get(usize::from(ns.ixf)) {
-            if seen.insert(ns.name.to_ascii_lowercase()) {
-                named.push((ns.name.clone(), xf_style(xf, &fonts, formats, &table)));
-            }
+        let Some(xf) = r.xfs.get(usize::from(ns.ixf)) else { continue };
+        if seen.insert(ns.name.to_ascii_lowercase()) {
+            named.push((ns.name.clone(), xf_style(xf, &fonts, formats, &table)));
         }
     }
     wb.cell_styles = named;
