@@ -2492,8 +2492,14 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
         }
         app.grid.last_click = Some((c, now));
         if sel_mods.shift {
+            // Add mode keeps the areas already selected and drops only the provisional area it made itself.
+            let mut ranges = add_mode_base(app);
+            if app.grid.add_pending {
+                ranges.pop();
+            }
             app.grid.add_pending = false;
-            let _ = app.session.run("selection.set", json!({"range": RangeRef::new(sel.anchor, c).a1(), "active": sel.active.a1()}));
+            ranges.push(RangeRef::new(sel.anchor, c).a1());
+            let _ = app.session.run("selection.set", json!({"range": ranges.join(","), "active": sel.active.a1()}));
             if let Some(d) = app.session.active_mut() {
                 d.selection.anchor = sel.anchor;
             }
