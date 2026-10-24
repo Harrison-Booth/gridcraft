@@ -1064,7 +1064,8 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             let offset = |c: CellRef| (c.row - src.start.row, c.col - src.start.col);
             let mut held: std::collections::BTreeSet<(u32, u32)> = src_sheet.cells.iter_range(src).map(|(c, _)| offset(c)).collect();
-            let side = src_sheet.spill.keys().chain(src_sheet.cell_pictures.keys()).chain(src_sheet.comments.keys());
+            let side =
+                src_sheet.spill.keys().chain(src_sheet.cell_pictures.keys()).chain(src_sheet.comments.keys()).chain(src_sheet.hyperlinks.keys());
             held.extend(side.chain(moved_formulas.keys()).chain(moved_pictures.keys()).filter(|c| src.contains(**c)).map(|c| offset(*c)));
             held
         };

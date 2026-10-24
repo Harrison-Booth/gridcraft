@@ -3689,6 +3689,21 @@ fn a_cut_moves_the_sources_notes_hyperlinks_and_merges() {
     assert!(v(&s, "A1").is_empty() && v(&s, "B1").is_empty());
 }
 
+/// A cell that holds only a hyperlink (its content cleared) is still part of the block: a
+/// cut must carry the link to the destination instead of dropping it with the source.
+#[test]
+fn a_cut_carries_a_link_only_cell() {
+    let mut s = s();
+    s.execute("insert.link", json!({"cell": "A1", "target": "https://example.com"})).unwrap();
+    s.execute("edit.cut", json!({"range": "A1:B1"})).unwrap();
+    s.execute("edit.paste", json!({"at": "D1"})).unwrap();
+
+    let d = s.doc().unwrap();
+    let sh = d.wb.active().unwrap();
+    assert!(!sh.hyperlinks.contains_key(&CellRef::parse("A1").unwrap()), "the link left the source");
+    assert!(sh.hyperlinks.contains_key(&CellRef::parse("D1").unwrap()), "the link arrived at the destination");
+}
+
 /// Page Layout ▸ Print Titles: naming one axis must not clear the other. `print_titles` read
 /// both `rows` and `cols` into `Option`s and assigned both unconditionally, so
 /// `{"rows":"2:2"}` silently dropped the repeated columns from every printed page.
