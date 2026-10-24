@@ -3089,10 +3089,15 @@ fn add_mode_base(app: &SheetApp) -> Vec<String> {
 fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
     // A clicked area is kept: the next Add mode arrow starts a new one.
     app.grid.add_pending = false;
-    let current: Vec<String> =
-        if add { app.session.active().map(|d| d.selection.ranges.iter().map(|x| x.a1()).collect()).unwrap_or_default() } else { vec![] };
+    let current: Vec<RangeRef> = if add { app.session.active().map(|d| d.selection.ranges.clone()).unwrap_or_default() } else { vec![] };
     let clicked = r.a1();
-    let ranges = toggled_ranges(current, clicked.clone(), add);
+    // A click on a cell inside a larger kept area removes that area, as a click on a single-cell area does.
+    let inside =
+        (add && current.len() > 1 && r.start == r.end).then(|| current.iter().position(|x| x.a1() != clicked && x.contains(r.start))).flatten();
+    let ranges: Vec<String> = match inside {
+        Some(i) => current.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, x)| x.a1()).collect(),
+        None => toggled_ranges(current.iter().map(|x| x.a1()).collect(), clicked.clone(), add),
+    };
     // A removed area takes the active cell with it; `selection.set` then puts it at the start of the last area.
     let params =
         if ranges.contains(&clicked) { json!({"range": ranges.join(","), "active": active.a1()}) } else { json!({"range": ranges.join(",")}) };
@@ -3191,6 +3196,16 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                     Key::PageUp if !cmd => mv(app, -page, 0),
                     Key::PageDown => app.run_or_alert("sheet.next", json!({})),
                     Key::PageUp => app.run_or_alert("sheet.previous", json!({})),
+                    // Add mode: Home and End move the active cell as arrows do, keeping the selected areas.
+                    Key::Home | Key::End if app.grid.selection_mode == SelectionMode::Add && (cmd || key == Key::Home) => {
+                        let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
+                        let to = match key {
+                            Key::Home if cmd => CellRef::new(sh.freeze.map(|f| f.0).unwrap_or(0), sh.freeze.map(|f| f.1).unwrap_or(0)),
+                            Key::End => sh.used_range().map(|u| u.end).unwrap_or_default(),
+                            _ => CellRef::new(a.row, 0),
+                        };
+                        add_mode_move(app, i64::from(to.row) - i64::from(a.row), i64::from(to.col) - i64::from(a.col), false, false);
+                    }
                     Key::Home if cmd => {
                         let r = sh.freeze.map(|f| f.0).unwrap_or(0);
                         let c = sh.freeze.map(|f| f.1).unwrap_or(0);
