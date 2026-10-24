@@ -357,7 +357,7 @@ fn keytip_hbl_() {
 fn keytip_hbm_() {
     let mut h = harness(blank());
     sequence(&mut h, "HBM", false);
-    assert!(h.state().dialog.is_some(), "HBM must open the formatCells dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("formatCells"), "HBM must open the formatCells dialog");
 }
 
 #[test]
