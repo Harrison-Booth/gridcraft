@@ -983,17 +983,28 @@ fn read_query_table(cx: &mut Ctx<'_>, part: &str, x: &El, t: &mut Table) {
 }
 
 /// Whether a part's root is `queryTable` in the SpreadsheetML namespace. `El` drops namespaces, so
-/// this reads the root start tag itself. A prefixed root is refused and falls back to a plain table.
+/// this reads the root start tag itself, for a default or a prefixed namespace binding.
 fn is_query_table_root(text: &str) -> bool {
     let mut reader = Reader::from_reader(text.as_bytes());
     let mut buf = Vec::new();
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e) | Event::Empty(e)) => {
-                return e.name().as_ref() == b"queryTable"
-                    && e.attributes().flatten().any(|a| a.key.as_ref() == b"xmlns" && a.value.as_ref() == NS_MAIN.as_bytes());
+                let raw = e.name();
+                let raw = raw.as_ref();
+                let (prefix, local) = match raw.iter().position(|&b| b == b':') {
+                    Some(i) => (&raw[..i], &raw[i + 1..]),
+                    None => (&raw[..0], raw),
+                };
+                return local == b"queryTable"
+                    && e.attributes().flatten().any(|a| {
+                        let key = a.key.as_ref();
+                        let bound = if prefix.is_empty() { key == b"xmlns" } else { key.strip_prefix(b"xmlns:") == Some(prefix) };
+                        bound && a.value.as_ref() == NS_MAIN.as_bytes()
+                    });
             }
             Ok(Event::Decl(_) | Event::Comment(_) | Event::PI(_) | Event::DocType(_)) => {}
+            Ok(Event::Text(t)) if t.iter().all(u8::is_ascii_whitespace) => {}
             _ => return false,
         }
         buf.clear();

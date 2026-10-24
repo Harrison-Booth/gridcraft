@@ -636,6 +636,17 @@ fn a_query_table_that_cannot_be_kept_leaves_a_plain_table() {
 }
 
 #[test]
+fn a_query_table_with_a_prefixed_root_and_a_formatted_prolog_is_kept() {
+    let mut zip = Unpacked::new(&query_table_package()).parts;
+    let query = format!("<?xml version=\"1.0\"?>\n<q:queryTable xmlns:q=\"{NS_MAIN}\" name=\"ExternalData_1\" connectionId=\"1\"/>");
+    zip.insert("xl/queryTables/queryTable1.xml".to_string(), query.into_bytes());
+    let items: Vec<(&str, &[u8])> = zip.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (wb, rep) = read_xlsx(&make_zip(&items)).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("query table")), "{:?}", rep.warnings);
+    assert!(wb.sheets[0].tables[0].query_table.is_some());
+}
+
+#[test]
 fn a_query_table_root_outside_the_spreadsheet_namespace_leaves_a_plain_table() {
     let mut zip = Unpacked::new(&query_table_package()).parts;
     zip.insert("xl/queryTables/queryTable1.xml".to_string(), br#"<?xml version="1.0"?><queryTable name="ExternalData_1"/>"#.to_vec());
