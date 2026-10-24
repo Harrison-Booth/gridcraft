@@ -34,7 +34,8 @@ fn session(sample: &str, steps: &[(&str, Json)]) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": sample})).unwrap();
     for (id, p) in steps {
-        s.execute(id, p.clone()).unwrap();
+        // A refused step leaves the book as it was; the asserts check what survives.
+        let _ = s.execute(id, p.clone());
     }
     s
 }
