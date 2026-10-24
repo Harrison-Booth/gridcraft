@@ -85,7 +85,9 @@ rewrites (a chart inside the chart). They are not shown or editable in GridCraft
 Excel: a column, line or bar chart's Chart Styles and Change Colors selection comes back only when
 the chart's own formatting (`c:spPr`) is in the chart part too, which GridCraft does not yet write,
 so Excel still reports the default style for those charts after a GridCraft save; chartex charts
-(waterfall, histogram…) show the original style and colours.
+(waterfall, histogram…) show the original style and colours. Known limitation: a worksheet chart
+with user shapes that is changed to a chartex type drops those shapes on save, as chartex has no
+element to hold them (it did so before #330 too).
 
 ## Work (40–60 h)
 
