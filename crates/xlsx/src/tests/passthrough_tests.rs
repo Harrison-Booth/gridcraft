@@ -965,6 +965,7 @@ fn chart(id: u32, kind: gridcraft_model::ChartKind) -> gridcraft_model::Chart {
             kind: None,
             smooth: false,
             trendlines: Vec::new(),
+            quartiles: Default::default(),
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
