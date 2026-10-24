@@ -306,3 +306,19 @@ fn ctrl_alt_letter_that_typed_text_is_not_select_all() {
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B2");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "\u{e4}");
 }
+
+#[test]
+fn end_mode_makes_the_next_arrow_jump_once() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    assert!(h.state().grid.end_mode);
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert!(!h.state().grid.end_mode);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A3");
+    // Any other key cancels it, so the next arrow is a single step.
+    key(&mut h, Key::End, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(!h.state().grid.end_mode);
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+}

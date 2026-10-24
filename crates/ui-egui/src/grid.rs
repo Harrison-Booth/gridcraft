@@ -156,6 +156,8 @@ pub struct GridState {
     pub list_picker: Option<CellRef>,
     /// Open task pane: comments, watch, selection, formatChart.
     pub pane: Option<String>,
+    /// End mode (Excel's End key): the next arrow key jumps to the edge of the data region.
+    pub end_mode: bool,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
@@ -3043,9 +3045,10 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 }
                 let cmd = m.command;
                 let shift = m.shift;
+                let end_jump = app.grid.end_mode && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
                 let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
                     let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
-                    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd}));
+                    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd || end_jump}));
                     app.grid.ensure_visible = true;
                     app.grid.reveal_moving_end = shift;
                     app.grid.reveal_from = from;
@@ -3071,6 +3074,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         let _ = app.session.run("selection.set", json!({"cell": end.a1()}));
                         app.grid.ensure_visible = true;
                     }
+                    Key::End => app.grid.end_mode = !app.grid.end_mode,
                     Key::Home => {
                         let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
                         let _ = app.session.run("selection.set", json!({"cell": CellRef::new(a.row, 0).a1()}));
@@ -3115,6 +3119,10 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         crate::ribbon::shortcut(app, key, m)
                     }
                     _ => {}
+                }
+                // End mode lasts for one key: the arrow it modifies, or any other key.
+                if key != Key::End {
+                    app.grid.end_mode = false;
                 }
             }
             _ => {}
