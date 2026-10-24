@@ -316,19 +316,21 @@ fn xnpv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 /// last digit:
 ///
 /// - Bracket the root from the guess (0 counts as 1e-5): double the rate while XNPV keeps the
-///   sign it has at the guess and that sign differs from the first value (the root is higher).
+///   sign it has at the guess and that sign differs from the first nonzero value (the root is higher).
 ///   Otherwise the root is lower: bisect towards 0 if XNPV changes sign there; halve the rate
 ///   towards 0 if XNPV is larger in size at 0 than at the guess; otherwise try minus the guess
 ///   and then step halfway to -100% each time. A negative guess only moves towards 0 (root
 ///   higher) or towards -100% (root lower).
 /// - Bisect the bracket, taking the midpoint from the upper end, until half the bracket is
-///   under 1e-8 * (|rate| + 0.5) and |XNPV| is under 2e-8 * |first value|; return that
+///   under 1e-8 * (|rate| + 0.5) and |XNPV| is under 2e-8 * |first nonzero value|; return that
 ///   midpoint. A zero XNPV counts as the upper side.
 /// - Halving towards 0 that gets within that tolerance of 0 without a sign change goes on with
 ///   the negative side; at most 100 XNPV evaluations in all; a rate of -100% or an XNPV that
 ///   can't be computed (a negative base for fractional years) is #NUM!.
 struct XirrSolver<'a> {
     values: &'a [f64],
+    /// First nonzero value: sets the search direction and the residual scale.
+    first: f64,
     years: Vec<f64>,
     evals: usize,
     /// XNPV must be within this of 0 at the answer.
@@ -363,10 +365,9 @@ impl XirrSolver<'_> {
     }
 
     fn solve(&mut self, guess: f64) -> R<f64> {
-        let first = self.values.first().copied().unwrap_or(0.0);
         let g = if guess == 0.0 { 1e-5 } else { guess };
         let fg = self.f(g)?;
-        let higher = fg * first < 0.0;
+        let higher = fg * self.first < 0.0;
         if g > 0.0 {
             if higher {
                 return self.double(g, fg);
@@ -455,8 +456,8 @@ fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Num);
     }
     let d0 = d.first().copied().unwrap_or(0.0);
-    let first = v.first().copied().unwrap_or(0.0);
-    let mut solver = XirrSolver { values: &v, years: d.iter().map(|t| (t - d0) / 365.0).collect(), evals: 0, residual: 2e-8 * first.abs() };
+    let first = v.iter().copied().find(|x| *x != 0.0).unwrap_or(0.0);
+    let mut solver = XirrSolver { values: &v, first, years: d.iter().map(|t| (t - d0) / 365.0).collect(), evals: 0, residual: 2e-8 * first.abs() };
     num_val(solver.solve(guess)?)
 }
 
@@ -2030,6 +2031,9 @@ mod tests {
         xirr_is(&[-100.0, 100.01], &[b, b + 1.0], None, 0.037_172_409_892_082_23);
         xirr_is(&[-100.0, 99.99], &[b, b + 1.0], None, -0.035_843_667_387_962_34);
         xirr_is(&[-100.0, 110.0], &[b, b + 1.0], None, 1_283_305_579_426_611.5);
+        // A leading zero cash flow adds nothing, so the root is the one without it (10%). The
+        // exact Excel answer for this input is unobserved, so only the root is checked.
+        assert!(matches!(xirr_of(&[0.0, -100.0, 110.0], &[b, y1, y2], None), Value::Number(r) if (r - 0.1).abs() < 1e-7));
         // Dates before the first are allowed (time runs from the first date); in the second
         // case the search finds no sign change.
         xirr_is(&[-2416.93, 447.77, 1743.6], &[44331.0, 44498.0, 43849.0], None, -0.974_587_937_071_919_6);
