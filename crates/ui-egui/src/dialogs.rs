@@ -2501,25 +2501,22 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mu
 /// F3 / Formulas > Use in Formula > Paste Names: pick a name to put at the caret of the formula being
 /// edited, or to start one (`=Name`) when no cell is being edited.
 fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
-    let list = app.session.run("formulas.nameManager", json!({})).unwrap_or(Json::Null);
-    let active_sheet = app.session.active().and_then(|doc| doc.wb.active().map(|s| s.name.clone())).unwrap_or_default();
-    // (name, scope, text to paste): a name scoped to another sheet is pasted qualified, since the
-    // bare name would resolve to a different definition (or none).
-    let names: Vec<(String, String, String)> = list
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|n| {
-            let name = n.get("name").and_then(Json::as_str)?;
-            let scope = n.get("scope").and_then(Json::as_str).unwrap_or("Workbook");
-            let text = if scope == "Workbook" || scope == active_sheet {
-                name.to_string()
-            } else {
-                format!("{}!{name}", gridcraft_engine::formula::quote_sheet(scope))
-            };
-            Some((name.to_string(), scope.to_string(), text))
-        })
-        .collect();
+    // (name, scope label, text to paste). Scope is compared by sheet index, so a sheet literally named
+    // "Workbook" is not mistaken for workbook scope.
+    let names: Vec<(String, String, String)> = app.session.active().map_or_else(Vec::new, |doc| {
+        // The sheet the formula is typed on: the open editor's, else the active sheet.
+        let origin = app.editor.as_ref().map_or(doc.wb.active_sheet, |ed| ed.sheet);
+        doc.wb
+            .names
+            .iter()
+            .filter(|n| !n.hidden)
+            .map(|n| {
+                let scope = n.scope.and_then(|i| doc.wb.sheet(i).map(|s| (i, s.name.as_str())));
+                let label = scope.map_or("Workbook", |(_, sheet)| sheet);
+                (n.name.clone(), label.to_string(), paste_name_text(&n.name, scope, origin))
+            })
+            .collect()
+    });
     ui.label("Paste name:");
     egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
         if names.is_empty() {
@@ -2546,6 +2543,15 @@ fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     }
     if !open {
         *confirm = true;
+    }
+}
+
+/// The text Paste Name inserts: a name scoped to another sheet is qualified, since the bare name would
+/// resolve to a different definition (or none). Workbook scope and the edited sheet's own names stay bare.
+fn paste_name_text(name: &str, scope: Option<(usize, &str)>, origin: usize) -> String {
+    match scope {
+        Some((i, sheet)) if i != origin => format!("{}!{name}", gridcraft_engine::formula::quote_sheet(sheet)),
+        _ => name.to_string(),
     }
 }
 
@@ -3331,5 +3337,16 @@ mod tests {
         let d = Dialog::open(&mut app, "dataValidation", json!({})).unwrap();
         assert_eq!(d.values["type"], "list");
         assert!(d.values.get("formula1").is_none());
+    }
+
+    #[test]
+    fn paste_name_qualifies_only_names_scoped_to_another_sheet() {
+        assert_eq!(paste_name_text("Rate", None, 0), "Rate");
+        assert_eq!(paste_name_text("Rate", Some((0, "Sales")), 0), "Rate");
+        assert_eq!(paste_name_text("Rate", Some((1, "Sales")), 0), "Sales!Rate");
+        // Edited on Sales: a name scoped to Sales is bare, even when the active sheet is another one.
+        assert_eq!(paste_name_text("Rate", Some((1, "Sales")), 1), "Rate");
+        // A sheet literally named "Workbook" is qualified, not treated as workbook scope.
+        assert_eq!(paste_name_text("Rate", Some((2, "Workbook")), 0), "Workbook!Rate");
     }
 }

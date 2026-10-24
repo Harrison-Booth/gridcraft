@@ -333,6 +333,8 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         .font(font)
         .desired_width(width)
         .layouter(&mut layouter)
+        // While a dialog is open the editor takes no input, so its Enter cannot add a newline first.
+        .interactive(app.dialog.is_none())
         .lock_focus(true)
         .event_filter(egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
         .show(ui);
