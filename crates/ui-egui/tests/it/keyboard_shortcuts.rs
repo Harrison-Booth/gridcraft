@@ -325,6 +325,8 @@ fn f3_pastes_a_name_into_the_cell_being_edited() {
     }
     key(&mut h, Key::F3, Modifiers::NONE);
     assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pasteName"));
-    key(&mut h, Key::Enter, Modifiers::NONE);
+    // The focused editor takes Enter itself, so press the button.
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
     assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=1+Rate"));
 }
