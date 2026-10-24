@@ -306,3 +306,23 @@ fn ctrl_alt_letter_that_typed_text_is_not_select_all() {
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B2");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "\u{e4}");
 }
+
+#[test]
+fn f3_pastes_a_name_into_the_cell_being_edited() {
+    assert_eq!(lookup(Key::F3, Some(Key::F3), Modifiers::NONE, false), Some(Shortcut::Dialog("pasteName", json!({}))));
+    let mut s = book("E1");
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=Sheet1!$A$1"})).unwrap();
+    let mut h = harness(s);
+    // Not editing: OK starts a formula with the name.
+    key(&mut h, Key::F3, Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pasteName"));
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=Rate"));
+    // Editing: F3 in the editor opens it too, and OK puts the name at the caret.
+    h.state_mut().editor.as_mut().map(|e| e.text = "=1+".into());
+    h.state_mut().editor.as_mut().map(|e| e.caret = 3);
+    key(&mut h, Key::F3, Modifiers::NONE);
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pasteName"));
+    key(&mut h, Key::Enter, Modifiers::NONE);
+    assert_eq!(h.state().editor.as_ref().map(|e| e.text.as_str()), Some("=1+Rate"));
+}

@@ -824,6 +824,7 @@ impl Dialog {
                 Dialog::custom("sort", "Sort", json!({"header": true, "levels": [{"column": col, "order": "asc"}]}))
             }
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
+            "pasteName" => Dialog::custom("pasteName", "Paste Name", json!({})),
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
@@ -1230,7 +1231,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "pasteName" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -1264,6 +1265,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "zoom" => zoom(ui, &mut d, &mut confirm, &mut open),
                 "sort" => sort(app, ui, &mut d, &mut confirm),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
+                "pasteName" => paste_name(app, ui, &mut d, &mut confirm),
                 "manageRules" => manage_rules(app, ui),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
@@ -2494,6 +2496,40 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mu
             *open = false;
         }
     });
+}
+
+/// F3 / Formulas > Use in Formula > Paste Names: pick a name to put at the caret of the formula being
+/// edited, or to start one (`=Name`) when no cell is being edited.
+fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    let list = app.session.run("formulas.nameManager", json!({})).unwrap_or(Json::Null);
+    let names: Vec<String> = list.as_array().into_iter().flatten().filter_map(|n| n.get("name").and_then(Json::as_str)).map(str::to_string).collect();
+    ui.label("Paste name:");
+    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+        if names.is_empty() {
+            ui.label(egui::RichText::new("No names defined").italics());
+        }
+        for (i, n) in names.iter().enumerate() {
+            let r = ui.add(egui::Button::selectable(i == d.list_index, n).min_size(vec2(480.0, 20.0)));
+            if r.clicked() {
+                d.list_index = i;
+            }
+            if r.double_clicked() {
+                d.list_index = i;
+                *confirm = true;
+            }
+        }
+    });
+    let mut open = true;
+    ok_cancel(ui, confirm, &mut open);
+    if *confirm && let Some(n) = names.get(d.list_index) {
+        match app.editor.as_mut() {
+            Some(ed) => ed.paste_text(n),
+            None => app.begin_edit(Some(format!("={n}")), false),
+        }
+    }
+    if !open {
+        *confirm = true;
+    }
 }
 
 /// Every chart type the All Charts tab offers: `(type, subtype, label)` for `insert.chart`.

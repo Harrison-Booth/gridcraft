@@ -274,6 +274,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
             cycle_anchor(&mut ed);
         }
+        // F3 opens Paste Name; its OK puts the name at the caret.
+        if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F3)) {
+            app.open_dialog("pasteName", serde_json::json!({}));
+        }
         // Ctrl+Shift+A (Control+Shift+A on a Mac) inserts the argument names. Consumed anywhere,
         // as in Excel, so it never falls through to the text's select-all.
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, Key::A)) {
