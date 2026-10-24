@@ -4183,6 +4183,31 @@ fn a_password_to_modify_asks_for_it_or_a_read_only_open() {
 }
 
 #[test]
+fn a_read_only_open_never_saves_over_its_reserved_file() {
+    const PW: &str = "synthetic-modify-pw";
+    let dir = std::env::temp_dir().join(format!("gridcraft-read-only-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("reserved.xlsx").to_string_lossy().into_owned();
+    let copy = dir.join("copy.xlsx").to_string_lossy().into_owned();
+    let mut src = s();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).write_reservation = Some(gridcraft_model::WriteReservation {
+        password: Some(gridcraft_model::PasswordHash::new_sha512(PW, b"0123456789abcdef")),
+        ..Default::default()
+    });
+    let bytes = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path, "readOnly": true})).unwrap();
+    let err = s.execute("file.save", json!({"path": path})).unwrap_err().to_string();
+    assert!(err.contains("read-only"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the reserved file is untouched");
+    s.execute("file.saveAs", json!({"path": copy})).unwrap();
+    assert!(std::fs::metadata(&copy).is_ok());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn encrypted_workbooks_open_with_their_password() {
     const PW: &str = "synthetic-pw-5521";
     let b64 = crate::io::base64_encode(&encrypted_book(PW));

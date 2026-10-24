@@ -98,6 +98,9 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     }
     // Someone else may have made the file: its active content asks before it runs.
     let mut doc = DocState::new(wb, path, title, crate::Trust::FromFile);
+    if read_only {
+        doc.read_only_source = str_param(p, "path").map(str::to_string);
+    }
     if crate::io::FileKind::from_path(&name).is_none() && gridcraft_xlsx::sniff(&bytes) == gridcraft_xlsx::Format::Xlsx {
         doc.content_kind = Some(crate::io::FileKind::Xlsx);
     }
@@ -125,6 +128,9 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
             return ok();
         }
     };
+    if s.active().and_then(|d| d.read_only_source.as_deref()) == Some(path.as_str()) {
+        return Err(bad("file.save", "is reserved by its author and open read-only. Save As to another file."));
+    }
     // A PDF is a print of the sheet (Page Setup applies), not a copy of the workbook: the
     // document keeps its file and its unsaved changes.
     if std::path::Path::new(&path).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {

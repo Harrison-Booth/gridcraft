@@ -60,7 +60,7 @@ values) is still dropped.
 | `.xml` XML Spreadsheet 2003 | R/W | no | no | Simple to support | — |
 | `.ods` OpenDocument Spreadsheet | R/W | **values only** (#100) | no | Sheets, values, dates, merges, repeated cells, cached formula results; no formulas, formatting, charts; encrypted ODS refused | `ods_tests.rs` |
 | Password-encrypted workbooks (Agile/Standard encryption) | R | **yes** (#11): asks for the password on open; Agile (AES-128/192/256, SHA-1/256/384/512) and Standard (AES, SHA-1) | no (opens with no save path; Save As writes it without the password) | Clean-room from [MS-OFFCRYPTO] on the CFB reader. RC4, Extensible and certificate-only encryption refused with a message. Data-integrity HMAC not checked | `crypto/tests.rs`, `encrypted_tests.rs` |
-| Password to modify (XLSX `fileSharing`) | R/W | **yes** (#921): asks for the password, or opens read-only; a read-only open has no save target | yes (hash, user name and read-only-recommended kept) | Legacy `reservationPassword` and iterated SHA-256/384/512 hashes. Never checked against Excel: its prompt wording and read-only behaviour are unobserved; `readOnlyRecommended` alone does not prompt | `roundtrip.rs`, `engine/src/tests.rs` |
+| Password to modify (XLSX `fileSharing`) | R/W | **yes** (#921): asks for the password, or opens read-only; a read-only open never saves over its file | yes (hash, user name and read-only-recommended kept) | Legacy `reservationPassword` and iterated SHA-1/256/384/512 hashes. Never checked against Excel: its prompt wording and read-only behaviour are unobserved; `readOnlyRecommended` alone does not prompt | `roundtrip.rs`, `engine/src/tests.rs` |
 | `.xlw` Excel 4.0 workbook, `.wk*`, `.dbf` | open only (some) | no | no | Rare | — |
 
 ## Text and data formats
@@ -111,7 +111,7 @@ refresh. Counted under features (Get & Transform, ~10% ready), not here.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-24 | minor | XLSX: a password to modify (`fileSharing`) is read and written, and opening such a file asks for it or opens read-only (#921) |
+| 2026-10-24 | minor | XLSX: a password to modify (`fileSharing`) is read and written, and opening such a file asks for it or opens read-only (#921); a read-only open refuses Save to its own file; SHA-1 modify hashes verify; an encrypted and reserved file asks for the modify password after its decryption password |
 | 2026-10-21 | minor | HTML (Save as Web Page) writes pictures (`data:` URI `<img>`) and charts (inline SVG from the chart crate's drawing primitives, text included) at their anchors; the table uses the sheet's column widths and row heights when the sheet has either, and output for sheets without pictures or charts is unchanged |
 | 2026-10-20 | trivial | XLSX shared strings: Japanese phonetic runs (ふりがな, `<rPh sb="…" eb="…">` with `<phoneticPr>`) are read into the workbook and written back next to the string with the same text, so an open + save no longer deletes them; bad offsets and readings are dropped with a warning, a `<phoneticPr>` without runs is kept on its own, and when duplicate `<si>` items share a text but not a reading only the first reading is written (reported on open) (`phonetic_tests.rs`) |
 | 2026-10-20 | minor | A workbook theme's major/minor per-script typefaces (`<a:font script="Arab" typeface="…"/>`, also Hebr, Jpan and the rest) are read and written back in file order after `<a:cs>`; they were dropped before. A hostile file is held to 64 entries of 256 characters |

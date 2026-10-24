@@ -1518,6 +1518,15 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             Err(e) if d.name == "analysisToolPak" && e.contains(gridcraft_engine::cmd::analysis::OVERWRITE_ERROR) => {
                 d.values.insert("askOverwrite".into(), json!(true));
             }
+            // Encrypted and reserved: the password opened it, so the form turns to the password to
+            // modify. The decryption password stays in the values for the retry.
+            Err(e) if d.name == "openPassword" && e.contains(gridcraft_engine::io::MODIFY_PASSWORD_REQUIRED) => {
+                let mut params = Json::Object(d.values.clone());
+                params["modify"] = json!(true);
+                if let Some(next) = Dialog::open(app, "openPassword", params) {
+                    d = Dialog { back: d.back.take(), ..next };
+                }
+            }
             // A wrong password: say so, clear the field and stay open for another try.
             Err(e) if d.name == "openPassword" => {
                 let field = if d.values.contains_key("modifyPassword") { "modifyPassword" } else { "password" };
