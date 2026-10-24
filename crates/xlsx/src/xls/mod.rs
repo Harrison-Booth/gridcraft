@@ -13,7 +13,7 @@ mod formula;
 mod ftab;
 mod records;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
@@ -40,6 +40,9 @@ const MAX_RECORDS: usize = 40_000_000;
 const BOF: u16 = 0x0809;
 const EOF: u16 = 0x000A;
 const BIFF8: u16 = 0x0600;
+/// WsBool (MS-XLS 2.4.351): its first byte's `fDialog` bit marks a dialog sheet, whose BOF says worksheet.
+const WSBOOL: u16 = 0x0081;
+const WSBOOL_DIALOG: u8 = 0x10;
 
 pub(crate) fn invalid(msg: impl Into<String>) -> IoError {
     IoError::Format(format!("XLS: {}", msg.into()))
@@ -55,6 +58,14 @@ pub(crate) fn is_xls(bytes: &[u8]) -> bool {
     let Ok(cf) = Compound::open(bytes) else { return false };
     cf.has_root_stream("Workbook") || cf.has_root_stream("Book")
 }
+
+/// Most shared formulas one sheet expands, and the longest template text one attach may
+/// produce: a template shared by its followers was costing every one of them a full decode and
+/// print however often that could never succeed, so each anchor is tried once and failed ones
+/// are skipped for the rest of the sheet. Beyond the cap the remaining references keep their
+/// cached values.
+const MAX_SHARED_ATTACHES: usize = 262_144;
+const MAX_SHARED_TEMPLATE: usize = 8192;
 
 pub(crate) struct Budget {
     cells: usize,
@@ -269,11 +280,9 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
                 budget.text(code.len())?;
                 g.formats.insert(ifmt, code);
             }
-            0x00E0 => {
-                if g.xf_formats.len() < MAX_XFS {
-                    c.u16()?;
-                    g.xf_formats.push(c.u16()?);
-                }
+            0x00E0 if g.xf_formats.len() < MAX_XFS => {
+                c.u16()?;
+                g.xf_formats.push(c.u16()?);
             }
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
             0x01AE => {
@@ -477,6 +486,56 @@ fn rk(v: u32) -> Value {
     Value::number(if v & 1 != 0 { n / 100.0 } else { n })
 }
 
+/// Attaches every pending formula to its anchor's template, returning how many shared
+/// templates were expanded. An anchor whose template can't be imported is refused once:
+/// its followers re-decode the same template for nothing, so they are skipped instead (they
+/// keep their cached values).
+fn resolve_pending(
+    st: &mut SheetState<'_>,
+    arrays: &HashMap<CellRef, (RangeRef, Parsed)>,
+    shared: &HashMap<CellRef, Parsed>,
+    pending: &[Pending],
+) -> usize {
+    let mut failed: HashSet<CellRef> = HashSet::new();
+    let mut shared_attaches = 0usize;
+    for p in pending {
+        if let Some((range, f)) = arrays.get(&p.anchor) {
+            if p.pos == p.anchor {
+                st.attach(p.pos, f, Mode::Cell, Some(*range));
+            }
+        } else if let Some(f) = shared.get(&p.anchor) {
+            if failed.contains(&p.anchor) || shared_attaches >= MAX_SHARED_ATTACHES {
+                continue;
+            }
+            shared_attaches += 1;
+            st.attach(p.pos, f, Mode::Shared, None);
+            let imported = st.sheet.cell(p.pos).and_then(|c| c.formula.as_ref()).is_some_and(|f| f.text.chars().count() <= MAX_SHARED_TEMPLATE);
+            if !imported {
+                failed.insert(p.anchor);
+            }
+        } else {
+            st.unsupported("a shared formula that is missing from the file");
+        }
+    }
+    if shared_attaches >= MAX_SHARED_ATTACHES {
+        st.unsupported("more shared formulas than the expansion cap; some formulas kept their values");
+    }
+    shared_attaches
+}
+
+/// The other cells of a legacy array formula hold only cached results: dropped, as when an
+/// .xlsx is read, so that the formula fills its range on recalculation. If the formula itself
+/// couldn't be imported, they keep their values.
+fn blank_array_followers(st: &mut SheetState<'_>, pending: &[Pending]) {
+    for p in pending {
+        let filled = st.sheet.cell(p.anchor).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).is_some_and(|r| r.contains(p.pos));
+        if p.pos != p.anchor && filled {
+            let style = st.sheet.style_id(p.pos);
+            st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style });
+        }
+    }
+}
+
 fn worksheet(
     stream: &[u8],
     bs: &BoundSheet,
@@ -524,6 +583,7 @@ fn worksheet(
                 continue;
             }
             _ if depth > 1 => continue,
+            WSBOOL if rec.parts.first().and_then(|p| p.first()).is_some_and(|b| b & WSBOOL_DIALOG != 0) => return Ok(None),
             _ => {}
         }
         sheet_record(&rec, &mut st, budget, report)?;
@@ -531,27 +591,8 @@ fn worksheet(
     // Shared and array formulas: their definitions follow the first cell that uses them.
     let (arrays, shared) = (std::mem::take(&mut st.arrays), std::mem::take(&mut st.shared));
     let pending = std::mem::take(&mut st.pending);
-    for p in &pending {
-        if let Some((range, f)) = arrays.get(&p.anchor) {
-            if p.pos == p.anchor {
-                st.attach(p.pos, f, Mode::Cell, Some(*range));
-            }
-        } else if let Some(f) = shared.get(&p.anchor) {
-            st.attach(p.pos, f, Mode::Shared, None);
-        } else {
-            st.unsupported("a shared formula that is missing from the file");
-        }
-    }
-    // The other cells of a legacy array formula hold only cached results: dropped, as when an
-    // .xlsx is read, so that the formula fills its range on recalculation. If the formula itself
-    // couldn't be imported, they keep their values.
-    for p in &pending {
-        let filled = st.sheet.cell(p.anchor).and_then(|c| c.formula.as_ref()).and_then(|f| f.array).is_some_and(|r| r.contains(p.pos));
-        if p.pos != p.anchor && filled {
-            let style = st.sheet.style_id(p.pos);
-            st.sheet.cells.set(p.pos, Cell { value: Value::Empty, formula: None, style });
-        }
-    }
+    resolve_pending(&mut st, &arrays, &shared, &pending);
+    blank_array_followers(&mut st, &pending);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
     }
@@ -560,6 +601,9 @@ fn worksheet(
     }
     Ok(Some((st.sheet, st.calc)))
 }
+
+/// The shortest WINDOW2 a file holds (the chart-sheet form); a shorter one is truncated.
+const WINDOW2_MIN_LEN: usize = 10;
 
 fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, report: &mut ReadReport) -> Result<(), IoError> {
     let mut c = Cursor::new(&rec.parts);
@@ -738,6 +782,16 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
             if flags & 0x0002 == 0 && height > 0 {
                 st.sheet.default_row_height = pt_to_px(f64::from(height) / 20.0);
             }
+        }
+        0x023E => {
+            let flags = if c.remaining() >= WINDOW2_MIN_LEN { c.u16().ok() } else { None };
+            let Some(flags) = flags else { return Ok(()) };
+            let on = |bit: u16| flags & bit != 0;
+            st.sheet.show_formulas = on(0x0001);
+            st.sheet.show_gridlines = on(0x0002);
+            st.sheet.show_headings = on(0x0004);
+            st.sheet.show_zeros = on(0x0010);
+            st.sheet.right_to_left = on(0x0040);
         }
         0x001C => report.warn("Cell comments in .xls files are not imported yet."),
         0x00EC => report.warn("Pictures, charts and shapes in .xls files are not imported yet."),
