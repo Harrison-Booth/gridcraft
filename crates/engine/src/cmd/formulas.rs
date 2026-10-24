@@ -719,9 +719,8 @@ fn calc_options(s: &mut Session, p: &Json) -> Result<Json> {
         // Switching to automatic, or changing how circular references are calculated outside
         // manual mode, recalculates the workbook.
         let iteration_changed = (c.iterative, c.max_iterations, c.max_change) != (before.iterative, before.max_iterations, before.max_change);
-        // Switching precision as displayed recalculates the workbook (in manual mode too: Excel
-        // rounds the values as soon as it is turned on, and restores formulas on the next
-        // calculation when it is turned off).
+        // Switching precision as displayed recalculates the workbook, in manual mode too, so the
+        // values change as soon as it is switched on or off.
         let precision_changed = c.precision_as_displayed != before.precision_as_displayed;
         if mode == Some(CalcMode::Automatic) || (iteration_changed && c.mode != CalcMode::Manual) || precision_changed {
             cx.structural = true;

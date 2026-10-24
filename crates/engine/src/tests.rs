@@ -4335,6 +4335,106 @@ fn precision_as_displayed_rounds_a_reformatted_spill_cell() {
     assert_eq!(num(&s, "F3"), 0.35);
 }
 #[test]
+fn precision_as_displayed_enable_undoes_in_one_step() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*100"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.00"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (1.23, 123.0));
+    // One undo brings back the constants and the flag together.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(!s.doc().unwrap().wb.calc.precision_as_displayed);
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (1.23456, 1.23456 * 100.0));
+}
+
+#[test]
+fn precision_as_displayed_applies_in_manual_mode() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*100"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.00"})).unwrap();
+    s.execute("formulas.calculationOptions", json!({"mode": "manual"})).unwrap();
+    // Turning it on rounds the values at once, without a calculation.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (1.23, 123.0));
+    // Turning it off recalculates at once too: the formula reads the rounded constant.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": false})).unwrap();
+    assert_eq!((num(&s, "A1"), num(&s, "A2")), (1.23, 1.23 * 100.0));
+}
+
+#[test]
+fn precision_as_displayed_on_a_protected_sheet_keeps_locked_constants() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("cell.set", json!({"cell": "A1", "input": "1.23456"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A2", "input": "=A1*100"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "1.23456"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1:B1", "code": "0.00"})).unwrap();
+    s.execute("home.lockCell", json!({"range": "B1", "on": false})).unwrap();
+    s.execute("review.protectSheet", json!({})).unwrap();
+    // Turning the option on is not refused: the locked constant keeps its digits, the unlocked
+    // one is rounded.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert!(s.doc().unwrap().wb.calc.precision_as_displayed);
+    assert_eq!((num(&s, "A1"), num(&s, "B1"), num(&s, "A2")), (1.23456, 1.23, 1.23456 * 100.0));
+    // Reformatting a locked constant, on a sheet that allows formatting, keeps its digits too.
+    s.execute("review.unprotectSheet", json!({})).unwrap();
+    s.execute("review.protectSheet", json!({"formatCells": true})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "A1", "code": "0.0"})).unwrap();
+    assert_eq!(num(&s, "A1"), 1.23456);
+}
+
+#[test]
+fn precision_as_displayed_rounds_a_legacy_array_by_each_cell() {
+    let mut s = s();
+    let num = |s: &Session, a: &str| v(s, a).as_f64().unwrap_or(f64::NAN);
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2]]})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B1", "code": "0.00"})).unwrap();
+    s.execute("home.numberFormat", json!({"range": "B2", "code": "0.0"})).unwrap();
+    s.execute("selection.set", json!({"range": "B1:B2"})).unwrap();
+    s.execute("cell.set", json!({"input": "=A1:A2/3", "array": true})).unwrap();
+    assert_eq!((num(&s, "B1"), num(&s, "B2")), (1.0 / 3.0, 2.0 / 3.0));
+    // Each element takes the format of the cell it lands in.
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    assert_eq!((num(&s, "B1"), num(&s, "B2")), (0.33, 0.7));
+}
+
+#[test]
+fn precision_as_displayed_rounds_numbers_written_to_a_new_sheet() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [[1], [2], [4], [7], [3], [5], [9], [2]]})).unwrap();
+    // Histogram output on a new sheet, with the option off, keeps full precision.
+    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "A1:A8", "cumulative": true, "newSheet": "Raw"})).unwrap();
+    let raw: Vec<(CellRef, f64)> = {
+        let d = s.doc().unwrap();
+        let sh = d.wb.sheet(d.wb.sheet_index("Raw").unwrap()).unwrap();
+        sh.cells
+            .iter()
+            .filter_map(|(c, cell)| match cell.value {
+                Value::Number(n) if cell.formula.is_none() => Some((c, n)),
+                _ => None,
+            })
+            .collect()
+    };
+    s.execute("formulas.calculationOptions", json!({"precisionAsDisplayed": true})).unwrap();
+    s.execute("data.analysisToolPak", json!({"tool": "histogram", "range": "A1:A8", "cumulative": true, "newSheet": "Rounded"})).unwrap();
+    let d = s.doc().unwrap();
+    let si = d.wb.sheet_index("Rounded").unwrap();
+    let sh = d.wb.sheet(si).unwrap();
+    let mut prec = gridcraft_calc::DisplayedPrecision::new();
+    let mut rounded = 0;
+    for (c, n) in &raw {
+        let want = prec.round(&d.wb, si, *c, *n);
+        assert_eq!(sh.value(*c), Value::Number(want), "{c:?}");
+        rounded += usize::from(want != *n);
+    }
+    assert!(rounded > 0, "the histogram's formatted cells should be rounded");
+}
+
+#[test]
 fn editing_quote_prefixed_text_keeps_it_text() {
     let mut s = s();
     for (i, input) in ["'00123", "'=1+1", "'TRUE", "''abc"].iter().enumerate() {
