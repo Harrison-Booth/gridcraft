@@ -737,11 +737,13 @@ fn one_value_array_in_a_table_is_not_a_spill() {
     t.set("C4", "=FILTER(A1:A2,A1:A2>7)");
     t.set("C5", "=FILTER(A1:A2,A1:A2>0)");
     t.set("H4", "=FILTER(A1:A2,A1:A2>7)");
-    assert_eq!((t.num("C4"), t.num("H4")), (8.0, 8.0));
+    t.set("D4", "=ROWS(C4#)");
+    assert_eq!((t.num("C4"), t.num("H4"), t.num("D4")), (8.0, 8.0, 1.0));
     assert_eq!(t.get("C5"), Value::Error(CellError::Spill));
     // Recalculating again keeps the one-value result.
     t.calc.recalc_all(&mut t.wb);
     assert_eq!(t.num("C4"), 8.0);
+    assert_eq!(t.num("D4"), 1.0);
 }
 
 #[test]
