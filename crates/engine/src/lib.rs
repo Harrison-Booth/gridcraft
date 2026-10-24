@@ -408,6 +408,9 @@ pub struct Session {
     pub recorder: Option<record::Recorder>,
     /// How many `execute` calls are running (0 between top-level commands).
     depth: u32,
+    /// How many journaled commands are running. Only the outermost one is journaled, and the
+    /// recorder keeps the same calls: the steps a Run Script runs are, since it isn't journaled.
+    journal_nesting: u32,
     /// Windows hidden with View › Hide.
     pub hidden_windows: Vec<usize>,
     /// Draw tab tool: "" (select), "pen" or "eraser"; pen colour and width.
@@ -555,7 +558,7 @@ impl Session {
             None => Vec::new(),
         };
         // The recorder keeps top-level calls with the place they ran in.
-        let place = (self.depth == 0 && self.recorder.is_some()).then(|| match self.active() {
+        let place = (self.journal_nesting == 0 && self.recorder.is_some()).then(|| match self.active() {
             Some(d) => (d.uid, d.wb.active_sheet, d.wb.active().map(|sh| sh.name.clone()).unwrap_or_default(), d.selection.clone()),
             None => (0, 0, String::new(), Selection::default()),
         });
@@ -565,10 +568,16 @@ impl Session {
         self.marks.extend(marked);
         // Only the outermost command is journaled: the commands it runs for itself are part of it,
         // so replaying the journal or a recorded script doesn't run them and then the command again.
-        let journals = spec.journal && self.depth == 0;
+        let journals = spec.journal && self.journal_nesting == 0;
         self.depth = self.depth.saturating_add(1);
+        if spec.journal {
+            self.journal_nesting = self.journal_nesting.saturating_add(1);
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
         self.depth = self.depth.saturating_sub(1);
+        if spec.journal {
+            self.journal_nesting = self.journal_nesting.saturating_sub(1);
+        }
         if marked.is_some() {
             self.marks.pop();
         }
