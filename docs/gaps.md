@@ -171,7 +171,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-24 | trivial | Docs: §4 (chart PRs #158 and #161 are merged; charts resize from their corner handle, so that is no longer missing), §9 (key tips cover every ribbon tab; estimate from ui-parity's remaining work), §15 (one count, 18 missing and 9 stubs, as function-parity.md has it), §19 (CSV writes displayed values; `.xltx` saves with its template type) refreshed; duplicate text removed |
+| 2026-10-24 | trivial | Docs: §4 (chart PRs #158 and #161 are merged; charts resize from their corner handle, so that is no longer missing), §9 (key tips cover every ribbon tab; estimate from ui-parity's remaining work), §15 (one count, 18 missing and 9 stubs, as function-parity.md has it), §19 (`.xltx` saves with its template type) refreshed; duplicate text removed |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
