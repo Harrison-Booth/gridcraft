@@ -257,8 +257,13 @@ fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 }
 
 /// Values and dates for XNPV/XIRR: both must be numeric and of equal length. XNPV rejects a
-/// date before the first; XIRR (`before_first`) takes it, as Excel does.
-fn dated_flows(values: &Value, dates: &Value, before_first: bool) -> R<(Vec<f64>, Vec<f64>)> {
+/// date before the first; XIRR (`lenient`) takes it, as Excel does.
+///
+/// Blank cells follow what Excel returns (observed on synthetic workbooks). With `lenient` (XIRR)
+/// a blank value counts as 0 and a blank date is ignored when its value is blank or 0; a nonzero
+/// value without a date is `#NUM!`. XNPV is strict: a blank value is `#NUM!`, and so is a blank
+/// date next to a blank or 0 value (`#VALUE!` next to a nonzero one).
+fn dated_flows(values: &Value, dates: &Value, lenient: bool) -> R<(Vec<f64>, Vec<f64>)> {
     let va = as_array(values);
     let da = as_array(dates);
     if va.data.len() != da.data.len() {
@@ -267,20 +272,25 @@ fn dated_flows(values: &Value, dates: &Value, before_first: bool) -> R<(Vec<f64>
     let mut v = Vec::with_capacity(va.data.len());
     let mut d = Vec::with_capacity(da.data.len());
     for (x, y) in va.data.iter().zip(da.data.iter()) {
-        match x {
-            Value::Number(n) => v.push(*n),
+        let value = match x {
+            Value::Number(n) => *n,
+            Value::Empty if lenient => 0.0,
+            Value::Empty => return Err(CellError::Num),
             Value::Error(e) => return Err(*e),
             _ => return Err(CellError::Value),
-        }
+        };
         match y {
             Value::Number(n) => d.push(n.trunc()),
             Value::Error(e) => return Err(*e),
             Value::Text(_) => d.push(y.to_number()?.trunc()),
+            Value::Empty if lenient && value == 0.0 => continue,
+            Value::Empty if lenient || value == 0.0 => return Err(CellError::Num),
             _ => return Err(CellError::Value),
         }
+        v.push(value);
     }
     let d0 = *d.first().ok_or(CellError::Num)?;
-    if d.iter().any(|&x| (x < d0 && !before_first) || x < 0.0) {
+    if d.iter().any(|&x| (x < d0 && !lenient) || x < 0.0) {
         return Err(CellError::Num);
     }
     Ok((v, d))
@@ -2085,6 +2095,29 @@ mod tests {
         close_tol(ev("PMT", vec![n(-1e-17), n(1.0), n(1e18), n(-1e18)]), 10.0, 1e-9);
         close_tol(ev("PMT", vec![n(-0.5), n(60.0), n(1e18)]), -0.433_680_868_994_201_8, 1e-6);
         close_tol(ev("PMT", vec![n(0.05), n(10.0), n(100.0), n(50.0), n(1.0)]), -16.119701185541427, 1e-15);
+    }
+
+    #[test]
+    fn blank_cash_flows_follow_excel_for_xirr_and_xnpv() {
+        // Each result below was observed in Excel on a synthetic workbook: five rows, the first
+        // four -10000, 2750, 4250, 3250 on 39448, 39508, 39751, 39859; the last row varies.
+        let dates = col(&[39448.0, 39508.0, 39751.0, 39859.0, 39904.0]);
+        let gap = arr([39448.0, 39508.0, 39751.0, 39859.0].iter().map(|x| vec![nv(*x)]).chain([vec![Value::Empty]]).collect());
+        let flows = |last: Value| arr([-10000.0, 2750.0, 4250.0, 3250.0].iter().map(|x| vec![nv(*x)]).chain([vec![last]]).collect());
+        let rate = 0.033791377645041754;
+        // XIRR: a blank value counts as 0 and a blank date is ignored when its value is blank or 0. The answer is a bisection midpoint, within about 1e-8 of the exact rate.
+        close_tol(ev("XIRR", vec![rf(flows(Value::Empty)), rf(dates.clone())]), rate, 1e-7);
+        close_tol(ev("XIRR", vec![rf(flows(nv(0.0))), rf(dates.clone())]), rate, 1e-7);
+        close_tol(ev("XIRR", vec![rf(flows(Value::Empty)), rf(gap.clone())]), rate, 1e-7);
+        close_tol(ev("XIRR", vec![rf(flows(nv(0.0))), rf(gap.clone())]), rate, 1e-7);
+        is_err(ev("XIRR", vec![rf(flows(nv(2750.0))), rf(gap.clone())]), CellError::Num);
+        is_err(ev("XIRR", vec![rf(flows(tv("-"))), rf(dates.clone())]), CellError::Value);
+        // XNPV is strict: a blank value is #NUM! where 0 is a number.
+        close_tol(ev("XNPV", vec![n(0.09), rf(flows(nv(0.0))), rf(dates.clone())]), -382.66, 1e-2);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(dates)]), CellError::Num);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(0.0))), rf(gap.clone())]), CellError::Num);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(gap.clone())]), CellError::Num);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(2750.0))), rf(gap)]), CellError::Value);
     }
 
     #[test]
