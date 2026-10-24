@@ -822,7 +822,8 @@ fn hyperlink_targets_copied_onto_cells_are_capped_by_bytes() {
     let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
     let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
     assert_eq!(wb.sheets[0].hyperlinks.len(), 9_868);
-    assert!(report.warnings.iter().any(|w| w.contains("bytes")), "{:?}", report.warnings);}
+    assert!(report.warnings.iter().any(|w| w.contains("bytes")), "{:?}", report.warnings);
+}
 
 #[test]
 fn tooltip_goes_to_the_last_link_on_its_range() {
