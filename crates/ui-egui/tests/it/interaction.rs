@@ -85,7 +85,7 @@ fn horizontal_scrollbar_pages_and_drags_across_a_wide_sheet() {
     // Column A frozen: a page is the scrolling part only.
     sh.freeze = Some((0, 1));
     let mut s = Session::new();
-    s.add_document(gridcraft_engine::DocState::new(wb, None, "Book1".into()));
+    s.add_document(gridcraft_engine::DocState::new(wb, None, "Book1".into(), gridcraft_engine::Trust::Local));
     let mut h = harness(s);
     let track = h.state().grid.hscroll.expect("the tab bar has a horizontal scrollbar");
     assert!(track.width() >= 200.0, "the scrollbar gets a usable share of the tab bar: {track:?}");
