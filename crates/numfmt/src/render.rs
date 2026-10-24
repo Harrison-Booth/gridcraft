@@ -309,7 +309,7 @@ pub(crate) fn shown_value(sec: &Section, v: f64) -> Option<f64> {
         let lay = fraction_layout(&sec.toks)?;
         let (whole, num, den) = fraction_parts(&lay, x);
         let den = den.max(1) as f64;
-        (whole * den + num as f64) / den * 10f64.powi(shift)
+        (whole * den + num) / den * 10f64.powi(shift)
     } else {
         let NumberLayout { exp, frac_idx, .. } = number_layout(&sec.toks);
         let (e, int_s, frac_s) = match exp {
