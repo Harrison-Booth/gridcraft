@@ -364,6 +364,23 @@ fn subtotal_is_one_undo_step() {
 }
 
 #[test]
+fn trimming_stops_at_the_floor() {
+    // While an outer command runs, its nested steps are trimmed to the budget, but the steps
+    // below its starting mark are never dropped.
+    let step = |bytes: usize| crate::HistoryEntry {
+        label: String::new(),
+        wb: std::sync::Arc::new(gridcraft_model::Workbook::new()),
+        selection: crate::Selection::default(),
+        retained_bytes: bytes,
+    };
+    let mut history: Vec<_> = (0..3).map(|_| step(10)).chain((0..5).map(|_| step(10))).collect();
+    crate::trim_history(&mut history, 3, 25);
+    assert_eq!(history.len(), 4);
+    crate::trim_history(&mut history, 0, 25);
+    assert_eq!(history.len(), 2);
+}
+
+#[test]
 fn subtotal_near_the_history_limit_keeps_the_oldest_steps() {
     // The nested steps used to trim the 100-step history before they were taken back, so undoing
     // everything no longer reached the starting workbook.

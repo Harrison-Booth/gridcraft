@@ -162,7 +162,7 @@ fn push_history_with_budget(
     byte_budget: usize,
 ) {
     push_history_step(history, label, wb, next, selection);
-    trim_history(history, byte_budget);
+    trim_history(history, 0, byte_budget);
 }
 
 /// Adds a step without trimming, for a command nested in another one (see `execute`).
@@ -171,12 +171,13 @@ fn push_history_step(history: &mut Vec<HistoryEntry>, label: String, wb: Arc<Wor
     history.push(HistoryEntry { label, wb, selection, retained_bytes });
 }
 
-/// Drops the oldest steps past the step cap or the byte budget. The latest step is always kept.
-fn trim_history(history: &mut Vec<HistoryEntry>, byte_budget: usize) {
+/// Drops the oldest steps at or above `floor` past the step cap or the byte budget. The latest
+/// step is always kept, and steps below `floor` are never dropped.
+fn trim_history(history: &mut Vec<HistoryEntry>, floor: usize, byte_budget: usize) {
     let mut total = history.iter().fold(0usize, |sum, entry| sum.saturating_add(entry.retained_bytes));
     // Always preserve the latest action, even if that one edit exceeds the budget.
-    while history.len() > 1 && (history.len() > UNDO_LIMIT || total > byte_budget) {
-        total = total.saturating_sub(history.remove(0).retained_bytes);
+    while history.len() > floor.saturating_add(1) && (history.len() > UNDO_LIMIT || total > byte_budget) {
+        total = total.saturating_sub(history.remove(floor).retained_bytes);
     }
 }
 
@@ -339,6 +340,9 @@ pub struct Session {
     /// runs for itself are part of it, so replaying the journal or a recorded script doesn't run
     /// them and then the command again.
     journal_nesting: u32,
+    /// Undo steps below this index belong to the outermost running command's history. Trimming
+    /// while it runs starts above them, so the steps it takes back are kept.
+    undo_floor: usize,
     /// Measures cell text for AutoFit Column Width. Without it (CLI, MCP) AutoFit uses
     /// [`cmd::format::approx_text_width`].
     pub text_width: Option<TextWidth>,
@@ -444,6 +448,10 @@ impl Session {
         let outermost = spec.undoable && self.undo_nesting == 0;
         let mark = self.active().map_or(0, |d| d.undo.len());
         let journals = spec.journal && self.journal_nesting == 0;
+        let outer_floor = self.undo_floor;
+        if outermost {
+            self.undo_floor = mark;
+        }
         let params = if params.is_null() { Json::Object(Default::default()) } else { params };
         if spec.undoable {
             self.undo_nesting += 1;
@@ -452,6 +460,7 @@ impl Session {
             self.journal_nesting += 1;
         }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &params)));
+        self.undo_floor = outer_floor;
         if spec.undoable {
             self.undo_nesting = self.undo_nesting.saturating_sub(1);
         }
@@ -492,12 +501,11 @@ impl Session {
             d.redo.clear();
             d.revision += 1;
         }
-        // Only a top-level command trims the history: a nested step trimming it would drop the
-        // oldest steps for good before the outer command takes its steps back.
-        if self.undo_nesting == 0 {
-            for d in &mut self.docs {
-                trim_history(&mut d.undo, UNDO_BYTES_LIMIT);
-            }
+        // Nested steps are trimmed too, so a long script can't hold more than the budget; the
+        // floor keeps the steps the running outer command takes back.
+        let floor = self.undo_floor;
+        for d in &mut self.docs {
+            trim_history(&mut d.undo, floor, UNDO_BYTES_LIMIT);
         }
         result
     }
