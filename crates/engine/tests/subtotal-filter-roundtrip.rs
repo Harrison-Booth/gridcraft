@@ -34,7 +34,7 @@ fn session(sample: &str, steps: &[(&str, Json)]) -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"sample": sample})).unwrap();
     for (id, p) in steps {
-        let _ = s.execute(id, p.clone());
+        s.execute(id, p.clone()).unwrap();
     }
     s
 }
@@ -107,6 +107,18 @@ fn rows_hidden_by_hand_without_a_filter_still_count_for_subtotal_9() {
     assert_eq!(e1_e2(wb(&s)), (Value::Number(111111.0), Value::Number(110101.0)));
     let back = reopened(wb(&s));
     assert_eq!(e1_e2(&back), (Value::Number(111111.0), Value::Number(110101.0)));
+}
+
+#[test]
+fn a_narrower_range_inside_a_filtered_table_is_refused_not_dropped() {
+    let mut s = table_book();
+    s.execute("data.filterBy", json!({"column":"A","values":["a"]})).unwrap();
+    let back = reopened(wb(&s));
+    let mut s = Session::new();
+    s.add_document(gridcraft_engine::DocState::new(back, None, "t".into(), gridcraft_engine::Trust::FromFile));
+    s.execute("selection.set", json!({"cell":"D1"})).unwrap();
+    assert!(s.execute("data.filter", json!({"range":"B1:B7"})).is_err());
+    assert_eq!(wb(&s).active().unwrap().tables[0].filter.len(), 1, "the table's criteria are kept");
 }
 
 #[test]

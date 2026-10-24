@@ -552,10 +552,9 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
         }
         // A selected header row filters the data below it (#201).
         if p.get("range").is_none() && r.height() == 1 {
-            let region = if sh.table_at(r.start).is_some() {
-                current_region(sh, r.start)
-            } else {
-                crate::selection::current_region_outside_tables(sh, r.start)
+            let region = match sh.table_at(r.start) {
+                Some(t) => t.data_range().map(|dr| RangeRef::new(t.range.start, dr.end)).unwrap_or(t.range),
+                None => crate::selection::current_region_outside_tables(sh, r.start),
             };
             if region.end.row > r.end.row {
                 r = RangeRef::new(r.start, CellRef::new(region.end.row, r.end.col));
@@ -568,6 +567,13 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
         sh.tables.iter().position(|t| t.header_row && t.range.start.row == r.start.row && t.range.contains(r.start) && t.range.contains(r.end));
     if host.is_none() && sh.tables.iter().any(|t| t.range.intersects(&r)) {
         return Err(bad("data.filter", "a filter range can't overlap a table; filter inside the table instead"));
+    }
+    // A narrower range would leave out the table's criteria on the columns it doesn't cover, and saving would drop them.
+    if let Some(t) = host.and_then(|i| sh.tables.get(i)) {
+        let shift = r.start.col.saturating_sub(t.range.start.col);
+        if t.filter.iter().any(|(o, _)| o.checked_sub(shift).is_none_or(|c| c >= r.width())) {
+            return Err(bad("data.filter", "the table is filtered on a column this range leaves out; filter the table's full width"));
+        }
     }
     edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
