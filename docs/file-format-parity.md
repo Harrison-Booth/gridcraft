@@ -44,7 +44,7 @@ value, `errorType` being `ERROR.TYPE` minus one (8 and 13). They read back as th
 from GridCraft's files and from Excel's (which add sub-types and spill offsets we ignore). Excel's
 other newer errors (`#FIELD!` 12, and `#CONNECT!`, `#BLOCKED!`, `#UNKNOWN!`, `#BUSY!`,
 `#PYTHON!`) have no GridCraft kind and read as `#VALUE!`. Typed `#SPILL!`/`#CALC!` stay text, as
-in Excel (ft-3ir.10.25). The rich-value metadata type now carries `coerce="1"` and lower-case
+in Excel. The rich-value metadata type now carries `coerce="1"` and lower-case
 extension URIs: without them Excel 16.0 refused the whole file, cell pictures included. Checked
 in Excel 16.0 (build 20430) over COM: constants, cached formula results, with and without cell
 pictures, reopen with the same errors (`ERROR.TYPE` 9 and 14).
