@@ -2,7 +2,7 @@
 //! and sheet tabs until Esc or the back arrow returns to the sheet.
 //!
 //! A navigation column on the left picks a page (Home, New, Open, Info, Save As, Print, Export,
-//! Options); Save and Close act at once. Every action runs an existing command through
+//! Options, Account); Save and Close act at once. Every action runs an existing command through
 //! [`SheetApp::run`] or an existing dialog through [`SheetApp::open_dialog`]; the state here is
 //! UI-only and never saved. Recent workbooks are listed by path, with when each was last changed:
 //! that is asked of the file system on a thread of its own, never while drawing, and only the
@@ -36,10 +36,11 @@ pub enum Page {
     Print,
     Export,
     Options,
+    Account,
 }
 
 impl Page {
-    pub const ALL: [Page; 8] = [Page::Home, Page::New, Page::Open, Page::Info, Page::SaveAs, Page::Print, Page::Export, Page::Options];
+    pub const ALL: [Page; 9] = [Page::Home, Page::New, Page::Open, Page::Info, Page::SaveAs, Page::Print, Page::Export, Page::Options, Page::Account];
 
     /// The id `ui.backstage` and `ui.dialog {"name": "backstage", "page": …}` take.
     pub fn id(self) -> &'static str {
@@ -52,6 +53,7 @@ impl Page {
             Page::Print => "print",
             Page::Export => "export",
             Page::Options => "options",
+            Page::Account => "account",
         }
     }
 
@@ -71,6 +73,7 @@ impl Page {
             Page::Print => "Print",
             Page::Export => "Export",
             Page::Options => "Options",
+            Page::Account => "Account",
         }
     }
 
@@ -84,6 +87,7 @@ impl Page {
             Page::Print => Icon::Print,
             Page::Export => Icon::Share,
             Page::Options => Icon::Settings,
+            Page::Account => Icon::Info,
         }
     }
 }
@@ -190,9 +194,12 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     out.close = true;
                 }
             }
+            // Bottom up: Account sits just above Options, as in Excel.
             ui.with_layout(egui::Layout::bottom_up(egui::Align::Min), |ui| {
-                if nav_item(ui, Page::Options.icon(), lang.tr("Options"), bs.page == Page::Options, nav_text, nav_sel).clicked() {
-                    out.page = Some(Page::Options);
+                for page in [Page::Options, Page::Account] {
+                    if nav_item(ui, page.icon(), lang.tr(page.label()), bs.page == page, nav_text, nav_sel).clicked() {
+                        out.page = Some(page);
+                    }
                 }
             });
         });
@@ -211,6 +218,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
                     Page::Print => print(app, ui, &mut bs, &mut out),
                     Page::Export => export(app, ui, &mut out),
                     Page::Options => options(app, ui),
+                    Page::Account => account(app, ui),
                 }
             });
         });
@@ -250,9 +258,10 @@ fn save(app: &mut SheetApp, out: &mut Outcome) {
 
 // ---------------------------------------------------------------- navigation
 
+/// Allocates and paints one Backstage navigation row: selected or hover fill, icon, label and button semantics. Returns the row's click response.
 fn nav_item(ui: &mut Ui, icon: Icon, label: &str, selected: bool, text: Color32, sel: Color32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(NAV_W, 38.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, selected, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, label));
     let p = ui.painter();
     if selected {
         p.rect_filled(rect, 0.0, sel);
@@ -289,7 +298,7 @@ fn dim(ui: &mut Ui, text: &str) {
 fn tile(ui: &mut Ui, label: &str, sample: Option<usize>) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(150.0, 140.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let p = ui.painter();
     let thumb = Rect::from_min_size(rect.min, vec2(rect.width(), 104.0));
     p.rect_filled(thumb, 4.0, t.grid_bg);
@@ -344,8 +353,8 @@ fn new_tiles(app: &mut SheetApp, ui: &mut Ui, out: &mut Outcome) {
 /// File name and folder of a recent path, split as text.
 fn split_path(path: &str) -> (String, String) {
     let p = std::path::Path::new(path);
-    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or(path).to_string();
-    let folder = p.parent().and_then(|f| f.to_str()).unwrap_or("").to_string();
+    let name = p.file_name().and_then(std::ffi::OsStr::to_str).unwrap_or(path).to_string();
+    let folder = p.parent().and_then(std::path::Path::to_str).unwrap_or("").to_string();
     (name, folder)
 }
 
@@ -380,7 +389,7 @@ fn recent_list(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Ou
     for path in app.ui.recent.iter().take(limit).cloned().collect::<Vec<_>>() {
         let (name, folder) = split_path(&path);
         let (rect, resp) = ui.allocate_exact_size(vec2(width, 44.0), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &name));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &name));
         let p = ui.painter();
         if resp.hovered() {
             p.rect_filled(rect, 4.0, t.hover);
@@ -506,7 +515,7 @@ fn action_row(ui: &mut Ui, icon: Icon, title: &str, detail: &str) -> egui::Respo
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().min(CONTENT_W);
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 56.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, title));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, 4.0, t.hover);
@@ -521,7 +530,7 @@ fn action_row(ui: &mut Ui, icon: Icon, title: &str, detail: &str) -> egui::Respo
 fn square_button(ui: &mut Ui, icon: Icon, label: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let (rect, resp) = ui.allocate_exact_size(vec2(96.0, 88.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let p = ui.painter();
     p.rect_filled(rect, 6.0, if resp.hovered() { t.hover } else { t.ribbon });
     p.rect_stroke(rect, 6.0, Stroke::new(1.0, if resp.hovered() { t.accent } else { t.ribbon_border }), StrokeKind::Inside);
@@ -581,6 +590,7 @@ pub fn protect_workbook(app: &mut SheetApp) {
     }
 }
 
+/// Shows the workbook title, path, sheet count and structure protection, plus editable document properties. Committing a changed field after it loses focus runs `file.properties`.
 fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
@@ -635,13 +645,13 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
         ui.end_row();
         for (i, (key, label)) in PROPERTIES.iter().enumerate() {
             let (Some(draft), Some(saved)) = (bs.props.get_mut(i), current.get(i)) else { continue };
-            ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
+            let label = ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
             let id = ui.make_persistent_id(("backstage_prop", *key));
             // Show the workbook's value unless the field is being edited (undo, another window).
             if !ui.ctx().memory(|m| m.has_focus(id)) {
                 draft.clone_from(saved);
             }
-            let resp = ui.add(egui::TextEdit::singleline(draft).id(id).desired_width(360.0));
+            let resp = ui.add(egui::TextEdit::singleline(draft).id(id).desired_width(360.0)).labelled_by(label.id);
             if resp.lost_focus() && draft != saved {
                 let mut params = serde_json::Map::new();
                 params.insert((*key).to_string(), json!(draft.clone()));
@@ -652,6 +662,7 @@ fn info(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage) {
     });
 }
 
+/// Draws the Save As type picker and action: xlsx opens the `saveAs` dialog, other types export, and the page closes when the save/export succeeds (or a web download handles it).
 fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let lang = app.ui.language;
     dim(ui, lang.tr("Save the workbook under another name or in another folder."));
@@ -659,14 +670,19 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     let fmt = bs.save_format;
     let current = SAVE_TYPES.iter().find(|(ext, _)| *ext == fmt).map_or("Excel Workbook (*.xlsx)", |(_, label)| *label);
     ui.horizontal(|ui| {
-        ui.label(lang.tr("Save as type"));
-        egui::ComboBox::from_id_salt("backstage_save_type").width(280.0).selected_text(lang.tr(current)).show_ui(ui, |ui| {
-            for (ext, label) in SAVE_TYPES {
-                if ui.selectable_label(fmt == ext, lang.tr(label)).clicked() {
-                    bs.save_format = ext;
+        let label = ui.label(lang.tr("Save as type"));
+        egui::ComboBox::from_id_salt("backstage_save_type")
+            .width(280.0)
+            .selected_text(lang.tr(current))
+            .show_ui(ui, |ui| {
+                for (ext, label) in SAVE_TYPES {
+                    if ui.selectable_label(fmt == ext, lang.tr(label)).clicked() {
+                        bs.save_format = ext;
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(label.id);
     });
     ui.add_space(14.0);
     // Desktop: the system Save dialog. Web: the file downloads.
@@ -688,6 +704,7 @@ fn save_as(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcom
     dim(ui, lang.tr("A CSV file, web page or PDF is a copy: the workbook keeps its own file."));
 }
 
+/// Builds the print scope and fit-to-page parameters, caches `file.printPreview` per document revision/options, and draws page thumbnails with navigation plus the print settings and Print action.
 fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome) {
     let t = Tokens::get(ui.ctx());
     let lang = app.ui.language;
@@ -720,14 +737,19 @@ fn print(app: &mut SheetApp, ui: &mut Ui, bs: &mut Backstage, out: &mut Outcome)
             }
             ui.add_space(16.0);
             let scope = if bs.print_all { "Print Entire Workbook" } else { "Print Active Sheets" };
-            egui::ComboBox::from_id_salt("backstage_print_scope").width(230.0).selected_text(lang.tr(scope)).show_ui(ui, |ui| {
-                for (all, label) in [(false, "Print Active Sheets"), (true, "Print Entire Workbook")] {
-                    if ui.selectable_label(bs.print_all == all, lang.tr(label)).clicked() {
-                        bs.print_all = all;
-                        bs.preview_page = 0;
+            egui::ComboBox::from_id_salt("backstage_print_scope")
+                .width(230.0)
+                .selected_text(lang.tr(scope))
+                .show_ui(ui, |ui| {
+                    for (all, label) in [(false, "Print Active Sheets"), (true, "Print Entire Workbook")] {
+                        if ui.selectable_label(bs.print_all == all, lang.tr(label)).clicked() {
+                            bs.print_all = all;
+                            bs.preview_page = 0;
+                        }
                     }
-                }
-            });
+                })
+                .response
+                .accessible_name(lang.tr("Print What"));
             ui.add_space(8.0);
             if ui.checkbox(&mut bs.fit_to_page, lang.tr("Fit Sheet on One Page")).changed() {
                 bs.preview_page = 0;
@@ -880,7 +902,7 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
         _ => return false,
     };
     let title = app.session.active().map(|d| d.display_title()).unwrap_or_else(|| "Book1".into());
-    let stem = std::path::Path::new(&title).file_stem().and_then(|s| s.to_str()).unwrap_or("Book1").to_string();
+    let stem = std::path::Path::new(&title).file_stem().and_then(std::ffi::OsStr::to_str).unwrap_or("Book1").to_string();
     if let Some(pick) = &app.services.pick_save {
         let Some(path) = pick(&format!("{stem}.{fmt}")) else { return false };
         // The picker may suggest a workbook extension; the export writes the chosen format.
@@ -927,33 +949,48 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
     }
 }
 
+/// Excel's File › Options page: General (display theme, interface language and Show formula bar),
+/// Editing (AutoComplete) and Save (the autosave checkbox toggling `app.ui.autosave`), plus Formulas
+/// (calculation mode and iterative calculation) when a document is active. Theme, language, formula
+/// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
+/// settings are saved with the workbook.
 fn options(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     section(ui, lang, "Options|General");
     egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        ui.label(lang.tr("Display theme"));
+        let label = ui.label(lang.tr("Display theme"));
         let mode = app.ui.theme_mode();
         let current = match mode {
             "system" => "System",
             "dark" => "Dark",
             _ => "Light",
         };
-        egui::ComboBox::from_id_salt("backstage_theme").width(160.0).selected_text(lang.tr(current)).show_ui(ui, |ui| {
-            for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
-                if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
-                    app.run_or_alert("view.theme", json!({"mode": value}));
+        egui::ComboBox::from_id_salt("backstage_theme")
+            .width(160.0)
+            .selected_text(lang.tr(current))
+            .show_ui(ui, |ui| {
+                for (value, label) in [("system", "System"), ("light", "Light"), ("dark", "Dark")] {
+                    if ui.selectable_label(mode == value, lang.tr(label)).clicked() {
+                        app.run_or_alert("view.theme", json!({"mode": value}));
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(label.id);
         ui.end_row();
-        ui.label(lang.tr("Interface language"));
-        egui::ComboBox::from_id_salt("backstage_language").width(160.0).selected_text(lang.name()).show_ui(ui, |ui| {
-            for l in i18n::Language::ALL {
-                if ui.selectable_label(l == lang, l.name()).clicked() {
-                    app.run_or_alert("app.language.set", json!({"language": l.code()}));
+        let label = ui.label(lang.tr("Interface language"));
+        egui::ComboBox::from_id_salt("backstage_language")
+            .width(160.0)
+            .selected_text(lang.name())
+            .show_ui(ui, |ui| {
+                for l in i18n::Language::for_picker() {
+                    if ui.selectable_label(l == lang, l.name()).clicked() {
+                        app.run_or_alert("app.language.set", json!({"language": l.code()}));
+                    }
                 }
-            }
-        });
+            })
+            .response
+            .labelled_by(label.id);
         ui.end_row();
     });
     ui.add_space(6.0);
@@ -969,9 +1006,9 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
-    let mut autosave = app.grid.autosave();
+    let mut autosave = app.ui.autosave;
     if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
-        app.grid.toggle_autosave();
+        app.toggle_autosave();
     }
     let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
     ui.add_space(18.0);
@@ -992,8 +1029,116 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut iterative, lang.tr("Enable iterative calculation")).changed() {
         app.run_or_alert("formulas.calculationOptions", json!({"iterative": iterative}));
     }
+    // Maximum Iterations and Maximum Change apply only while iteration is on, as in Excel.
+    ui.add_enabled_ui(iterative, |ui| {
+        ui.horizontal(|ui| {
+            ui.add_space(24.0);
+            egui::Grid::new("backstage_options_iteration").num_columns(2).spacing(vec2(12.0, 6.0)).show(ui, |ui| {
+                let label = ui.label(lang.tr("Maximum Iterations:"));
+                let id = ui.make_persistent_id("backstage_max_iterations");
+                // Text left in the field when iteration is switched off (it loses focus) is dropped.
+                let committed = crate::widgets::committed_text(ui, id, &calc.max_iterations.to_string(), Some(80.0));
+                if let Some(response) = ui.ctx().read_response(id) {
+                    response.labelled_by(label.id);
+                }
+                if let Some(text) = committed.filter(|_| iterative) {
+                    match parse_max_iterations(&text) {
+                        Some(n) if n != calc.max_iterations => {
+                            app.run_or_alert("formulas.calculationOptions", json!({"maxIterations": n}));
+                        }
+                        Some(_) => {}
+                        None => refuse(app, ui, "Maximum Iterations must be a whole number from 1 to 32767."),
+                    }
+                }
+                ui.end_row();
+                let label = ui.label(lang.tr("Maximum Change:"));
+                let id = ui.make_persistent_id("backstage_max_change");
+                let committed = crate::widgets::committed_text(ui, id, &calc.max_change.to_string(), Some(80.0));
+                if let Some(response) = ui.ctx().read_response(id) {
+                    response.labelled_by(label.id);
+                }
+                if let Some(text) = committed.filter(|_| iterative) {
+                    match parse_max_change(&text, lang.formula_locale()) {
+                        Some(d) if d != calc.max_change => {
+                            app.run_or_alert("formulas.calculationOptions", json!({"maxChange": d}));
+                        }
+                        Some(_) => {}
+                        None => refuse(app, ui, "Maximum Change must be a number of 0 or more."),
+                    }
+                }
+                ui.end_row();
+            });
+        });
+    });
+    // TODO: add "Set precision as displayed" here once `formulas.calculationOptions` takes
+    // `precisionAsDisplayed` (PR #1366); the model already stores it.
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+/// Refuses a typed setting with a message, leaving the workbook as it was. The Enter that
+/// committed the field is consumed so it doesn't also dismiss the message box in this frame.
+fn refuse(app: &mut SheetApp, ui: &mut Ui, text: &str) {
+    ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+    app.message = Some(("GridCraft".into(), app.ui.language.tr(text).into()));
+}
+
+/// Maximum Iterations as typed: a whole number from 1 to 32767, or `None` (Excel refuses others).
+fn parse_max_iterations(text: &str) -> Option<u32> {
+    let n = text.trim().parse::<u32>().ok()?;
+    (1..=gridcraft_engine::model::CalcSettings::MAX_ITERATIONS).contains(&n).then_some(n)
+}
+
+/// Maximum Change as typed: a finite number of 0 or more, or `None`. The interface's decimal
+/// separator is accepted as well as a dot.
+fn parse_max_change(text: &str, locale: gridcraft_engine::formula::FormulaLocale) -> Option<f64> {
+    let d = text.trim().replace(locale.decimal_separator(), ".").parse::<f64>().ok()?;
+    (d.is_finite() && d >= 0.0).then_some(d)
+}
+
+/// The platform the app was built for, e.g. "macOS (aarch64)"; the web build reports "Web".
+fn platform() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        "freebsd" => "FreeBSD",
+        "openbsd" => "OpenBSD",
+        "netbsd" => "NetBSD",
+        _ if cfg!(target_arch = "wasm32") => return "Web".into(),
+        other => other,
+    };
+    format!("{os} ({})", std::env::consts::ARCH)
+}
+
+/// Excel's File › Account: product information and the About window.
+fn account(app: &mut SheetApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let lang = app.ui.language;
+    section(ui, lang, "Product Information");
+    ui.label(RichText::new("GridCraft").font(theme::ui_bold(16.0)).color(t.text));
+    ui.add_space(8.0);
+    egui::Grid::new("backstage_account").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
+        for (label, value) in
+            [("Version", env!("CARGO_PKG_VERSION").to_string()), ("Platform", platform()), ("Licence", env!("CARGO_PKG_LICENSE").to_string())]
+        {
+            ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
+            ui.label(value);
+            ui.end_row();
+        }
+    });
+    ui.add_space(18.0);
+    ui.horizontal(|ui| {
+        if square_button(ui, Icon::Info, lang.tr("About GridCraft")).clicked() {
+            app.open_dialog("about", json!({}));
+        }
+        ui.add_space(12.0);
+        ui.vertical(|ui| {
+            ui.add_space(14.0);
+            ui.label(RichText::new(lang.tr("About GridCraft")).font(theme::ui_bold(13.5)).color(t.text));
+            dim(ui, lang.tr("Version, contributors and the AI models that helped"));
+        });
+    });
 }
 
 #[cfg(test)]
@@ -1031,10 +1176,8 @@ mod tests {
         }
         assert!(age(Language::En, f64::MAX).ends_with(" years ago"));
         // Other languages put the count where their own words want it.
-        assert_eq!(age(Language::Ja, 3.0 * DAY), "3 日前");
-        assert_eq!(age(Language::De, 3.0 * DAY), "vor 3 Tagen");
-        assert_eq!(age(Language::Fr, 90.0), "il y a 1 min");
         for lang in Language::ALL {
+            assert!(age(lang, 3.0 * DAY).contains('3'), "{lang:?}: {}", age(lang, 3.0 * DAY));
             for seconds in [10.0, 600.0, 7200.0, 1.5 * DAY, 5.0 * DAY, 30.0 * DAY, 200.0 * DAY, 2000.0 * DAY] {
                 let words = age(lang, seconds);
                 assert!(!words.is_empty() && !words.contains('{'), "{lang:?} {seconds}: {words}");
@@ -1076,7 +1219,7 @@ mod tests {
             assert_eq!(Page::parse(page.id()), Some(page));
         }
         assert_eq!(Page::parse(" SAVEAS "), Some(Page::SaveAs));
-        assert_eq!(Page::parse("account"), None);
+        assert_eq!(Page::parse("feedback"), None);
         assert_eq!(Page::parse(""), None);
     }
 

@@ -9,7 +9,7 @@ Two backends:
 | Mode | Command | What it drives |
 |---|---|---|
 | Headless (default) | `gridcraft-cli mcp [--in book.xlsx \| --sample budget]` | An in-process engine session — no window. |
-| Remote | `gridcraft-cli mcp --connect 7979` | A running app started with `gridcraft --control 7979` (TCP JSON lines on `127.0.0.1`). |
+| Remote | `gridcraft-cli mcp --connect 7979` | A running app started with `gridcraft --control 7979` (TCP JSON lines on `127.0.0.1`, authenticated with the app's token: it is read from the app's token file or `GRIDCRAFT_CONTROL_TOKEN`, see [`control-protocol.md`](control-protocol.md)). |
 
 ## Claude Code
 
@@ -45,7 +45,7 @@ with a file open.
 | `read_range` | `range?`, `sheet?`, `formulas?`, `formatted?` | Rows of values (default: the used range). |
 | `write_range` | `range`, `values` (2-D) | `range.setValues`; strings starting with `=` are formulas. |
 | `set_cell` / `get_cell` | `cell`, `input` / `cell` | Enter one cell / read value, formula, display text, style. |
-| `evaluate_formula` | `formula`, `cell?` | Evaluates without changing the sheet. |
+| `evaluate_formula` | `formula`, `cell?` | Evaluates without changing the sheet. A formula that couldn't be entered in a cell (it doesn't parse, or a function gets the wrong number of arguments) is an error saying why. |
 | `select` | `range`, `active?` | Sets the selection. |
 | `format_range` | `range`, `bold?`, `italic?`, `underline?`, `fontName?`, `fontSize?`, `fontColor?`, `fillColor?`, `numberFormat?`, `horizontalAlign?`, `wrapText?`, `borders?` | Composes the `home.*` formatting commands. |
 | `insert_chart` | `range`, `type`, `title?`, `subtype?`, `at?` | `insert.chart`. |
