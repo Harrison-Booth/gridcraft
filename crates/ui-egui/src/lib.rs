@@ -1778,12 +1778,15 @@ pub fn cell(r: u32, c: u32) -> CellRef {
 mod autosave_gate_tests {
     use super::*;
 
-    /// Runs one whole frame.
+    /// Runs one whole frame: the logic step (where AutoSave runs), then the window.
     fn frame(app: &mut SheetApp) {
         let ctx = egui::Context::default();
         ctx.set_fonts(theme::font_definitions());
         app.fonts_ready = true;
-        let mut output = ctx.run_ui(Default::default(), |ui| app.ui(ui));
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
         output.textures_delta.clear();
     }
 
