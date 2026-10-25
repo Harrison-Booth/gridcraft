@@ -4467,8 +4467,8 @@ fn paste_blank_cells_clear_destination_and_blank_onto_blank_stays_blank() {
     assert!(!has_cell(&s, "H2"), "a blank copied cell's format replaces the bold");
 }
 
-/// Validation pastes over the whole pasted area, Skip Blanks or not (as Excel does), and cuts
-/// only the pasted cells out of a rule the block lands inside.
+/// Validation pastes over the whole pasted area (a blank copied cell's rule included, as Excel
+/// does), and cuts only the pasted cells out of a rule the block lands inside.
 #[test]
 fn paste_validation_covers_the_pasted_area_as_ranges() {
     let mut s = s();
@@ -4499,6 +4499,26 @@ fn paste_validation_covers_the_pasted_area_as_ranges() {
     s.execute("selection.set", json!({"range": "G1:G4"})).unwrap();
     s.execute("edit.paste", json!({})).unwrap();
     assert!(validation_areas(&s).contains(&"G1:G4".to_string()));
+}
+
+/// Paste Special > Validation, checked against Excel 16.0: A1 has a list rule, A2 is blank with a
+/// whole-number rule, A3 is blank with no rule, over C1:C3 that hold a decimal rule. With Skip
+/// Blanks a blank source cell that has a rule still pastes it, and one without keeps the
+/// destination's rule; without it the destination's rule is cleared.
+#[test]
+fn paste_validation_skip_blanks_keeps_rules_under_blank_cells_without_one() {
+    let ok = |s: &mut Session, cell: &str, input: &str| s.execute("data.validate", json!({"cell": cell, "input": input})).unwrap()["ok"] == true;
+    for skip in [true, false] {
+        let mut s = s();
+        s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "\"x,y\""})).unwrap();
+        s.execute("data.validation", json!({"range": "A2", "type": "whole", "operator": "greater", "formula1": "0"})).unwrap();
+        s.execute("data.validation", json!({"range": "C1:C3", "type": "decimal", "operator": "greater", "formula1": "0"})).unwrap();
+        s.execute("edit.copy", json!({"range": "A1:A3"})).unwrap();
+        s.execute("edit.pasteSpecial", json!({"what": "validation", "skipBlanks": skip, "at": "C1"})).unwrap();
+        assert!(!ok(&mut s, "C1", "z"), "C1 gets A1's list rule (skip {skip})");
+        assert!(!ok(&mut s, "C2", "1.5"), "C2 gets A2's whole-number rule (skip {skip})");
+        assert_eq!(ok(&mut s, "C3", "-1"), !skip, "C3 keeps its decimal rule only when blanks are skipped");
+    }
 }
 
 /// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;

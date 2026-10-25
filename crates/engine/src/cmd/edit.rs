@@ -1260,7 +1260,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         }
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
         if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-            paste_validations(cx, src_sheet, src, dest_sheet, pasted, (h, w), transpose)?;
+            paste_validations(cx, src_sheet, src, dest_sheet, pasted, (h, w), transpose, skip_blanks)?;
         }
         if what == What::ColumnWidths {
             // Each pasted column takes the width of the column copied to it (transposed, the
@@ -1341,10 +1341,33 @@ fn paste_validations(
     pasted: RangeRef,
     size: (u32, u32),
     transpose: bool,
+    skip_blanks: bool,
 ) -> Result<()> {
     let (h, w) = size;
     let (tiles_r, tiles_c) = (pasted.height() / h.max(1), pasted.width() / w.max(1));
     let mut rules = Vec::new();
+    // Under Skip Blanks the destination keeps its rule below a blank source cell that has none, so
+    // only the destination of cells that hold something (and of the rules) is cleared.
+    let mut cleared = Vec::new();
+    if skip_blanks {
+        for (sc, cell) in src_sheet.cells.iter_range(src) {
+            if cell.formula.is_none() && src_sheet.value(sc).is_empty() {
+                continue;
+            }
+            let (r, c) = (sc.row - src.start.row, sc.col - src.start.col);
+            let (r, c) = if transpose { (c, r) } else { (r, c) };
+            for tr in 0..tiles_r {
+                for tc in 0..tiles_c {
+                    if cleared.len() > MAX_PASTE_VALIDATION_RANGES {
+                        return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
+                    }
+                    if let Some(d) = pasted.start.offset(i64::from(tr * h + r), i64::from(tc * w + c)) {
+                        cleared.push(RangeRef::new(d, d));
+                    }
+                }
+            }
+        }
+    }
     let mut total = 0usize;
     for dv in &src_sheet.validations {
         let parts: Vec<RangeRef> = dv.ranges.iter().filter_map(|r| r.intersection(&src)).collect();
@@ -1384,7 +1407,12 @@ fn paste_validations(
         rules.push(rule);
     }
     let sh = cx.sheet_mut(dest_sheet)?;
-    super::data::remove_validation_cells(&mut sh.validations, &[pasted]);
+    if skip_blanks {
+        cleared.extend(rules.iter().flat_map(|r| r.ranges.iter().copied()));
+        super::data::remove_validation_cells(&mut sh.validations, &cleared);
+    } else {
+        super::data::remove_validation_cells(&mut sh.validations, &[pasted]);
+    }
     sh.validations.extend(rules);
     Ok(())
 }
