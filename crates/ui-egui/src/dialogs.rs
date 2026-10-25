@@ -824,6 +824,7 @@ impl Dialog {
                 Dialog::custom("sort", "Sort", json!({"header": true, "levels": [{"column": col, "order": "asc"}]}))
             }
             "nameManager" => Dialog::custom("nameManager", "Name Manager", json!({})),
+            "pasteName" => Dialog::custom("pasteName", "Paste Name", json!({})),
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
@@ -1230,7 +1231,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "pasteName" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -1264,6 +1265,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 "zoom" => zoom(ui, &mut d, &mut confirm, &mut open),
                 "sort" => sort(app, ui, &mut d, &mut confirm),
                 "nameManager" => name_manager(app, ui, &mut d, &mut open),
+                "pasteName" => paste_name(app, ui, &mut d, &mut confirm),
                 "manageRules" => manage_rules(app, ui),
                 "recommendedCharts" => recommended_charts(app, ui, &mut d, &mut confirm, &mut open),
                 "selectData" => select_data(app, ui, &mut d, &mut confirm, &mut open),
@@ -1592,7 +1594,7 @@ fn paste_special(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm:
             *confirm = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(Color32::WHITE)).fill(t.accent));
+            let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
             if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
                 *confirm = true;
             }
@@ -1675,10 +1677,8 @@ fn ok_cancel(ui: &mut egui::Ui, confirm: &mut bool, open: &mut bool) {
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let lang = crate::i18n::current(ui.ctx());
-            let ok = ui.add(
-                egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(Color32::WHITE))
-                    .fill(crate::theme::Tokens::get(ui.ctx()).accent),
-            );
+            let t = crate::theme::Tokens::get(ui.ctx());
+            let ok = ui.add(egui::Button::new(egui::RichText::new(format!("   {}   ", lang.tr("OK"))).color(t.on_accent)).fill(t.accent));
             if ok.clicked() || ui.input(|i| i.key_pressed(Key::Enter)) {
                 *confirm = true;
             }
@@ -2496,6 +2496,70 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mu
     });
 }
 
+/// F3 / Formulas > Use in Formula > Paste Names: pick a name to put at the caret of the formula being
+/// edited, or to start one (`=Name`) when no cell is being edited.
+fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
+    // (name, scope label, text to paste). Scope is compared by sheet index, so a sheet literally named
+    // "Workbook" is not mistaken for workbook scope.
+    let names: Vec<(String, String, Option<String>)> = app.session.active().map_or_else(Vec::new, |doc| {
+        // The sheet the formula is typed on: the open editor's, else the active sheet.
+        let origin = app.editor.as_ref().map_or(doc.wb.active_sheet, |ed| ed.sheet);
+        doc.wb
+            .names
+            .iter()
+            .filter(|n| !n.hidden)
+            .map(|n| {
+                let scope = n.scope.and_then(|i| doc.wb.sheet(i).map(|s| (i, s.name.as_str())));
+                let label = scope.map_or("Workbook", |(_, sheet)| sheet);
+                // The origin sheet's own name of the same spelling hides this workbook name there.
+                let shadowed = scope.is_none() && doc.wb.name(&n.name, origin).is_some_and(|m| m.scope.is_some());
+                (n.name.clone(), label.to_string(), paste_name_text(&n.name, scope, origin, shadowed))
+            })
+            .collect()
+    });
+    ui.label("Paste name:");
+    egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+        if names.is_empty() {
+            ui.label(egui::RichText::new("No names defined").italics());
+        }
+        for (i, (n, scope, _)) in names.iter().enumerate() {
+            let r = ui.add(egui::Button::selectable(i == d.list_index, format!("{n:<24} {scope}")).min_size(vec2(480.0, 20.0)));
+            if r.clicked() {
+                d.list_index = i;
+            }
+            if r.double_clicked() {
+                d.list_index = i;
+                *confirm = true;
+            }
+        }
+    });
+    let mut open = true;
+    ok_cancel(ui, confirm, &mut open);
+    if *confirm && let Some((name, _, text)) = names.get(d.list_index) {
+        match (text, app.editor.as_mut()) {
+            (None, _) => {
+                app.message = Some(("Paste Name".into(), format!("{name} is hidden on this sheet by a sheet-level name of the same spelling.")))
+            }
+            (Some(text), Some(ed)) => ed.paste_text(text),
+            (Some(text), None) => app.begin_edit(Some(format!("={text}")), false),
+        }
+    }
+    if !open {
+        *confirm = true;
+    }
+}
+
+/// The text Paste Name inserts: a name scoped to another sheet is qualified, since the bare name would
+/// resolve to a different definition (or none). Workbook scope and the edited sheet's own names stay bare.
+/// A workbook name hidden on the edited sheet has no text that reaches it, so it returns `None`.
+fn paste_name_text(name: &str, scope: Option<(usize, &str)>, origin: usize, shadowed: bool) -> Option<String> {
+    match scope {
+        None if shadowed => None,
+        Some((i, sheet)) if i != origin => Some(format!("{}!{name}", gridcraft_engine::formula::quote_sheet(sheet))),
+        _ => Some(name.to_string()),
+    }
+}
+
 /// Every chart type the All Charts tab offers: `(type, subtype, label)` for `insert.chart`.
 const ALL_CHARTS: [(&str, &str, &str); 20] = [
     ("column", "", "Clustered Column"),
@@ -3066,8 +3130,8 @@ fn solver(ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool, open: &mut bool
     );
     ui.add_space(8.0);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let solve =
-            ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(Color32::WHITE)).fill(crate::theme::Tokens::get(ui.ctx()).accent));
+        let t = crate::theme::Tokens::get(ui.ctx());
+        let solve = ui.add(egui::Button::new(egui::RichText::new("  Solve  ").color(t.on_accent)).fill(t.accent));
         if solve.clicked() && !text(d, "objective").trim().is_empty() {
             *confirm = true;
         }
@@ -3142,7 +3206,7 @@ fn spelling(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mut bo
     let word = it["word"].as_str().unwrap_or("").to_string();
     let cell = it["cell"].as_str().unwrap_or("").to_string();
     ui.label(format!("Not in Dictionary ({cell}):"));
-    ui.label(egui::RichText::new(&word).strong().color(Color32::from_rgb(0xC4, 0x2B, 0x1C)));
+    ui.label(egui::RichText::new(&word).strong().color(crate::theme::Tokens::get(ui.ctx()).danger));
     let sugg: Vec<String> =
         it["suggestions"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
     ui.label("Suggestions:");
@@ -3278,5 +3342,22 @@ mod tests {
         let d = Dialog::open(&mut app, "dataValidation", json!({})).unwrap();
         assert_eq!(d.values["type"], "list");
         assert!(d.values.get("formula1").is_none());
+    }
+
+    #[test]
+    fn paste_name_qualifies_only_names_scoped_to_another_sheet() {
+        assert_eq!(paste_name_text("Rate", None, 0, false).as_deref(), Some("Rate"));
+        assert_eq!(paste_name_text("Rate", Some((0, "Sales")), 0, false).as_deref(), Some("Rate"));
+        assert_eq!(paste_name_text("Rate", Some((1, "Sales")), 0, false).as_deref(), Some("Sales!Rate"));
+        // Edited on Sales: a name scoped to Sales is bare, even when the active sheet is another one.
+        assert_eq!(paste_name_text("Rate", Some((1, "Sales")), 1, false).as_deref(), Some("Rate"));
+        // A sheet literally named "Workbook" is qualified, not treated as workbook scope.
+        assert_eq!(paste_name_text("Rate", Some((2, "Workbook")), 0, false).as_deref(), Some("Workbook!Rate"));
+    }
+
+    #[test]
+    fn paste_name_refuses_a_workbook_name_the_edited_sheet_shadows() {
+        // Bare "Rate" would resolve to the sheet's own Rate, and no qualifier reaches the workbook one.
+        assert_eq!(paste_name_text("Rate", None, 0, true), None);
     }
 }
