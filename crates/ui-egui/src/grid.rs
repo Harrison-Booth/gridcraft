@@ -3041,7 +3041,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 use egui::Key;
                 // End mode lasts for one key: only an unmodified End press arms it, and any other key
                 // (a shortcut included) ends it before it runs.
-                let end_jump = app.grid.end_mode && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
+                let end_jump = app.grid.end_mode && m.is_none() && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
                 if key != Key::End || !m.is_none() {
                     app.grid.end_mode = false;
                 }

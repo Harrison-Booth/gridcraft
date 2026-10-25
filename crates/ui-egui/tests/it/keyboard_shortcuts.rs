@@ -338,7 +338,16 @@ fn modified_shortcut_ends_end_mode_before_the_arrow() {
     key(&mut h, Key::End, Modifiers::NONE);
     key(&mut h, Key::End, CTRL);
     assert!(!h.state().grid.end_mode);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "C3");
     key(&mut h, Key::ArrowDown, Modifiers::NONE);
-    // Not a jump to the bottom of the sheet: the stale End mode is gone.
-    assert!(h.state().session.active().unwrap().selection.active.row < 1_000);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "C4");
+}
+
+#[test]
+fn end_mode_leaves_shift_arrow_extending_one_cell() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    key(&mut h, Key::ArrowDown, Modifiers::SHIFT);
+    assert!(!h.state().grid.end_mode);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
 }
