@@ -1349,7 +1349,7 @@ fn paste_validations(
     // Under Skip Blanks the destination keeps its rule below a blank source cell that has none, so
     // only the destination of cells that hold something (and of the rules) is cleared. Nothing is
     // collected when no destination rule is under the paste.
-    let mut cleared = Vec::new();
+    let mut cleared: Vec<RangeRef> = Vec::new();
     let dest_rules =
         cx.wb.sheet(dest_sheet).is_some_and(|sh| sh.validations.iter().any(|dv| dv.ranges.iter().any(|r| r.intersection(&pasted).is_some())));
     if skip_blanks && dest_rules {
