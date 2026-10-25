@@ -784,3 +784,12 @@ fn f6_and_shift_f6_move_to_the_ribbon_and_back() {
     events(&mut h, [key_event(Key::F6, true, Modifiers::SHIFT), key_event(Key::F6, false, Modifiers::SHIFT)]);
     assert_eq!(h.state().keytips.prefix(), Some(""));
 }
+
+#[test]
+fn f6_ends_end_mode_because_the_keytip_router_consumes_it() {
+    let mut h = harness(blank());
+    key(&mut h, Key::End);
+    assert!(h.state().grid.end_mode);
+    key(&mut h, Key::F6);
+    assert!(!h.state().grid.end_mode);
+}
