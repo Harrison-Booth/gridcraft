@@ -4423,6 +4423,10 @@ fn a_read_only_open_never_saves_over_its_reserved_file() {
     let err = s.execute("file.save", json!({"path": path})).unwrap_err().to_string();
     assert!(err.contains("read-only"), "{err}");
     assert_eq!(std::fs::read(&path).unwrap(), bytes, "the reserved file is untouched");
+    let dotted = dir.join(".").join("reserved.xlsx").to_string_lossy().into_owned();
+    let err = s.execute("file.save", json!({"path": dotted})).unwrap_err().to_string();
+    assert!(err.contains("read-only"), "the same file under another spelling: {err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the reserved file is untouched");
     s.execute("file.saveAs", json!({"path": copy})).unwrap();
     assert!(std::fs::metadata(&copy).is_ok());
     std::fs::remove_dir_all(&dir).ok();

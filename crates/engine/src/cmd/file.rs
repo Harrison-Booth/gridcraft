@@ -120,6 +120,14 @@ fn open(s: &mut Session, p: &Json) -> Result<Json> {
     )
 }
 
+/// Whether two paths name one file, whatever their spelling (`./book.xlsx`, a symlink).
+fn same_file(a: &str, b: &str) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
 fn save(s: &mut Session, p: &Json) -> Result<Json> {
     let path = match str_param(p, "path").map(str::to_string).or_else(|| s.active().and_then(|d| d.path.clone())) {
         Some(p) => p,
@@ -128,7 +136,7 @@ fn save(s: &mut Session, p: &Json) -> Result<Json> {
             return ok();
         }
     };
-    if s.active().and_then(|d| d.read_only_source.as_deref()) == Some(path.as_str()) {
+    if s.active().and_then(|d| d.read_only_source.as_deref()).is_some_and(|src| same_file(src, &path)) {
         return Err(bad("file.save", "is reserved by its author and open read-only. Save As to another file."));
     }
     // A PDF is a print of the sheet (Page Setup applies), not a copy of the workbook: the

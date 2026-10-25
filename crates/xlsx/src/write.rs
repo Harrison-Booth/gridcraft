@@ -352,9 +352,11 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
             let _ = write!(w, " userName=\"{}\"", esc_attr(&r.user_name));
         }
         match &r.password {
-            Some(gridcraft_model::PasswordHash::Legacy(h)) => {
+            // Office needs a userName beside a legacy reservationPassword; without one the hash is left out.
+            Some(gridcraft_model::PasswordHash::Legacy(h)) if !r.user_name.is_empty() => {
                 let _ = write!(w, " reservationPassword=\"{h:04X}\"");
             }
+            Some(gridcraft_model::PasswordHash::Legacy(_)) => {}
             Some(h) => w.push_str(&crate::sheet_write::password_attrs(h, "")),
             None => {}
         }

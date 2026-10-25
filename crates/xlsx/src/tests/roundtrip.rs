@@ -1491,3 +1491,15 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
 }
+
+#[test]
+fn legacy_reservation_password_is_written_with_a_user_name() {
+    let mut wb = sample();
+    wb.write_reservation =
+        Some(WriteReservation { user_name: String::new(), read_only_recommended: false, password: Some(PasswordHash::Legacy(0x83AF)) });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert!(back.write_reservation.is_some_and(|r| r.password.is_none()), "no userName, so no reservationPassword");
+    wb.write_reservation.as_mut().unwrap().user_name = "Ann".into();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.write_reservation.and_then(|r| r.password), Some(PasswordHash::Legacy(0x83AF)));
+}
