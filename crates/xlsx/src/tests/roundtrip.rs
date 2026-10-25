@@ -433,6 +433,7 @@ fn sample() -> Workbook {
         ChartKind::Doughnut,
         ChartKind::Area,
         ChartKind::AreaStacked,
+        ChartKind::AreaStacked100,
         ChartKind::Scatter,
         ChartKind::ScatterLines,
         ChartKind::Bubble,
