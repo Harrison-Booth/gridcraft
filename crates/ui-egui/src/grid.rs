@@ -115,6 +115,26 @@ pub struct FillTag {
     pub undo_len: usize,
 }
 
+/// Trace Precedents / Trace Dependents arrows: they stay on the cell they were traced from, on its
+/// sheet, while the selection moves. They go away when anything changes the workbook
+/// (`revision`): Excel removes them on edits to the traced formula and on inserted, deleted or
+/// moved cells, this also on a new value in a precedent.
+pub struct Trace {
+    pub uid: u64,
+    pub revision: u64,
+    pub sheet: usize,
+    pub cell: CellRef,
+    /// The command's result: `{"sheet", "range"}` precedents or `{"sheet", "cell"}` dependents.
+    pub items: serde_json::Value,
+}
+
+impl Trace {
+    /// A trace of the active cell, just run.
+    pub fn new(app: &SheetApp, items: serde_json::Value) -> Option<Trace> {
+        app.session.active().map(|d| Trace { uid: d.uid, revision: d.revision, sheet: d.wb.active_sheet, cell: d.selection.active, items })
+    }
+}
+
 #[derive(Default)]
 pub struct GridState {
     pub drag: Drag,
@@ -150,7 +170,7 @@ pub struct GridState {
     pub last_border: String,
     pub last_fill: String,
     pub last_font_color: String,
-    pub trace: Option<serde_json::Value>,
+    pub trace: Option<Trace>,
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
@@ -163,6 +183,11 @@ pub struct GridState {
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):
     /// it scans the whole source list, far too slow to repeat every frame (#2113).
     pub pivot_fields: Option<((u64, u64, String), serde_json::Value)>,
+    /// The cells of a PivotTable report where the cell menu offers Show Details, relative to the
+    /// report's top-left and cached per (doc uid, revision, sheet, pivot): finding them computes
+    /// the whole report. `None` when the report can't be computed or is out of date: every cell
+    /// of it offers Show Details, and running it says why.
+    pub show_details_cells: Option<((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>)>,
     pub header_menu: Option<(Pos2, bool)>,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
@@ -176,6 +201,11 @@ pub struct GridState {
     pub geo: Option<Geo>,
     /// The horizontal scrollbar's track in the sheet tab bar (hit-testing for tests).
     pub hscroll: Option<Rect>,
+    /// The handle between the sheet tabs and the horizontal scrollbar (hit-testing for tests).
+    pub tab_split: Option<Rect>,
+    /// The share of the tab bar each workbook's tabs (and New sheet) take after the handle was
+    /// dragged, by document uid. A workbook without one gives its tabs up to 60%.
+    pub tab_shares: std::collections::HashMap<u64, f32>,
     /// Ctrl+wheel zoom in progress (see [`WheelZoom`]).
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
@@ -252,8 +282,8 @@ impl Geo {
         let (fr, fc) = sh.freeze.unwrap_or((0, 0));
         let frozen_w = (ci.start(fc) as f32) * z;
         let frozen_h = (ri.start(fr) as f32) * z;
-        let row_outline = Arc::new(crate::outline::Axis::new(&sh.rows));
-        let col_outline = Arc::new(crate::outline::Axis::new(&sh.cols));
+        let row_outline = Arc::new(crate::outline::Axis::of(sh, true));
+        let col_outline = Arc::new(crate::outline::Axis::of(sh, false));
         // Show Outline Symbols off: no bands (the outline's hidden lines stay hidden).
         let symbols = sh.show_outline_symbols;
         let mut band_w = if symbols { crate::outline::band(row_outline.levels, zoom) } else { 0.0 };
@@ -701,9 +731,16 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     // Keep the active cell (or the moving end of an extension) visible after keyboard moves.
     if app.grid.ensure_visible {
         app.grid.ensure_visible = false;
-        let cell = if std::mem::take(&mut app.grid.reveal_moving_end) { sel.moving_end() } else { sel.active };
+        let moving = std::mem::take(&mut app.grid.reveal_moving_end);
+        let cell = if moving { sel.moving_end() } else { sel.active };
         let from = app.grid.reveal_from.take();
         let target = app.editor.as_ref().and_then(|e| e.point_cell).unwrap_or(cell);
+        // A whole column's moving end sits on the sheet's last row (a whole row's on its last
+        // column): when an extension moves it only across, the view keeps its place the other way.
+        // An extension that reaches the last row itself (Ctrl+Shift+Down past the data) still
+        // follows it.
+        let extended = (moving && target == cell).then(|| sel.current());
+        let before = view.scroll;
         if paper {
             crate::paper_view::ensure_covers(app, &wb, si, target);
             geo = make_geo(app, view.scroll);
@@ -730,6 +767,12 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
             }
         } else if from.is_some_and(|f| f.col >= geo.fc) {
             view.scroll.x = 0.0;
+        }
+        if extended.is_some_and(|r| r.is_full_cols()) && from.is_some_and(|f| f.row == cell.row) {
+            view.scroll.y = before.y;
+        }
+        if extended.is_some_and(|r| r.is_full_rows()) && from.is_some_and(|f| f.col == cell.col) {
+            view.scroll.x = before.x;
         }
         view.scroll = view.scroll.max(egui::Vec2::ZERO);
         geo = make_geo(app, view.scroll);
@@ -3368,6 +3411,12 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
             if let Some(item) = insert_copied {
                 items.insert(6, item);
             }
+            if show_details_offered(app)
+                && let Some(i) = items.iter().position(|(_, id)| *id == "data.sortDescending")
+            {
+                items.insert(i + 1, ("-", ""));
+                items.insert(i + 2, ("Show Details", "pivot.showDetails"));
+            }
             let lang = crate::i18n::current(ui.ctx());
             for (label, id) in items {
                 if label == "-" {
@@ -3424,9 +3473,47 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Whether the cell menu offers Show Details (Excel's right-click › Show Details): the active cell
+/// is a value, subtotal or grand total cell of a PivotTable, or a cell of a report that is out of
+/// date, where running the command says so. Labels and headers of a current report don't offer it,
+/// and no cell does while the PivotTable's Enable show details option is off.
+fn show_details_offered(app: &mut SheetApp) -> bool {
+    let Some(d) = app.session.active() else { return false };
+    let (si, at) = (d.wb.active_sheet, d.selection.active);
+    let Some((pi, pt)) = d.wb.active().and_then(|sh| sh.pivots.iter().enumerate().find(|(_, pt)| pt.last_range.is_some_and(|r| r.contains(at))))
+    else {
+        return false;
+    };
+    if !pt.enable_show_details {
+        return false;
+    }
+    let origin = pt.last_range.map(|r| r.start).unwrap_or_default();
+    let cell = (at.row.saturating_sub(origin.row), at.col.saturating_sub(origin.col));
+    let key = (d.uid, d.revision, si, pi);
+    if let Some((k, cells)) = &app.grid.show_details_cells
+        && *k == key
+    {
+        return cells.as_ref().is_none_or(|c| c.contains(&cell));
+    }
+    let cells = gridcraft_engine::pivot::detail_cells(&d.wb, pt, si).ok();
+    let on = cells.as_ref().is_none_or(|c| c.contains(&cell));
+    app.grid.show_details_cells = Some((key, cells));
+    on
+}
+
 /// The ways to fill a dragged range, as the fill menu and the Auto Fill Options button list them.
 const FILL_MODES: [(&str, &str); 4] =
     [("Copy Cells", "copy"), ("Fill Series", "extend"), ("Fill Formatting Only", "formats"), ("Fill Without Formatting", "values")];
+
+/// The ways to fill from a date, which both menus add after [`FILL_MODES`] when the source starts
+/// with one.
+const DATE_FILL_MODES: [(&str, &str); 4] = [("Fill Days", "days"), ("Fill Weekdays", "weekdays"), ("Fill Months", "months"), ("Fill Years", "years")];
+
+/// The fill modes the menus list for a fill from `src` on the active sheet.
+fn fill_modes(app: &SheetApp, src: RangeRef) -> Vec<(&'static str, &'static str)> {
+    let dates = app.session.active().is_some_and(|d| gridcraft_engine::fill::starts_with_date(&d.wb, d.wb.active_sheet, src));
+    FILL_MODES.into_iter().chain(DATE_FILL_MODES.into_iter().filter(|_| dates)).collect()
+}
 
 /// Remembers the fill just made so the Auto Fill Options button can offer the other ways.
 fn set_fill_tag(app: &mut SheetApp, src: RangeRef, target: RangeRef) {
@@ -3436,7 +3523,8 @@ fn set_fill_tag(app: &mut SheetApp, src: RangeRef, target: RangeRef) {
 
 /// The Auto Fill Options button below the bottom-right corner of cells a left-drag of the fill
 /// handle just filled. Its menu redoes that fill as Copy Cells, Fill Series, Fill Formatting Only
-/// or Fill Without Formatting: it undoes the drag's fill, then runs `edit.autoFill` in that mode.
+/// or Fill Without Formatting, and from a date also as Fill Days, Fill Weekdays, Fill Months or
+/// Fill Years: it undoes the drag's fill, then runs `edit.autoFill` in that mode.
 /// The button goes away as soon as anything else changes the workbook or the selection moves.
 fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
     let Some(tag) = app.grid.fill_tag.clone() else { return };
@@ -3479,9 +3567,10 @@ fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet
         Stroke::NONE,
     ));
     let mut chosen = None;
+    let modes = fill_modes(app, tag.src);
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(190.0);
-        for (label, mode) in FILL_MODES {
+        for (label, mode) in modes {
             if ui.add(egui::Button::new(lang.tr(label)).frame(false).min_size(vec2(180.0, 20.0))).clicked() {
                 chosen = Some(mode);
                 ui.close();
@@ -3508,10 +3597,11 @@ fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet
 fn fill_menu(app: &mut SheetApp, ui: &mut egui::Ui, was_open: bool) {
     let Some((src, target, at)) = app.grid.fill_menu else { return };
     let mut close = false;
+    let mut items = fill_modes(app, src);
+    items.extend([("-", ""), ("Series…", "ui:series")]);
     let response = egui::Area::new(egui::Id::new("fill_menu")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(190.0);
-            let items = [FILL_MODES[0], FILL_MODES[1], FILL_MODES[2], FILL_MODES[3], ("-", ""), ("Series…", "ui:series")];
             let lang = crate::i18n::current(ui.ctx());
             for (label, mode) in items {
                 if label == "-" {
@@ -3742,11 +3832,13 @@ pub(crate) fn paint_overlays(
         });
     }
     // Trace precedents / dependents arrows.
-    if let Some(trace) = app.grid.trace.clone()
-        && let Some(items) = trace.as_array()
+    if let Some(trace) = &app.grid.trace
+        && app.session.active().is_some_and(|d| d.uid == trace.uid && d.revision == trace.revision)
+        && trace.sheet == si
+        && let Some(items) = trace.items.as_array()
     {
         let blue = Color32::from_rgb(0x1F, 0x5F, 0xC9);
-        let active = geo.cell_rect(sh, sel.active).center();
+        let active = geo.cell_rect(sh, trace.cell).center();
         for it in items {
             if it["sheet"].as_str().is_some_and(|s| !s.eq_ignore_ascii_case(&sh.name)) {
                 continue;
@@ -4530,5 +4622,132 @@ mod outline_band_tests {
         let clip = Rect::from_min_max(pos2(0.0, 0.0), pos2(800.0, 600.0));
         assert!(outline_bands(Rect::from_min_max(pos2(900.0, 0.0), pos2(950.0, 20.0)), 2.0, clip).is_empty());
         assert!(outline_bands(Rect::from_min_max(pos2(f32::NAN, 0.0), pos2(1.0, 1.0)), 2.0, clip).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod trace_arrow_tests {
+    use super::*;
+
+    fn app() -> SheetApp {
+        let mut s = gridcraft_engine::Session::new();
+        s.new_workbook();
+        SheetApp::new(s, Default::default())
+    }
+
+    fn select(app: &mut SheetApp, cell: &str) {
+        app.run("selection.set", json!({"cell": cell})).unwrap();
+    }
+
+    /// What the ribbon's Trace Precedents / Trace Dependents buttons do.
+    fn trace(app: &mut SheetApp, id: &str) {
+        let r = app.run(id, json!({})).unwrap();
+        app.grid.trace = Trace::new(app, r);
+    }
+
+    /// The arrows `paint_overlays` draws on the active sheet, as (tail, head) points.
+    fn arrows(app: &mut SheetApp) -> (Geo, Vec<(Pos2, Pos2)>) {
+        let d = app.session.active().unwrap();
+        let (wb, si, sel) = (d.wb.clone(), d.wb.active_sheet, d.selection.clone());
+        let sh = wb.sheet(si).unwrap();
+        let geo = Geo::new(sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0)), vec2(0.0, 0.0));
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let p = ui.painter().clone();
+            paint_overlays(app, ui, &p, &geo, &wb, si, sh, &sel);
+        });
+        // No renderer consumes the font atlas upload here.
+        out.textures_delta.clear();
+        let blue = Color32::from_rgb(0x1F, 0x5F, 0xC9);
+        let mut lines = Vec::new();
+        for s in out.shapes {
+            if let egui::Shape::LineSegment { points, stroke } = s.shape
+                && stroke.color == blue
+            {
+                lines.push((points[0], points[1]));
+            }
+        }
+        (geo, lines)
+    }
+
+    fn center(app: &SheetApp, geo: &Geo, cell: &str) -> Pos2 {
+        let d = app.session.active().unwrap();
+        let sh = d.wb.sheet(d.wb.active_sheet).unwrap();
+        geo.cell_rect(sh, CellRef::parse(cell).unwrap()).center()
+    }
+
+    #[test]
+    fn precedent_arrows_stay_on_the_traced_cell_when_the_selection_moves() {
+        let mut app = app();
+        for (c, v) in [("B2", "1"), ("B3", "2"), ("D2", "1"), ("D3", "2"), ("F7", "=B2+B3+SUM(D2:D3)")] {
+            app.run("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        select(&mut app, "H7");
+        let (geo, lines) = arrows(&mut app);
+        assert_eq!(lines.len(), 3, "B2, B3 and D2:D3: {lines:?}");
+        let f7 = center(&app, &geo, "F7");
+        assert!(lines.iter().all(|&(_, head)| head == f7), "every arrow points at F7, not at the active H7: {lines:?}");
+    }
+
+    #[test]
+    fn dependent_arrows_stay_on_the_traced_cell_when_the_selection_moves() {
+        let mut app = app();
+        for (c, v) in [("B2", "1"), ("D4", "=B2*2"), ("E6", "=B2+1")] {
+            app.run("cell.set", json!({"cell": c, "input": v})).unwrap();
+        }
+        select(&mut app, "B2");
+        trace(&mut app, "formulas.traceDependents");
+        select(&mut app, "C9");
+        let (geo, lines) = arrows(&mut app);
+        assert_eq!(lines.len(), 2, "D4 and E6: {lines:?}");
+        let b2 = center(&app, &geo, "B2");
+        assert!(lines.iter().all(|&(tail, _)| tail == b2), "every arrow starts at B2, not at the active C9: {lines:?}");
+    }
+
+    #[test]
+    fn arrows_stay_on_the_sheet_of_the_traced_cell() {
+        let mut app = app();
+        app.run("home.insertSheet", json!({"name": "Two"})).unwrap();
+        app.run("cell.set", json!({"sheet": "Sheet1", "cell": "B2", "input": "1"})).unwrap();
+        app.run("sheet.activate", json!({"sheet": "Two"})).unwrap();
+        app.run("cell.set", json!({"cell": "F7", "input": "=Sheet1!B2"})).unwrap();
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        // The precedent lives on Sheet1, but the arrow belongs to Two's F7.
+        app.run("sheet.activate", json!({"sheet": "Sheet1"})).unwrap();
+        assert!(arrows(&mut app).1.is_empty(), "no arrow on Sheet1 from B2 to where F7 would be");
+    }
+
+    #[test]
+    fn inserting_a_row_removes_the_arrows() {
+        let mut app = app();
+        app.run("cell.set", json!({"cell": "B2", "input": "1"})).unwrap();
+        app.run("cell.set", json!({"cell": "F7", "input": "=B2"})).unwrap();
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        assert_eq!(arrows(&mut app).1.len(), 1);
+        app.run("home.insertRows", json!({"rows": "4"})).unwrap();
+        assert!(arrows(&mut app).1.is_empty(), "F7 is now F8: the old arrows would point at the wrong cell");
+    }
+
+    #[test]
+    fn arrows_stay_in_their_workbook() {
+        let mut app = app();
+        app.session.new_workbook();
+        // Two books with the same cells and the same revision: only the document tells them apart.
+        for book in [1, 0] {
+            app.session.set_active(book);
+            app.run("cell.set", json!({"cell": "B2", "input": "1"})).unwrap();
+            app.run("cell.set", json!({"cell": "F7", "input": "=B2"})).unwrap();
+        }
+        select(&mut app, "F7");
+        trace(&mut app, "formulas.tracePrecedents");
+        assert_eq!(arrows(&mut app).1.len(), 1);
+        app.session.set_active(1);
+        let revisions: Vec<u64> = app.session.documents().iter().map(|d| d.revision).collect();
+        assert_eq!(revisions[0], revisions[1]);
+        assert!(arrows(&mut app).1.is_empty(), "Book1's arrows are not drawn on Book2");
     }
 }
