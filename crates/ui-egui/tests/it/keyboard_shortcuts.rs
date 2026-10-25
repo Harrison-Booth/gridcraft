@@ -349,5 +349,6 @@ fn end_mode_leaves_shift_arrow_extending_one_cell() {
     key(&mut h, Key::End, Modifiers::NONE);
     key(&mut h, Key::ArrowDown, Modifiers::SHIFT);
     assert!(!h.state().grid.end_mode);
-    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+    // Shift keeps the active cell on the anchor; only the moving end extends, one row.
+    assert_eq!(h.state().session.active().unwrap().selection.moving_end().a1(), "A2");
 }
