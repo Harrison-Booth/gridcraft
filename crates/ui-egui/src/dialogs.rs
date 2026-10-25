@@ -2501,7 +2501,7 @@ fn name_manager(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, open: &mu
 fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &mut bool) {
     // (name, scope label, text to paste). Scope is compared by sheet index, so a sheet literally named
     // "Workbook" is not mistaken for workbook scope.
-    let names: Vec<(String, String, String)> = app.session.active().map_or_else(Vec::new, |doc| {
+    let names: Vec<(String, String, Option<String>)> = app.session.active().map_or_else(Vec::new, |doc| {
         // The sheet the formula is typed on: the open editor's, else the active sheet.
         let origin = app.editor.as_ref().map_or(doc.wb.active_sheet, |ed| ed.sheet);
         doc.wb
@@ -2511,7 +2511,9 @@ fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
             .map(|n| {
                 let scope = n.scope.and_then(|i| doc.wb.sheet(i).map(|s| (i, s.name.as_str())));
                 let label = scope.map_or("Workbook", |(_, sheet)| sheet);
-                (n.name.clone(), label.to_string(), paste_name_text(&n.name, scope, origin))
+                // The origin sheet's own name of the same spelling hides this workbook name there.
+                let shadowed = scope.is_none() && doc.wb.name(&n.name, origin).is_some_and(|m| m.scope.is_some());
+                (n.name.clone(), label.to_string(), paste_name_text(&n.name, scope, origin, shadowed))
             })
             .collect()
     });
@@ -2533,10 +2535,13 @@ fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
     });
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
-    if *confirm && let Some((_, _, text)) = names.get(d.list_index) {
-        match app.editor.as_mut() {
-            Some(ed) => ed.paste_text(text),
-            None => app.begin_edit(Some(format!("={text}")), false),
+    if *confirm && let Some((name, _, text)) = names.get(d.list_index) {
+        match (text, app.editor.as_mut()) {
+            (None, _) => {
+                app.message = Some(("Paste Name".into(), format!("{name} is hidden on this sheet by a sheet-level name of the same spelling.")))
+            }
+            (Some(text), Some(ed)) => ed.paste_text(text),
+            (Some(text), None) => app.begin_edit(Some(format!("={text}")), false),
         }
     }
     if !open {
@@ -2546,10 +2551,12 @@ fn paste_name(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &m
 
 /// The text Paste Name inserts: a name scoped to another sheet is qualified, since the bare name would
 /// resolve to a different definition (or none). Workbook scope and the edited sheet's own names stay bare.
-fn paste_name_text(name: &str, scope: Option<(usize, &str)>, origin: usize) -> String {
+/// A workbook name hidden on the edited sheet has no text that reaches it, so it returns `None`.
+fn paste_name_text(name: &str, scope: Option<(usize, &str)>, origin: usize, shadowed: bool) -> Option<String> {
     match scope {
-        Some((i, sheet)) if i != origin => format!("{}!{name}", gridcraft_engine::formula::quote_sheet(sheet)),
-        _ => name.to_string(),
+        None if shadowed => None,
+        Some((i, sheet)) if i != origin => Some(format!("{}!{name}", gridcraft_engine::formula::quote_sheet(sheet))),
+        _ => Some(name.to_string()),
     }
 }
 
@@ -3339,12 +3346,18 @@ mod tests {
 
     #[test]
     fn paste_name_qualifies_only_names_scoped_to_another_sheet() {
-        assert_eq!(paste_name_text("Rate", None, 0), "Rate");
-        assert_eq!(paste_name_text("Rate", Some((0, "Sales")), 0), "Rate");
-        assert_eq!(paste_name_text("Rate", Some((1, "Sales")), 0), "Sales!Rate");
+        assert_eq!(paste_name_text("Rate", None, 0, false).as_deref(), Some("Rate"));
+        assert_eq!(paste_name_text("Rate", Some((0, "Sales")), 0, false).as_deref(), Some("Rate"));
+        assert_eq!(paste_name_text("Rate", Some((1, "Sales")), 0, false).as_deref(), Some("Sales!Rate"));
         // Edited on Sales: a name scoped to Sales is bare, even when the active sheet is another one.
-        assert_eq!(paste_name_text("Rate", Some((1, "Sales")), 1), "Rate");
+        assert_eq!(paste_name_text("Rate", Some((1, "Sales")), 1, false).as_deref(), Some("Rate"));
         // A sheet literally named "Workbook" is qualified, not treated as workbook scope.
-        assert_eq!(paste_name_text("Rate", Some((2, "Workbook")), 0), "Workbook!Rate");
+        assert_eq!(paste_name_text("Rate", Some((2, "Workbook")), 0, false).as_deref(), Some("Workbook!Rate"));
+    }
+
+    #[test]
+    fn paste_name_refuses_a_workbook_name_the_edited_sheet_shadows() {
+        // Bare "Rate" would resolve to the sheet's own Rate, and no qualifier reaches the workbook one.
+        assert_eq!(paste_name_text("Rate", None, 0, true), None);
     }
 }

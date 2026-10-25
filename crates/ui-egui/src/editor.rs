@@ -107,6 +107,9 @@ impl EditState {
         self.point = None;
         self.insert_ref(text);
         self.point = None;
+        // A function suggestion open before the paste would now replace the pasted name on Tab.
+        self.autocomplete.clear();
+        self.completion = None;
         self.request_focus = true;
     }
 
@@ -385,6 +388,12 @@ mod tests {
         e.paste_text("Tax");
         assert_eq!(e.text, "=SUM(SalesTax");
         assert!(e.point.is_none());
+        // A suggestion open before the paste is dropped, so Tab cannot replace the pasted name.
+        e.autocomplete = vec!["SUMIF".into()];
+        e.completion = Some("IF".into());
+        e.paste_text("Rate");
+        assert!(e.autocomplete.is_empty());
+        assert!(e.completion.is_none());
     }
 
     #[test]
