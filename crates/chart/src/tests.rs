@@ -1131,6 +1131,7 @@ fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
             series("North", &[10.0, 30.0, 0.0, 5.0], [20, 96, 130, 255], ChartKind::AreaStacked100),
             series("South", &[30.0, 10.0, 0.0, 15.0], [25, 107, 36, 255], ChartKind::AreaStacked100),
         ],
+        ..Default::default()
     };
     let mut c = chart(ChartKind::AreaStacked100);
     c.data_labels = false;
