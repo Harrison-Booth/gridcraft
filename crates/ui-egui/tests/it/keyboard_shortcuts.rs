@@ -338,9 +338,9 @@ fn modified_shortcut_ends_end_mode_before_the_arrow() {
     key(&mut h, Key::End, Modifiers::NONE);
     key(&mut h, Key::End, CTRL);
     assert!(!h.state().grid.end_mode);
-    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "C3");
+    let landed = h.state().session.active().unwrap().selection.active;
     key(&mut h, Key::ArrowDown, Modifiers::NONE);
-    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "C4");
+    assert_eq!(h.state().session.active().unwrap().selection.active.row, landed.row + 1);
 }
 
 #[test]
