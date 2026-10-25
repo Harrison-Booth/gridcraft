@@ -272,7 +272,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                 ui.label(egui::RichText::new(app.ui.language.tr(mode)).font(theme::ui_font(12.5)).color(t.text_dim));
                 if app.grid.end_mode {
                     ui.add_space(12.0);
-                    ui.label(egui::RichText::new("End Mode").font(theme::ui_font(12.5)).color(t.text_dim));
+                    ui.label(egui::RichText::new(app.ui.language.tr("End Mode")).font(theme::ui_font(12.5)).color(t.text_dim));
                 }
                 if let Some(d) = app.session.active() {
                     if d.wb.vba_project.is_some() {

@@ -3037,15 +3037,20 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 }
                 return;
             }
-            egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
+            egui::Event::Key { key, physical_key, pressed: true, repeat, modifiers: m, .. } => {
                 use egui::Key;
+                // End mode lasts for one key: only an unmodified End press arms it, and any other key
+                // (a shortcut included) ends it before it runs.
+                let end_jump = app.grid.end_mode && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
+                if key != Key::End || !m.is_none() {
+                    app.grid.end_mode = false;
+                }
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
                     continue;
                 }
                 let cmd = m.command;
                 let shift = m.shift;
-                let end_jump = app.grid.end_mode && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
                 let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
                     let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
                     let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd || end_jump}));
@@ -3074,7 +3079,8 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         let _ = app.session.run("selection.set", json!({"cell": end.a1()}));
                         app.grid.ensure_visible = true;
                     }
-                    Key::End => app.grid.end_mode = !app.grid.end_mode,
+                    // A held End key repeats; only the first press toggles.
+                    Key::End if m.is_none() && !repeat => app.grid.end_mode = !app.grid.end_mode,
                     Key::Home => {
                         let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
                         let _ = app.session.run("selection.set", json!({"cell": CellRef::new(a.row, 0).a1()}));
@@ -3119,10 +3125,6 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         crate::ribbon::shortcut(app, key, m)
                     }
                     _ => {}
-                }
-                // End mode lasts for one key: the arrow it modifies, or any other key.
-                if key != Key::End {
-                    app.grid.end_mode = false;
                 }
             }
             _ => {}

@@ -322,3 +322,22 @@ fn end_mode_makes_the_next_arrow_jump_once() {
     key(&mut h, Key::ArrowUp, Modifiers::NONE);
     assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
 }
+
+#[test]
+fn held_end_key_toggles_end_mode_once() {
+    let mut h = harness(book("A1"));
+    let press = |repeat| Event::Key { key: Key::End, physical_key: Some(Key::End), pressed: true, repeat, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([press(false), press(true), press(true)]);
+    h.run_steps(2);
+    assert!(h.state().grid.end_mode);
+}
+
+#[test]
+fn modified_shortcut_ends_end_mode_before_the_arrow() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    key(&mut h, Key::End, CTRL);
+    assert!(!h.state().grid.end_mode);
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+}
