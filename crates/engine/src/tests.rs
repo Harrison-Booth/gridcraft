@@ -4521,6 +4521,18 @@ fn paste_validation_skip_blanks_keeps_rules_under_blank_cells_without_one() {
     }
 }
 
+/// A big populated Skip Blanks validation paste is not refused for its cell count: only
+/// validation areas are limited, and with no rule under the paste nothing is cleared.
+#[test]
+fn paste_validation_skip_blanks_large_populated_paste() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1:A100002", "values": (0..100_002).map(|i| vec![i]).collect::<Vec<_>>()})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "type": "list", "formula1": "\"x,y\""})).unwrap();
+    s.execute("edit.copy", json!({"range": "A1:A100002"})).unwrap();
+    s.execute("edit.pasteSpecial", json!({"what": "validation", "skipBlanks": true, "at": "C1"})).unwrap();
+    assert_eq!(validation_areas(&s), ["A1", "C1"]);
+}
+
 /// Open a workbook by path, and `CELL("filename")` names the file it came from, as Excel does;
 /// Save As makes the new file the one it names. The sheet-name formula of #1489 depends on it.
 #[test]

@@ -1347,9 +1347,13 @@ fn paste_validations(
     let (tiles_r, tiles_c) = (pasted.height() / h.max(1), pasted.width() / w.max(1));
     let mut rules = Vec::new();
     // Under Skip Blanks the destination keeps its rule below a blank source cell that has none, so
-    // only the destination of cells that hold something (and of the rules) is cleared.
+    // only the destination of cells that hold something (and of the rules) is cleared. Nothing is
+    // collected when no destination rule is under the paste.
     let mut cleared = Vec::new();
-    if skip_blanks {
+    let dest_rules =
+        cx.wb.sheet(dest_sheet).is_some_and(|sh| sh.validations.iter().any(|dv| dv.ranges.iter().any(|r| r.intersection(&pasted).is_some())));
+    if skip_blanks && dest_rules {
+        let mut cells = Vec::new();
         for (sc, cell) in src_sheet.cells.iter_range(src) {
             if cell.formula.is_none() && src_sheet.value(sc).is_empty() {
                 continue;
@@ -1358,13 +1362,21 @@ fn paste_validations(
             let (r, c) = if transpose { (c, r) } else { (r, c) };
             for tr in 0..tiles_r {
                 for tc in 0..tiles_c {
-                    if cleared.len() > MAX_PASTE_VALIDATION_RANGES {
+                    if cells.len() > MAX_PASTE_VALIDATION_RANGES {
                         return Err(EngineError::Other("Too many separate validation areas to paste at once.".into()));
                     }
                     if let Some(d) = pasted.start.offset(i64::from(tr * h + r), i64::from(tc * w + c)) {
-                        cleared.push(RangeRef::new(d, d));
+                        cells.push((d.row, d.col));
                     }
                 }
+            }
+        }
+        // Adjacent cells of a row become one cut, so a populated block is a few cuts.
+        cells.sort_unstable();
+        for (row, col) in cells {
+            match cleared.last_mut() {
+                Some(last) if last.end.row == row && last.end.col.saturating_add(1) == col => last.end.col = col,
+                _ => cleared.push(RangeRef::new(CellRef::new(row, col), CellRef::new(row, col))),
             }
         }
     }
