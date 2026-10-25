@@ -29,6 +29,9 @@ craft-print = { git = "https://github.com/storytold/craft-libs", rev = "25da1314
 craft-update = { workspace = true }
 rfd = { workspace = true }
 arboard = { workspace = true }
+gridcraft-mcp = { workspace = true }
+# The control channel's token (OS random numbers); already in the tree.
+getrandom = "0.4"
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]
 arboard = { workspace = true, features = ["wayland-data-control"] }
