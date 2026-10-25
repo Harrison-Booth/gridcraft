@@ -10,6 +10,7 @@ pub mod backstage;
 mod border_preview;
 mod cell_pictures;
 pub mod chartview;
+pub mod code_editor;
 pub mod command_search;
 pub mod control;
 pub mod credits;
@@ -727,7 +728,6 @@ impl SheetApp {
         Ok(json!({"printing": true, "bytes": len, "pending": self.services.print_native.is_some()}))
     }
 
-    /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     /// The commands run from the search box in the active workbook, most recent first.
     pub fn recent_commands(&self) -> &[String] {
         let uid = self.session.active().map(|d| d.uid).unwrap_or_default();
@@ -739,6 +739,7 @@ impl SheetApp {
         command_search::remember(self.recent_commands.entry(uid).or_default(), id);
     }
 
+    /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
             // The search box's list without opening it: `{query}` gives the commands it shows
