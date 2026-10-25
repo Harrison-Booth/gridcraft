@@ -1783,7 +1783,7 @@ fn keytip_ms_() {
 fn keytip_msp_() {
     let mut h = harness(blank());
     sequence(&mut h, "MSP", false);
-    assert!(h.state().dialog.is_some(), "MSP must open the pasteName dialog");
+    assert_eq!(h.state().dialog.as_ref().map(|d| d.name.as_str()), Some("pasteName"), "MSP must open the pasteName dialog");
 }
 
 #[test]
