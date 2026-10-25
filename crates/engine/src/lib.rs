@@ -269,6 +269,17 @@ impl DocState {
     pub fn new(mut wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
         let mut calc = Calc::new();
         calc.recalc_all(&mut wb);
+        Self::with_calc(wb, calc, path, title, trust)
+    }
+    /// A workbook as its file saved it: the dependency graph is built but nothing is
+    /// evaluated, so every value is the one the file holds until an edit reaches it. `trust`
+    /// is as for [`DocState::new`].
+    pub fn from_saved(wb: Workbook, path: Option<String>, title: String, trust: Trust) -> DocState {
+        let mut calc = Calc::new();
+        calc.rebuild(&wb);
+        Self::with_calc(wb, calc, path, title, trust)
+    }
+    fn with_calc(wb: Workbook, calc: Calc, path: Option<String>, title: String, trust: Trust) -> DocState {
         let scripts_trusted = !cmd::extra::has_scripts(&wb);
         let wb = Arc::new(wb);
         let sel = Selection::at(wb.active().map(|s| s.view_active).unwrap_or_default());
@@ -601,8 +612,11 @@ impl Session {
         let result = match result {
             Ok(r) => r,
             Err(p) => {
-                let msg =
-                    p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_else(|| "panic".into());
+                let msg = p
+                    .downcast_ref::<&str>()
+                    .map(ToString::to_string)
+                    .or_else(|| p.downcast_ref::<String>().cloned())
+                    .unwrap_or_else(|| "panic".into());
                 // Restore the workbook and its history as they were, and drop the undo groups the
                 // command opened.
                 self.groups.retain(|g| g.id < first_group);
