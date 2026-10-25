@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** trivial (docs: §4, §9, §15 and §19 re-checked against the code; §15's four copies merged; §4's duplicate evidence removed) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-24 · **Change:** minor (§8: PivotTable Enable show details; earlier: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -81,7 +81,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
   `insert.pivotChart`, `table.insertSlicer`; calculated items and GETPIVOTDATA missing (calculated fields
   and values on rows done). Show Details (double-click a value, subtotal or grand total cell) lists
-  its source records on a new sheet; the "Enable show details" option isn't modelled yet.
+  its source records on a new sheet. The "Enable show details" option (`pivot.options`
+  `enableShowDetails`, saved as `enableDrill`) turns it off; it has no PivotTable Options dialog
+  yet (command only).
 - **Impact:** pivots are the analyst's main tool.
 - **Estimate:** 20–30 h for beta (25–40 h full).
 
@@ -171,6 +173,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | minor | §8: PivotTable Enable show details: `pivot.options` `enableShowDetails` turns Show Details off for a PivotTable, read and written in XLSX as `enableDrill` |
 | 2026-10-24 | trivial | Docs: review fixes: §4 says per-series formatting covers colour, smoothing and trendlines |
 | 2026-10-24 | trivial | Docs: §4 (chart PRs #158 and #161 are merged; charts resize from their corner handle, so that is no longer missing), §9 (key tips cover every ribbon tab; estimate from ui-parity's remaining work), §15 (one count, 18 missing and 9 stubs, as function-parity.md has it), §19 (`.xltx` saves with its template type) refreshed; duplicate text removed |
 | 2026-10-23 | minor | §8: PivotTable Show Details: double-clicking a value cell lists its source records on a new sheet (#2364) |
