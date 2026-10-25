@@ -673,6 +673,26 @@ fn a_query_table_keeps_its_field_links_when_columns_move() {
 }
 
 #[test]
+fn a_prefixed_query_table_keeps_its_field_links_when_columns_move() {
+    let mut zip = Unpacked::new(&query_table_package()).parts;
+    let query = format!(
+        "<?xml version=\"1.0\"?>\n<q:queryTable xmlns:q=\"{NS_MAIN}\" name=\"ExternalData_1\" connectionId=\"1\"><q:queryTableRefresh nextId=\"3\"><q:queryTableFields count=\"2\"><q:queryTableField id=\"1\" name=\"Id\" tableColumnId=\"1\"/><q:queryTableField id=\"2\" name=\"Name\" tableColumnId=\"2\"/></q:queryTableFields></q:queryTableRefresh></q:queryTable>"
+    );
+    zip.insert("xl/queryTables/queryTable1.xml".to_string(), query.into_bytes());
+    let items: Vec<(&str, &[u8])> = zip.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (mut wb, _) = read_xlsx(&make_zip(&items)).unwrap();
+    Arc::make_mut(&mut wb.sheets[0]).tables[0].columns.swap(0, 1);
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let (_, query) = u.rels(&table).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/queryTable")).unwrap();
+    let text = u.text(&query);
+    assert!(text.contains("<q:queryTableField id=\"1\" name=\"Id\" tableColumnId=\"2\"/>"), "{text}");
+    assert!(text.contains("<q:queryTableField id=\"2\" name=\"Name\" tableColumnId=\"1\"/>"), "{text}");
+}
+
+#[test]
 fn a_query_field_whose_column_is_gone_is_dropped_on_save() {
     let (mut wb, _) = read_xlsx(&query_table_package()).unwrap();
     Arc::make_mut(&mut wb.sheets[0]).tables[0].columns.pop();

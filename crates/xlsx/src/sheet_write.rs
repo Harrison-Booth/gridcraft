@@ -1100,19 +1100,19 @@ fn remap_query_fields(query: &str, t: &Table) -> String {
             continue;
         }
         let out = match ev {
-            Event::Start(e) if e.name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
+            Event::Start(e) if e.local_name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
                 Some(f) => Event::Start(f),
                 None => {
                     dropped = 1;
                     continue;
                 }
             },
-            Event::Empty(e) if e.name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
+            Event::Empty(e) if e.local_name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
                 Some(f) => Event::Empty(f),
                 None => continue,
             },
-            Event::Start(e) if e.name().as_ref() == b"queryTableFields" => Event::Start(set_attr(&e, b"count", &kept.to_string())),
-            Event::Empty(e) if e.name().as_ref() == b"queryTableFields" => Event::Empty(set_attr(&e, b"count", &kept.to_string())),
+            Event::Start(e) if e.local_name().as_ref() == b"queryTableFields" => Event::Start(set_attr(&e, b"count", &kept.to_string())),
+            Event::Empty(e) if e.local_name().as_ref() == b"queryTableFields" => Event::Empty(set_attr(&e, b"count", &kept.to_string())),
             other => other,
         };
         if writer.write_event(out).is_err() {
