@@ -2046,38 +2046,46 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
     }
     // A held drag owns the cursor even outside the grid; a press below egui's threshold still
     // has Drag::None and uses hover. A click can briefly leave a drag state after release.
-    if resp.dragged() && pointer.primary_down() {
-        let cursor = match app.grid.drag {
-            Drag::None => None,
-            Drag::Select => Some(CursorIcon::Cell),
-            Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
-            Drag::Fill { .. } => Some(CursorIcon::Crosshair),
-            Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
-            Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
-            Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
-            Drag::Freeze { cols, .. } => Some(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
-            Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
-        };
-        if let Some(cursor) = cursor {
-            ctx.set_cursor_icon(cursor);
-            return;
-        }
+    if resp.dragged()
+        && pointer.primary_down()
+        && let Some(cursor) = drag_cursor(&app.grid.drag)
+    {
+        ctx.set_cursor_icon(cursor);
+        return;
     }
     if !resp.hovered() {
         return;
     }
     let Some(p) = pos else { return };
+    hover_cursor(app, ctx, resp, &pointer, geo, sh, p);
+}
+
+/// The cursor a held drag shows, or `None` when the drag leaves it to hover.
+fn drag_cursor(drag: &Drag) -> Option<CursorIcon> {
+    match drag {
+        Drag::None => None,
+        Drag::Select => Some(CursorIcon::Cell),
+        Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
+        Drag::Fill { .. } => Some(CursorIcon::Crosshair),
+        Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
+        Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
+        Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
+        Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
+        Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
+    }
+}
+
+/// The cursor over the grid when no drag owns it: freeze bars, header edges, the fill handle, cells.
+fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, pointer: &egui::PointerState, geo: &Geo, sh: &Sheet, p: Pos2) {
+    let (freeze_cols, freeze_rows) = freeze_handles(geo);
     if freeze_cols.contains(p) || freeze_rows.contains(p) {
-        let cols = freeze_cols.contains(p);
-        ctx.set_cursor_icon(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
-        if app.grid.drag == Drag::None && !pointer.any_down() {
-            let tip = if cols { "Drag to freeze columns" } else { "Drag to freeze rows" };
-            resp.clone().on_hover_text_at_pointer(crate::i18n::current(ctx).tr(tip));
-        }
+        freeze_cursor(app, ctx, resp, pointer, freeze_cols.contains(p));
         return;
     }
+    let in_cells = geo.in_cells(p);
     let in_col_header = p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left();
     let in_row_header = p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top();
+    let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
@@ -2089,16 +2097,8 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
     let near_corner = selected_object.is_some_and(|(_, _, rect)| (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS);
     if app.grid.drag == Drag::None && near_corner {
         ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
-    } else if (in_col_header && col_edge(geo, sh, p.x).is_some()) || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
-        let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
-        // Just past a hidden column or row, Excel shows a split cursor: dragging or
-        // double-clicking there unhides it.
-        let hidden = app.grid.drag == Drag::None
-            && if near_col_edge { hidden_col_edge(geo, sh, p.x).is_some() } else { hidden_row_edge(geo, sh, p.y).is_some() };
-        match pointer.hover_pos() {
-            Some(at) if hidden => paint_split_cursor(ctx, at, near_col_edge),
-            _ => ctx.set_cursor_icon(if near_col_edge { CursorIcon::ResizeColumn } else { CursorIcon::ResizeRow }),
-        }
+    } else if near_col_edge || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
+        header_edge_cursor(app, ctx, pointer, geo, sh, p, near_col_edge);
     } else if on_handle && app.editor.is_none() {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         if app.grid.drag == Drag::None && !pointer.any_down() {
@@ -2112,6 +2112,26 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
         let col = geo.col_at(sh, p.x);
         let selected = sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, col));
         ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
+    }
+}
+
+/// The resize cursor for dragging a freeze bar.
+fn freeze_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, pointer: &egui::PointerState, cols: bool) {
+    ctx.set_cursor_icon(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
+    if app.grid.drag == Drag::None && !pointer.any_down() {
+        let tip = if cols { "Drag to freeze columns" } else { "Drag to freeze rows" };
+        resp.clone().on_hover_text_at_pointer(crate::i18n::current(ctx).tr(tip));
+    }
+}
+
+/// The resize cursor over a column or row header edge. Just past a hidden column or row, Excel
+/// shows a split cursor: dragging or double-clicking there unhides it.
+fn header_edge_cursor(app: &SheetApp, ctx: &egui::Context, pointer: &egui::PointerState, geo: &Geo, sh: &Sheet, p: Pos2, near_col_edge: bool) {
+    let hidden =
+        app.grid.drag == Drag::None && if near_col_edge { hidden_col_edge(geo, sh, p.x).is_some() } else { hidden_row_edge(geo, sh, p.y).is_some() };
+    match pointer.hover_pos() {
+        Some(at) if hidden => paint_split_cursor(ctx, at, near_col_edge),
+        _ => ctx.set_cursor_icon(if near_col_edge { CursorIcon::ResizeColumn } else { CursorIcon::ResizeRow }),
     }
 }
 
