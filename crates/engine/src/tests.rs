@@ -3192,6 +3192,12 @@ fn chart_error_bars_are_added_replaced_saved_and_removed() {
         json!({"direction": true}),
         json!({"display": 1}),
         json!({"endStyle": []}),
+        json!({"series": "1", "on": false}),
+        json!({"series": -1}),
+        json!({"series": 1.5}),
+        json!({"series": true}),
+        json!({"type": "custom", "plus": 7, "minus": "B2:B7"}),
+        json!({"type": "custom", "plus": "B2:B7", "minus": false}),
     ] {
         let mut p = json!({"element": "errorBars"});
         p.as_object_mut().unwrap().extend(case.as_object().unwrap().clone());

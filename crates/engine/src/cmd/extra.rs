@@ -395,7 +395,12 @@ fn add_element(s: &mut Session, p: &Json) -> Result<Json> {
 /// one series or all that can show them (Excel's Add Chart Element ▸ Error Bars and the Format
 /// Error Bars options).
 fn add_error_bars(c: &mut Chart, p: &Json, on: bool) -> Result<()> {
-    let only = u32_param(p, "series").map(|i| i as usize);
+    let only = match p.get("series").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => {
+            Some(v.as_u64().and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad("chart.addElement", "`series` must be a non-negative integer"))?)
+        }
+    };
     if only.is_some_and(|i| i >= c.series.len()) {
         return Err(bad("chart.addElement", "no such series"));
     }
@@ -468,10 +473,10 @@ fn error_bars_param(p: &Json) -> Result<ErrorBars> {
         "fixed" => ErrorAmount::Fixed(value(1.0)?),
         "custom" => {
             let r = |k: &str| -> Result<Option<String>> {
-                match str_param(p, k).map(str::trim) {
-                    None | Some("") => Ok(None),
-                    Some(t) if t.len() > MAX_ERROR_REF => Err(bad("chart.addElement", format!("`{k}` is too long"))),
-                    Some(t) => {
+                match word(p, k, "")?.trim() {
+                    "" => Ok(None),
+                    t if t.len() > MAX_ERROR_REF => Err(bad("chart.addElement", format!("`{k}` is too long"))),
+                    t => {
                         let t = t.strip_prefix('=').unwrap_or(t).trim();
                         match gridcraft_formula::parse(t) {
                             Ok(gridcraft_formula::Expr::Ref(_) | gridcraft_formula::Expr::Name(_)) => Ok(Some(t.to_string())),
