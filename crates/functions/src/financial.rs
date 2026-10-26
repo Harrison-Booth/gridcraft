@@ -261,8 +261,9 @@ fn npv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 ///
 /// Blank cells follow what Excel returns (observed on synthetic workbooks). With `lenient` (XIRR)
 /// a blank value counts as 0 and a blank date is ignored when its value is blank or 0; a nonzero
-/// value without a date is `#NUM!`. XNPV is strict: a blank value is `#NUM!`, and so is a blank
-/// date next to a blank or 0 value (`#VALUE!` next to a nonzero one).
+/// value without a date is `#NUM!`, except in the first row, where the date is read as day 0.
+/// XNPV is strict: a blank (or text) value or a blank date is `#NUM!`, except in the first row,
+/// where it is `#VALUE!`.
 fn dated_flows(values: &Value, dates: &Value, lenient: bool) -> R<(Vec<f64>, Vec<f64>)> {
     let va = as_array(values);
     let da = as_array(dates);
