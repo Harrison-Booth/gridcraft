@@ -348,15 +348,17 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         if r.read_only_recommended {
             w.push_str(" readOnlyRecommended=\"1\"");
         }
-        if !r.user_name.is_empty() {
-            let _ = write!(w, " userName=\"{}\"", esc_attr(&r.user_name));
+        // Office needs a userName beside a legacy reservationPassword, so a nameless one gets a placeholder
+        // rather than losing the password.
+        let legacy = matches!(r.password, Some(gridcraft_model::PasswordHash::Legacy(_)));
+        let name = if r.user_name.is_empty() && legacy { "GridCraft" } else { r.user_name.as_str() };
+        if !name.is_empty() {
+            let _ = write!(w, " userName=\"{}\"", esc_attr(name));
         }
         match &r.password {
-            // Office needs a userName beside a legacy reservationPassword; without one the hash is left out.
-            Some(gridcraft_model::PasswordHash::Legacy(h)) if !r.user_name.is_empty() => {
+            Some(gridcraft_model::PasswordHash::Legacy(h)) => {
                 let _ = write!(w, " reservationPassword=\"{h:04X}\"");
             }
-            Some(gridcraft_model::PasswordHash::Legacy(_)) => {}
             Some(h) => w.push_str(&crate::sheet_write::password_attrs(h, "")),
             None => {}
         }

@@ -1498,7 +1498,9 @@ fn legacy_reservation_password_is_written_with_a_user_name() {
     wb.write_reservation =
         Some(WriteReservation { user_name: String::new(), read_only_recommended: false, password: Some(PasswordHash::Legacy(0x83AF)) });
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
-    assert!(back.write_reservation.is_some_and(|r| r.password.is_none()), "no userName, so no reservationPassword");
+    let r = back.write_reservation.expect("the reservation survived");
+    assert_eq!(r.password, Some(PasswordHash::Legacy(0x83AF)), "a nameless legacy password is kept, under a placeholder name");
+    assert!(!r.user_name.is_empty());
     wb.write_reservation.as_mut().unwrap().user_name = "Ann".into();
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.write_reservation.and_then(|r| r.password), Some(PasswordHash::Legacy(0x83AF)));
