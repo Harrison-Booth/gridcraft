@@ -40,3 +40,31 @@ fn whole_column_outside_borders_apply_to_the_column_and_its_ends() {
     let bottom = border(sh.style_id(gridcraft_core::CellRef::new(1_048_575, 2)));
     assert!(bottom.bottom.style != Default::default() && bottom.right.style != Default::default());
 }
+
+fn border_of(s: &Session, a1: &str) -> gridcraft_model::Borders {
+    let wb = &s.doc().unwrap().wb;
+    wb.styles.get(wb.active().unwrap().style_id(gridcraft_core::CellRef::parse(a1).unwrap())).borders
+}
+
+#[test]
+fn whole_column_none_clears_the_facing_edge_of_a_neighbour_the_line_never_visits() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("home.borders", json!({"preset": "right", "range": "A500"})).unwrap();
+    assert!(border_of(&s, "A500").right.style != Default::default());
+    s.execute("home.borders", json!({"preset": "none", "range": "B:B"})).unwrap();
+    assert!(border_of(&s, "A500").right.style == Default::default());
+}
+
+#[test]
+fn whole_column_borders_reach_blank_cells_of_styled_rows_and_leave_inner_ends_alone() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("home.borders", json!({"preset": "bottom", "range": "5:5"})).unwrap();
+    s.execute("home.borders", json!({"preset": "outside", "range": "B:B"})).unwrap();
+    let b5 = border_of(&s, "B5");
+    assert!(b5.left.style != Default::default() && b5.right.style != Default::default() && b5.bottom.style != Default::default());
+    // A blank end cell takes only its own edges, not the column's outer ones twice over.
+    let b2 = border_of(&s, "B2");
+    assert!(b2.top.style == Default::default() && b2.left.style != Default::default());
+}
