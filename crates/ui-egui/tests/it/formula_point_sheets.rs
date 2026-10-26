@@ -31,6 +31,14 @@ fn press(h: &mut Harness, k: Key, m: Modifiers) {
     h.run_steps(2);
 }
 
+/// A key pressed with Shift held, as the OS reports it: the modifier changes first.
+fn press_shift(h: &mut Harness, k: Key) {
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
+    press(h, k, Modifiers::SHIFT);
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(1);
+}
+
 fn text(h: &Harness) -> String {
     h.state().editor.as_ref().map(|e| e.text.clone()).unwrap_or_default()
 }
@@ -102,9 +110,9 @@ fn on_the_last_sheet_ctrl_page_down_keeps_the_pointing_where_it_was() {
 fn shift_arrow_after_a_sheet_switch_starts_the_range_at_the_selected_cell() {
     let mut h = pointing("=");
     press(&mut h, Key::ArrowRight, Modifiers::NONE);
-    press(&mut h, Key::ArrowRight, Modifiers::SHIFT);
+    press_shift(&mut h, Key::ArrowRight);
     assert_eq!(text(&h), "=C2:D2");
     press(&mut h, Key::PageDown, CTRL);
-    press(&mut h, Key::ArrowDown, Modifiers::SHIFT);
+    press_shift(&mut h, Key::ArrowDown);
     assert_eq!(text(&h), format!("={}!A1:A2", second_name(&h)));
 }
