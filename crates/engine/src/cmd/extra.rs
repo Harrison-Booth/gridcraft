@@ -423,6 +423,14 @@ fn add_error_bars(c: &mut Chart, p: &Json, on: bool) -> Result<()> {
 /// Longest reference or array text accepted for custom error amounts.
 const MAX_ERROR_REF: usize = 8192;
 
+/// A text option of `chart.addElement` errorBars: `default` when absent or null, an error when present and not text.
+fn word<'a>(p: &'a Json, k: &str, default: &'static str) -> Result<&'a str> {
+    match p.get(k).filter(|v| !v.is_null()) {
+        None => Ok(default),
+        Some(v) => v.as_str().ok_or_else(|| bad("chart.addElement", format!("`{k}` must be text"))),
+    }
+}
+
 /// The error bars described by `chart.addElement`'s errorBars parameters. Defaults follow
 /// Excel's menu: Standard Error; Percentage is 5%, Standard Deviation 1, Fixed Value 1.
 fn error_bars_param(p: &Json) -> Result<ErrorBars> {
@@ -437,7 +445,7 @@ fn error_bars_param(p: &Json) -> Result<ErrorBars> {
                 .ok_or_else(|| bad("chart.addElement", "`value` must be a finite number that is not negative")),
         }
     };
-    let amount = match str_param(p, "type").unwrap_or("standardError") {
+    let amount = match word(p, "type", "standardError")? {
         "standardError" => ErrorAmount::StdErr,
         "percentage" => ErrorAmount::Percentage(value(5.0)?),
         "standardDeviation" => ErrorAmount::StdDev(value(1.0)?),
@@ -466,18 +474,18 @@ fn error_bars_param(p: &Json) -> Result<ErrorBars> {
         }
         other => return Err(bad("chart.addElement", format!("unknown error bar type `{other}`"))),
     };
-    let direction = match str_param(p, "direction").unwrap_or("y") {
+    let direction = match word(p, "direction", "y")? {
         "y" => ErrorBarDirection::Y,
         "x" => ErrorBarDirection::X,
         other => return Err(bad("chart.addElement", format!("unknown error bar direction `{other}`"))),
     };
-    let sides = match str_param(p, "display").unwrap_or("both") {
+    let sides = match word(p, "display", "both")? {
         "both" => ErrorBarSides::Both,
         "plus" => ErrorBarSides::Plus,
         "minus" => ErrorBarSides::Minus,
         other => return Err(bad("chart.addElement", format!("unknown error bar display `{other}`"))),
     };
-    let no_end_cap = match str_param(p, "endStyle").unwrap_or("cap") {
+    let no_end_cap = match word(p, "endStyle", "cap")? {
         "cap" => false,
         "noCap" => true,
         other => return Err(bad("chart.addElement", format!("unknown error bar end style `{other}`"))),

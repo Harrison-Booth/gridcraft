@@ -1646,7 +1646,14 @@ fn rebind_charts(wb: &mut Workbook, sheet: &str, pivot: &str, origin: CellRef, o
     for i in hits {
         let Some(sh) = wb.sheet_mut(i) else { continue };
         for ch in sh.charts.iter_mut().filter(|c| linked(c)) {
+            // Error bars stay with the series of the same name.
+            let old = std::mem::take(&mut ch.series);
             ch.series = series.clone();
+            for s in &mut ch.series {
+                if let Some(o) = old.iter().find(|o| o.name == s.name) {
+                    s.error_bars = o.error_bars.clone();
+                }
+            }
         }
     }
 }

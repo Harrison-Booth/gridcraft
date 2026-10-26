@@ -330,3 +330,13 @@ fn a_chart_draws_a_bounded_number_of_error_bars() {
     let n = lines(&draw(ChartKind::Line, &d), EB).len();
     assert!(n > 0 && n <= 60_000, "{n}");
 }
+
+#[test]
+fn bubbles_past_the_marker_cap_have_no_error_bars() {
+    let n = 6000;
+    let mut s = series(&vec![1.0; n], [9, 9, 9, 255], ChartKind::Bubble, vec![bars(ErrorAmount::Fixed(0.5))]);
+    s.x = Some(vals(&(0..n).map(|i| i as f64).collect::<Vec<_>>()));
+    let eb = lines(&draw(ChartKind::Bubble, &data(vec![s])), EB);
+    // Only the first 5000 bubbles are drawn, so only they carry a bar (one vertical stem each).
+    assert_eq!(eb.iter().filter(|l| vertical(l)).count(), 5000);
+}

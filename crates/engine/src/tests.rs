@@ -3185,6 +3185,10 @@ fn chart_error_bars_are_added_replaced_saved_and_removed() {
         json!({"color": 7}),
         json!({"width": -1}),
         json!({"width": "wide"}),
+        json!({"type": 7}),
+        json!({"direction": true}),
+        json!({"display": 1}),
+        json!({"endStyle": []}),
     ] {
         let mut p = json!({"element": "errorBars"});
         p.as_object_mut().unwrap().extend(case.as_object().unwrap().clone());

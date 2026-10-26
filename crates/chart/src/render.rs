@@ -1351,10 +1351,21 @@ fn scatter(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
         .iter()
         .zip(&all)
         .map(|(s, pts)| {
-            // A bubble that is not drawn (no or non-positive size) carries no error bar either.
-            let shown = |j: usize| !bubble_chart || bubble_size(s, j).is_some();
-            let xs: Vec<Option<f64>> = pts.iter().enumerate().map(|(j, p)| p.filter(|_| shown(j)).map(|p| p.0)).collect();
-            let ys: Vec<Option<f64>> = pts.iter().enumerate().map(|(j, p)| p.filter(|_| shown(j)).map(|p| p.1)).collect();
+            // A bubble that is not drawn (no or non-positive size, or past the marker cap) carries no error bar either.
+            let mut room = MAX_MARKERS;
+            let shown: Vec<bool> = pts
+                .iter()
+                .enumerate()
+                .map(|(j, p)| {
+                    let drawn = !bubble_chart || (p.is_some() && bubble_size(s, j).is_some() && room > 0);
+                    if bubble_chart && drawn {
+                        room -= 1;
+                    }
+                    drawn
+                })
+                .collect();
+            let xs: Vec<Option<f64>> = pts.iter().zip(&shown).map(|(p, on)| p.filter(|_| *on).map(|p| p.0)).collect();
+            let ys: Vec<Option<f64>> = pts.iter().zip(&shown).map(|(p, on)| p.filter(|_| *on).map(|p| p.1)).collect();
             let mut seen = Vec::new();
             s.error_bars
                 .iter()

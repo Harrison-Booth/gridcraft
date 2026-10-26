@@ -260,3 +260,13 @@ fn sparse_literal_points_keep_their_index_through_read_and_save() {
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert_eq!(back.sheets[0].charts[0].series[0].error_bars, s.error_bars);
 }
+
+#[test]
+fn a_theme_coloured_bar_line_keeps_its_scheme_name() {
+    let e = ErrorBars { color: Some(Color::Theme(4, 0)), ..ErrorBars::default() };
+    let wb = workbook(vec![chart(1, ChartKind::Line, vec![e.clone()])]);
+    let bytes = write_xlsx(&wb).unwrap();
+    assert!(chart_parts(&bytes)[0].contains(r#"<a:schemeClr val="accent1"/>"#));
+    let (back, _) = read_xlsx(&bytes).unwrap();
+    assert_eq!(back.sheets[0].charts[0].series[0].error_bars, vec![e]);
+}

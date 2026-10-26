@@ -709,9 +709,16 @@ fn trendline_xml(t: &Trendline, wb: &Workbook) -> String {
     x
 }
 
+/// DrawingML scheme colour names by `Color::Theme` index.
+const SCHEME_NAMES: [&str; 12] = ["bg1", "tx1", "bg2", "tx2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"];
+
 /// `<c:spPr><a:ln>` with the given colour, width and dash; empty when all are automatic.
 fn ln_xml(color: Option<&Color>, width: Option<f32>, dash: Option<LineDash>, wb: &Workbook) -> String {
-    let color = color.and_then(|c| srgb(c, &wb.theme));
+    // A plain theme colour keeps its scheme name, so a later theme change still reaches the line.
+    let color = color.and_then(|c| match c {
+        Color::Theme(i, 0) => SCHEME_NAMES.get(usize::from(*i)).map(|n| format!("<a:schemeClr val=\"{n}\"/>")),
+        _ => srgb(c, &wb.theme),
+    });
     if color.is_none() && width.is_none() && dash.is_none() {
         return String::new();
     }
