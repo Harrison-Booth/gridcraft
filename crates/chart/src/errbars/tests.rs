@@ -265,6 +265,7 @@ fn stacked_bars_start_at_the_stack_top() {
     assert!(((st[0].1 + st[0].2) / 2.0 - top).abs() < 0.01);
     // 100% stacked charts draw none (their values are shares, not data units).
     assert!(lines(&draw(ChartKind::ColumnStacked100, &d), EB).is_empty());
+    assert!(lines(&draw(ChartKind::AreaStacked100, &d), EB).is_empty());
 }
 
 #[test]
