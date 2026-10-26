@@ -103,7 +103,9 @@ fn facts(app: &SheetApp) -> Facts {
     compose(app.services.graphics.as_deref(), app.ui.language.code(), app.pixels_per_point, doc.is_some(), doc.and_then(|d| d.path.as_deref()))
 }
 
-/// The issue form's address, with the facts as its four prefilled fields.
+/// The issue form's address, with the facts as its four prefilled fields. A trailing `body` carries
+/// the same details as plain text: GitHub ignores it when the form template exists and uses it to
+/// prefill a blank issue while the template isn't on the repository yet, so no detail is lost.
 fn url(facts: &Facts) -> String {
     let mut url = format!("{NEW_ISSUE}?template={TEMPLATE}");
     for (field, value) in
@@ -111,6 +113,7 @@ fn url(facts: &Facts) -> String {
     {
         let _ = write!(url, "&{field}={}", encode(value));
     }
+    let _ = write!(url, "&body={}", encode(&details_text(facts)));
     url
 }
 
@@ -173,10 +176,10 @@ mod tests {
     }
 
     #[test]
-    fn the_address_is_the_new_issue_form_with_five_parameters() {
+    fn the_address_is_the_new_issue_form_with_six_parameters() {
         let url = url(&compose(Some("Test GPU (Vulkan, DiscreteGpu)"), "de", 1.25, true, Some("book.xlsx")));
         assert!(url.starts_with(&format!("{NEW_ISSUE}?template=bug_report.yml&")), "{url}");
-        assert_eq!(names(&url), ["template", "version", "os", "system-info", "document-info"]);
+        assert_eq!(names(&url), ["template", "version", "os", "system-info", "document-info", "body"]);
         assert!(url.contains("version=GridCraft%20"), "{url}");
         assert!(url.contains("document-info=Document%20type%3A%20xlsx"), "{url}");
     }
@@ -186,7 +189,7 @@ mod tests {
         let hostile = "A&b=c?d#e%f\ng ü 日本語 \u{1F600}";
         let facts = compose(Some(hostile), hostile, 1.0, true, None);
         let url = url(&facts);
-        assert_eq!(names(&url), ["template", "version", "os", "system-info", "document-info"], "{url}");
+        assert_eq!(names(&url), ["template", "version", "os", "system-info", "document-info", "body"], "{url}");
         assert!(url.is_ascii(), "{url}");
         assert!(!url.contains('#') && !url.contains(' ') && !url.contains('\n'), "{url}");
         assert_eq!(url.matches('?').count(), 1, "{url}");

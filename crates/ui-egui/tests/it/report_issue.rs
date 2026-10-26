@@ -57,7 +57,7 @@ fn names(url: &str) -> Vec<&str> {
 
 fn assert_prefilled(url: &str) {
     assert!(url.starts_with(FORM), "{url}");
-    assert_eq!(names(url), ["template", "version", "os", "system-info", "document-info"], "{url}");
+    assert_eq!(names(url), ["template", "version", "os", "system-info", "document-info", "body"], "{url}");
     assert!(url.contains("Graphics%3A%20Test%20GPU%20%28Vulkan%2C%20DiscreteGpu%29"), "the host's adapter is in the system information: {url}");
     assert!(url.contains("Interface%20language%3A%20en"), "{url}");
     assert!(url.len() < 2048, "{} bytes", url.len());
