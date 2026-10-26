@@ -14,8 +14,8 @@ Files saved:
 Each file is opened read-only with CorruptLoad = xlNormalLoad (0), so a part Excel would repair is a
 failure instead of a silent fix, with DisplayAlerts off and macros disabled so nothing waits on a prompt.
 Excel is a fresh instance per file; a file that hangs or kills Excel is recorded as TIMEOUT or CRASH and
-Excel started by this script is stopped. Nothing is written next to the inputs; Excel processes that were
-already running are never touched. Exit code 1 when any saved file is not PASS.
+that instance (found by its window's process id) is stopped. Nothing is written next to the inputs; any other
+Excel, such as one the person starts meanwhile, is never touched. Exit code 1 when any saved file is not PASS.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Cli,
@@ -26,12 +26,6 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-# Excel processes already running are the person's own work: only ones started after this point are ever killed.
-$before = @(Get-Process EXCEL -ErrorAction SilentlyContinue | ForEach-Object Id)
-function Stop-Excel {
-    Get-Process EXCEL -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id } | Stop-Process -Force -ErrorAction SilentlyContinue
-}
-
 # Runs in a child PowerShell so a hang can be killed after $TimeoutSec without taking this script with it.
 $probe = {
     param($path)
@@ -39,6 +33,11 @@ $probe = {
     try {
         $x = New-Object -ComObject Excel.Application
         $x.Visible = $false
+        # Report this instance's process id so the caller can stop exactly it and nothing else.
+        Add-Type -Namespace Win -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);'
+        $xlPid = [uint32]0
+        [void][Win.U]::GetWindowThreadProcessId([IntPtr]$x.Hwnd, [ref]$xlPid)
+        "PID`t$xlPid"
         $x.DisplayAlerts = $false
         $x.AutomationSecurity = 3 # msoAutomationSecurityForceDisable: never run macros
         # Named arguments: PowerShell can't skip the optional ones in between positionally.
@@ -57,18 +56,18 @@ $probe = {
 function Test-InExcel([string]$path) {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $job = Start-Job -ScriptBlock $probe -ArgumentList $path
-    if (Wait-Job $job -Timeout $TimeoutSec) {
-        $out = (Receive-Job $job) -join ' '
-        if (-not $out) { $out = "CRASH`tno result (Excel died)" }
-    } else {
-        Stop-Job $job
-        $out = "TIMEOUT`tno answer in $TimeoutSec s"
-    }
+    $done = Wait-Job $job -Timeout $TimeoutSec
+    $lines = @(Receive-Job $job -Keep)
+    if (-not $done) { Stop-Job $job }
     Remove-Job $job -Force
-    # Next file only once this Excel has exited, else its first call can get RPC_E_SERVERCALL_RETRYLATER.
-    $deadline = (Get-Date).AddSeconds(15)
-    while ((Get-Date) -lt $deadline -and @(Get-Process EXCEL -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id }).Count) { Start-Sleep -Milliseconds 200 }
-    Stop-Excel
+    $xlPid = ($lines | Where-Object { $_ -like "PID`t*" } | Select-Object -First 1) -replace '^PID\t', ''
+    $out = $lines | Where-Object { $_ -notlike "PID`t*" } | Select-Object -Last 1
+    if (-not $done) { $out = "TIMEOUT`tno answer in $TimeoutSec s" } elseif (-not $out) { $out = "CRASH`tno result (Excel died)" }
+    if ($xlPid) {
+        # A clean Quit lets Excel exit by itself; give it a moment, then stop only this instance.
+        Wait-Process -Id ([int]$xlPid) -Timeout 15 -ErrorAction SilentlyContinue
+        Stop-Process -Id ([int]$xlPid) -Force -ErrorAction SilentlyContinue
+    }
     $state, $detail = $out -split "`t", 2
     [pscustomobject]@{ State = $state; Seconds = [math]::Round($clock.Elapsed.TotalSeconds, 1); Detail = $detail }
 }
