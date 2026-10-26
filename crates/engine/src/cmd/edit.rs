@@ -1384,6 +1384,10 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             cx.structural = true;
         }
         let end = at.offset_clamped((tiles_r * h) as i64 - 1, (tiles_c * w) as i64 - 1);
+        if cut_move && let Some(sh) = cx.wb.sheet_mut(dest_sheet) {
+            // A structural commit skips the ignored-error cleanup, so the overwritten cells drop theirs here.
+            gridcraft_model::unignore_errors(&mut sh.ignored_errors, RangeRef::new(at, end), gridcraft_model::error_rule::ALL);
+        }
         *cx.sel = crate::Selection { active: at, anchor: at, ranges: vec![RangeRef::new(at, end)] };
         Ok(())
     })?;

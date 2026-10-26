@@ -401,11 +401,7 @@ fn forget_ignored_errors(old: &Workbook, new: &mut Workbook, changed: &[Key]) {
     for (si, c) in changed {
         let before = old.sheet(*si).and_then(|s| s.cell(*c));
         let after = new.sheet(*si).and_then(|s| s.cell(*c));
-        let same = match (before, after) {
-            (Some(a), Some(b)) => a.value == b.value && a.formula.as_ref().map(|f| &f.text) == b.formula.as_ref().map(|f| &f.text),
-            (None, None) => true,
-            _ => false,
-        };
+        let same = same_content(before, after);
         if !same && let Some(sh) = new.sheet_mut(*si) {
             gridcraft_model::unignore_errors(&mut sh.ignored_errors, RangeRef::cell(*c), gridcraft_model::error_rule::ALL);
         }

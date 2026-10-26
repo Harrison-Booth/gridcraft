@@ -4754,6 +4754,31 @@ fn ignore_error_is_per_cell_and_rule_and_forgotten_on_edit() {
     assert_eq!(ignored(&mut s), json!([]));
 }
 
+/// Structural commits skip the generic cleanup, so a renamed name and a cut-paste forget ignored
+/// rules themselves; a format-only edit of an empty cell keeps them.
+#[test]
+fn ignore_error_survives_format_only_edits_and_clears_on_structural_rewrites() {
+    let mut s = s();
+    let ignored = |s: &mut Session| s.execute("formulas.ignoredErrors", json!({})).unwrap();
+    s.execute("formulas.defineName", json!({"name": "Rate", "refersTo": "=0.2"})).unwrap();
+    s.execute("cell.set", json!({"cell": "A1", "input": "=Rate"})).unwrap();
+    s.execute("cell.set", json!({"cell": "B1", "input": "'5"})).unwrap();
+    s.execute("cell.set", json!({"cell": "C1", "input": "'6"})).unwrap();
+    s.execute("formulas.ignoreError", json!({"range": "A1:C1"})).unwrap();
+    s.execute("home.bold", json!({"range": "D1", "on": true})).unwrap();
+    s.execute("formulas.ignoreError", json!({"range": "D1"})).unwrap();
+    s.execute("home.bold", json!({"range": "D1", "on": false})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A1:D1"]));
+    // Renaming the name rewrites A1's formula: A1 stops ignoring.
+    s.execute("formulas.defineName", json!({"name": "Tax", "refersTo": "=0.2", "oldName": "Rate"})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["B1:D1"]));
+    // Cutting B1 onto C1 overwrites C1: its record goes.
+    s.execute("edit.cut", json!({"range": "B1"})).unwrap();
+    s.execute("selection.set", json!({"range": "C1"})).unwrap();
+    s.execute("edit.paste", json!({})).unwrap();
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["B1", "D1"]));
+}
+
 #[test]
 fn saving_csv_keeps_leading_empty_columns_and_rows() {
     let wb = gridcraft_xlsx::read_csv(b",x\r\n\r\n,,y\r\n", &gridcraft_xlsx::CsvOptions::default()).unwrap();

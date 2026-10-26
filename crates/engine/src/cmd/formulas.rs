@@ -459,6 +459,8 @@ fn rename_name_in_formulas(wb: &mut gridcraft_model::Workbook, old: &str, old_sc
             if let Some(cell) = sh.cells.get_mut(c) {
                 cell.formula = Some(std::sync::Arc::new(nf));
             }
+            // A structural commit skips the ignored-error cleanup, so the rewritten cell drops its rules here.
+            gridcraft_model::unignore_errors(&mut sh.ignored_errors, RangeRef::cell(c), gridcraft_model::error_rule::ALL);
         }
     }
     for n in wb.names.iter_mut() {
