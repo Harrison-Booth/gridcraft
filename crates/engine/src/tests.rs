@@ -5173,11 +5173,11 @@ fn align_on_false_clears_only_the_active_alignment() {
     s.new_workbook();
     let h = |s: &mut Session| s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["align"]["h"].clone();
     s.execute("home.alignLeft", json!({"range": "A1", "on": true})).unwrap();
-    assert_eq!(h(&mut s), json!("left"));
+    assert_eq!(h(&mut s), json!("Left"));
     s.execute("home.alignRight", json!({"range": "A1", "on": false})).unwrap();
-    assert_eq!(h(&mut s), json!("left"));
+    assert_eq!(h(&mut s), json!("Left"));
     s.execute("home.alignLeft", json!({"range": "A1", "on": false})).unwrap();
-    assert_ne!(h(&mut s), json!("left"));
+    assert_ne!(h(&mut s), json!("Left"));
 }
 
 #[test]
