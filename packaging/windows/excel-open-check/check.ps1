@@ -85,13 +85,13 @@ function Test-InExcel([string]$path) {
 }
 
 $saved = Join-Path $Out 'saved'
-Remove-Item $saved -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $saved -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $saved -Force | Out-Null
 
 # (name, original or $null, saved) per file
 $work = @()
 if ($Inputs) {
-    foreach ($f in Get-ChildItem -Path $Inputs -File | Where-Object { $_.Extension -in '.xlsx', '.xlsm' } | Sort-Object Name) {
+    foreach ($f in Get-ChildItem -LiteralPath $Inputs -File | Where-Object { $_.Extension -in '.xlsx', '.xlsm' } | Sort-Object Name) {
         $work += , @($f.Name, $f.FullName, (Join-Path $saved $f.Name), @('run', '--in', $f.FullName, '--quiet'))
     }
 }
@@ -103,13 +103,13 @@ $rows = @()
 foreach ($w in $work) {
     $name, $orig, $dest, $cliArgs = $w
     # The CLI reports on stderr, which Stop would turn into an exception.
-    Remove-Item $dest -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
     $ErrorActionPreference = 'Continue'
     & $Cli @cliArgs --out $dest *> $null
     $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $base = if ($orig) { (Test-InExcel $orig) } else { $null }
-    $r = if ($code -eq 0 -and (Test-Path $dest)) { Test-InExcel $dest } else { [pscustomobject]@{ State = 'SAVE-FAIL'; Seconds = 0; Detail = "gridcraft-cli exit code $code" } }
+    $r = if ($code -eq 0 -and (Test-Path -LiteralPath $dest)) { Test-InExcel $dest } else { [pscustomobject]@{ State = 'SAVE-FAIL'; Seconds = 0; Detail = "gridcraft-cli exit code $code" } }
     $rows += [pscustomobject]@{
         File = $name; Original = if ($base) { $base.State } else { '-' }; Saved = $r.State
         Seconds = $r.Seconds; Detail = $r.Detail
