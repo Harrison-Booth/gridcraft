@@ -5,7 +5,8 @@
 //!
 //! Each document gets `<process id>-<document uid>.xlsx` plus a `.json` note with its title and
 //! original path. A clean exit, a save or closing the document deletes them; whatever is left
-//! belongs to a process that died, and [`scan`] finds it for the next start to reopen.
+//! belongs to a process that died (each live one holds a lock file), and [`scan`] finds it for the
+//! next start to reopen.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -38,6 +39,7 @@ impl RecoverJob {
     /// at any point leaves the previous copy or the new one, never a half-written file.
     pub fn run(&self, dir: &Path) -> Result<usize> {
         std::fs::create_dir_all(dir).map_err(io_err)?;
+        hold_lock(dir);
         let base = stem(dir, std::process::id(), self.uid);
         let note = json!({"title": self.title, "path": self.path});
         let note_path = base.with_extension("json");
@@ -73,25 +75,63 @@ impl Recoverable {
     }
 }
 
-/// Whether the process that wrote `pid-…` still runs. Only Linux can tell cheaply without
-/// `unsafe`; elsewhere every copy counts as left behind.
-// shortcut: two GridCraft windows as separate processes on macOS/Windows can reopen each
-// other's live copies; upgrade to a lock file per process if that is reported.
-fn alive(pid: u32) -> bool {
-    pid == std::process::id() || (cfg!(target_os = "linux") && Path::new(&format!("/proc/{pid}")).exists())
+/// Taken for as long as the process runs, so [`scan`] can tell a live writer from a dead one on
+/// every platform: the system drops the lock when the process ends, however it ends.
+static LOCK: std::sync::OnceLock<Option<std::fs::File>> = std::sync::OnceLock::new();
+
+fn lock_path(dir: &Path, pid: u32) -> PathBuf {
+    dir.join(format!("{pid}.lock"))
+}
+
+fn hold_lock(dir: &Path) {
+    LOCK.get_or_init(|| {
+        let f = std::fs::OpenOptions::new().write(true).create(true).truncate(false).open(lock_path(dir, std::process::id())).ok()?;
+        f.try_lock().ok()?;
+        Some(f)
+    });
+}
+
+/// Whether the process that wrote `pid-…` still runs: it holds its lock file.
+fn alive(dir: &Path, pid: u32) -> bool {
+    if pid == std::process::id() {
+        return true;
+    }
+    let Ok(f) = std::fs::File::open(lock_path(dir, pid)) else { return false };
+    match f.try_lock_shared() {
+        Err(std::fs::TryLockError::WouldBlock) => true,
+        // Lockable: nobody holds it. (A lock the filesystem can't give counts as dead.)
+        _ => {
+            let _ = std::fs::remove_file(lock_path(dir, pid));
+            false
+        }
+    }
 }
 
 /// The recovery copies in `dir` whose process is gone, oldest first. Temporary files of a write
 /// that a kill cut short are deleted.
 pub fn scan(dir: &Path) -> Vec<Recoverable> {
-    let Ok(entries) = std::fs::read_dir(dir) else { return vec![] };
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return vec![],
+        Err(e) => {
+            log::warn!("AutoRecover could not read {}: {e}", dir.display());
+            return vec![];
+        }
+    };
     let mut found = vec![];
-    for e in entries.flatten() {
+    for e in entries {
+        let e = match e {
+            Ok(e) => e,
+            Err(e) => {
+                log::warn!("AutoRecover skipped a recovery file: {e}");
+                continue;
+            }
+        };
         let p = e.path();
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some((pid, _)) = name.split_once('-') else { continue };
+        let Some((pid, _)) = name.split_once(['-', '.']) else { continue };
         let Ok(pid) = pid.parse::<u32>() else { continue };
-        if alive(pid) {
+        if alive(dir, pid) {
             continue;
         }
         if name.ends_with(".sctmp") {
@@ -121,7 +161,7 @@ impl Session {
     /// caller first). The recovered copy of a document that has a file is titled after it.
     pub fn recover_jobs(&self) -> Vec<RecoverJob> {
         let dirty = self.docs.iter().filter(|d| d.is_dirty());
-        dirty.map(|d| RecoverJob { uid: d.uid, wb: d.wb.clone(), title: d.title.clone(), path: d.path.clone() }).collect()
+        dirty.map(|d| RecoverJob { uid: d.uid, wb: d.wb.clone(), title: d.display_title(), path: d.path.clone() }).collect()
     }
 
     /// Opens a recovery copy as a new workbook with no file (Save asks where to put it) that
@@ -149,9 +189,13 @@ mod tests {
         dir
     }
 
+    fn copies(dir: &Path) -> usize {
+        std::fs::read_dir(dir).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x != "lock")).count()
+    }
+
     /// Pretends this process died: its files are renamed to a process id that isn't running.
     fn orphan(dir: &Path) {
-        for e in std::fs::read_dir(dir).unwrap().flatten() {
+        for e in std::fs::read_dir(dir).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x != "lock")) {
             let n = e.file_name().to_string_lossy().replacen(&std::process::id().to_string(), "4000000000", 1);
             std::fs::rename(e.path(), dir.join(n)).unwrap();
         }
@@ -192,7 +236,7 @@ mod tests {
         let job = s.recover_jobs().remove(0);
         job.run(&dir).unwrap();
         discard(&dir, job.uid);
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        assert_eq!(copies(&dir), 0);
         // A kill between the note and the workbook, and one inside the temporary file.
         job.run(&dir).unwrap();
         orphan(&dir);
@@ -202,7 +246,7 @@ mod tests {
             }
         }
         assert!(scan(&dir).is_empty());
-        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0, "the half-written leftovers are cleaned up");
+        assert_eq!(copies(&dir), 0, "the half-written leftovers are cleaned up");
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

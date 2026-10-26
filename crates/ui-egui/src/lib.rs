@@ -1830,8 +1830,8 @@ impl SheetApp {
         }
         // After the poll: a finished save may have reset the failure count.
         let gate = GATE_MS * f64::from(1u32 << self.autosave_failures.min(5));
-        let pending =
-            self.ui.autosave && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.ends_with(".xlsx")));
+        let pending = self.ui.autosave
+            && self.session.active().is_some_and(|d| d.is_dirty() && d.path.as_deref().is_some_and(|p| p.to_ascii_lowercase().ends_with(".xlsx")));
         if !pending {
             return;
         }

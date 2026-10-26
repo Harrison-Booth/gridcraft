@@ -659,7 +659,8 @@ pub fn write_file(path: &str, bytes: &[u8]) -> Result<()> {
     if let Some(p) = &prior {
         let _ = f.set_permissions(p.clone());
     }
-    f.write_all(bytes).and_then(|()| f.flush()).map_err(|e| {
+    // Synced before the rename, so a power cut never leaves a renamed file with no content.
+    f.write_all(bytes).and_then(|()| f.flush()).and_then(|()| f.sync_all()).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         EngineError::Other(format!("{path}: {e}"))
     })?;

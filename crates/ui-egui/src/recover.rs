@@ -103,7 +103,7 @@ impl Recovery {
         let mut reopened = vec![];
         for r in recover::scan(&dir) {
             match session.open_recovered(&r) {
-                Ok(_) => reopened.push(r),
+                Ok(i) => reopened.extend(session.documents().get(i).map(|d| (d.uid, r))),
                 Err(e) => log::warn!("AutoRecover could not reopen {}: {e}", r.title),
             }
         }
@@ -112,8 +112,11 @@ impl Recovery {
                 self.written.insert(j.uid, j.wb);
             }
         }
-        if self.written.len() >= reopened.len() {
-            reopened.iter().for_each(recover::Recoverable::remove);
+        // An old copy goes only once its replacement is on disk.
+        for (uid, r) in &reopened {
+            if self.written.contains_key(uid) {
+                r.remove();
+            }
         }
         reopened.len()
     }
@@ -140,7 +143,7 @@ mod tests {
     }
 
     fn files(dir: &std::path::Path) -> usize {
-        std::fs::read_dir(dir).map(|d| d.count()).unwrap_or(0)
+        std::fs::read_dir(dir).map(|d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x != "lock")).count()).unwrap_or(0)
     }
 
     #[test]
@@ -196,7 +199,7 @@ mod tests {
                 }
             }
             // Kill: no `finish`. Make the files look like they belong to a dead process.
-            for e in std::fs::read_dir(&dir).unwrap().flatten() {
+            for e in std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.path().extension().is_some_and(|x| x != "lock")) {
                 let n = e.file_name().to_string_lossy().replacen(&std::process::id().to_string(), "4000000000", 1);
                 std::fs::rename(e.path(), dir.join(n)).unwrap();
             }
