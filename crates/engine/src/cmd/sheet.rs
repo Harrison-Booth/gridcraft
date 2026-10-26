@@ -175,10 +175,19 @@ pub(crate) fn refit_objects(before: &Workbook, after: &mut Arc<Workbook>) {
         if same_grid || old.name != new.name {
             continue;
         }
-        let fit = |was: Option<&Anchor>, now: &Anchor| was.map_or(*now, |was| refit_anchor(old, new, was, now));
-        let charts: Vec<Anchor> = new.charts.iter().map(|n| fit(old.charts.iter().find(|o| o.id == n.id).map(|o| &o.anchor), &n.anchor)).collect();
-        let images: Vec<Anchor> = new.images.iter().map(|n| fit(old.images.iter().find(|o| o.id == n.id).map(|o| &o.anchor), &n.anchor)).collect();
-        let shapes: Vec<Anchor> = new.shapes.iter().map(|n| fit(old.shapes.iter().find(|o| o.id == n.id).map(|o| &o.anchor), &n.anchor)).collect();
+        // Prior anchors by object id, so a sheet of many objects is matched in one pass.
+        let was = |anchors: Vec<(u32, &Anchor)>| anchors.into_iter().collect::<std::collections::HashMap<u32, &Anchor>>();
+        let (old_charts, old_images, old_shapes) = (
+            was(old.charts.iter().map(|o| (o.id, &o.anchor)).collect()),
+            was(old.images.iter().map(|o| (o.id, &o.anchor)).collect()),
+            was(old.shapes.iter().map(|o| (o.id, &o.anchor)).collect()),
+        );
+        let fit = |olds: &std::collections::HashMap<u32, &Anchor>, id: u32, now: &Anchor| {
+            olds.get(&id).map_or(*now, |was| refit_anchor(old, new, was, now))
+        };
+        let charts: Vec<Anchor> = new.charts.iter().map(|n| fit(&old_charts, n.id, &n.anchor)).collect();
+        let images: Vec<Anchor> = new.images.iter().map(|n| fit(&old_images, n.id, &n.anchor)).collect();
+        let shapes: Vec<Anchor> = new.shapes.iter().map(|n| fit(&old_shapes, n.id, &n.anchor)).collect();
         let unchanged = new.charts.iter().map(|o| &o.anchor).eq(charts.iter())
             && new.images.iter().map(|o| &o.anchor).eq(images.iter())
             && new.shapes.iter().map(|o| &o.anchor).eq(shapes.iter());

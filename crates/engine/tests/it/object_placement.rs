@@ -28,6 +28,7 @@ struct Fixture {
 
 const MODES: [AnchorMode; 3] = [AnchorMode::MoveAndSize, AnchorMode::MoveOnly, AnchorMode::Absolute];
 
+/// The `mode` parameter value for a placement.
 fn mode_name(m: AnchorMode) -> &'static str {
     match m {
         AnchorMode::MoveAndSize => "moveAndSize",
@@ -36,6 +37,7 @@ fn mode_name(m: AnchorMode) -> &'static str {
     }
 }
 
+/// A sheet with Excel's measured row and column sizes and the nine objects.
 fn fixture() -> Fixture {
     let mut s = Session::new();
     s.new_workbook();
@@ -99,15 +101,18 @@ impl Fixture {
 
 const HOME: [f64; 4] = [99.0, 61.6, 144.0, 57.6];
 
+/// Runs a row command on `rows`.
 fn rows(s: &mut Session, id: &str, rows: &str) {
     s.execute(id, json!({"rows": rows})).unwrap();
 }
 
+/// Runs a column command on `cols`.
 fn cols(s: &mut Session, id: &str, cols: &str) {
     s.execute(id, json!({"cols": cols})).unwrap();
 }
 
 #[test]
+/// Row resize above inside and below.
 fn row_resize_above_inside_and_below() {
     let height = |s: &mut Session, r: &str, pt: f64| s.execute("home.rowHeight", json!({"rows": r, "points": pt})).unwrap();
     // Row 2 to 60 pt: everything but "don't move or size" slides down by 45.6 pt.
@@ -123,6 +128,7 @@ fn row_resize_above_inside_and_below() {
 }
 
 #[test]
+/// Column resize left inside and right.
 fn column_resize_left_inside_and_right() {
     // 221.6 px is 166.2 pt, Excel's width for 30 characters on the machine it was measured on.
     let width = |s: &mut Session, c: &str| s.execute("home.columnWidth", json!({"cols": c, "width": 166.2 / PT})).unwrap();
@@ -134,6 +140,7 @@ fn column_resize_left_inside_and_right() {
 }
 
 #[test]
+/// Row insert and delete.
 fn row_insert_and_delete() {
     let down = [99.0, 76.0, 144.0, 57.6];
     fixture().expect("insert row 2", |s| rows(s, "home.insertRows", "2"), down, down, HOME);
@@ -153,6 +160,7 @@ fn row_insert_and_delete() {
 }
 
 #[test]
+/// Column insert and delete.
 fn column_insert_and_delete() {
     let right = [147.0, 61.6, 144.0, 57.6];
     fixture().expect("insert column B", |s| cols(s, "home.insertColumns", "B"), right, right, HOME);
@@ -164,6 +172,7 @@ fn column_insert_and_delete() {
 }
 
 #[test]
+/// Hiding rows and columns.
 fn hiding_rows_and_columns() {
     let up = [99.0, 47.2, 144.0, 57.6];
     fixture().expect("hide row 2", |s| rows(s, "home.hideRows", "2"), up, up, HOME);
@@ -187,6 +196,7 @@ fn hiding_rows_and_columns() {
 }
 
 #[test]
+/// Hiding the rows an object spans.
 fn hiding_the_rows_an_object_spans() {
     // Excel measures a hidden top row from its edge, so the object keeps what is below it: 4 pt.
     // (It also draws the object's top at the row's edge, 57.6 pt; GridCraft keeps the 3 pt/4 pt
@@ -208,6 +218,7 @@ fn hiding_the_rows_an_object_spans() {
 }
 
 #[test]
+/// An applied filter hides rows like hiding them.
 fn an_applied_filter_hides_rows_like_hiding_them() {
     // Rows 2 and 3 hold "x" and "y": keeping "y" hides row 2, above the object.
     let up = [99.0, 47.2, 144.0, 57.6];
@@ -225,6 +236,7 @@ fn an_applied_filter_hides_rows_like_hiding_them() {
 }
 
 #[test]
+/// Undo puts objects back.
 fn undo_puts_objects_back() {
     let mut f = fixture();
     let before: Vec<[f64; 4]> = f.objects.iter().map(|&(k, id, _)| f.rect(k, id)).collect();
