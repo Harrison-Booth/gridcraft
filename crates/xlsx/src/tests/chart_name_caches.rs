@@ -64,7 +64,8 @@ fn chart_xml(cats: &str, vals: &str, names: Vec<DefinedName>) -> String {
 }
 
 fn part<'a>(xml: &'a str, tag: &str) -> &'a str {
-    let start = xml.find(&format!("<c:{tag}>")).unwrap();
+    let open = format!("<c:{tag}>");
+    let start = xml.find(&open).unwrap() + open.len();
     let end = xml[start..].find(&format!("</c:{tag}>")).unwrap() + start;
     &xml[start..end]
 }
