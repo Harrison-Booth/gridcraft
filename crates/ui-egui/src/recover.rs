@@ -129,7 +129,8 @@ mod tests {
 
     fn frame(r: &mut Recovery, s: &Session, now: f64) {
         let ctx = egui::Context::default();
-        let _ = ctx.run_ui(Default::default(), |ui| r.tick(s, ui.ctx(), now));
+        let mut output = ctx.run_ui(Default::default(), |ui| r.tick(s, ui.ctx(), now));
+        output.textures_delta.clear();
     }
 
     fn settle(r: &mut Recovery) {
