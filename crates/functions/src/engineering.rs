@@ -524,22 +524,39 @@ impl Cx {
     fn mul(self, o: Cx) -> Cx {
         Cx::new(self.re * o.re - self.im * o.im, self.re * o.im + self.im * o.re)
     }
+    /// Smith's algorithm, which is what IMDIV agrees with in the last digit.
     fn div(self, o: Cx) -> R<Cx> {
-        let d = o.re * o.re + o.im * o.im;
-        if d == 0.0 {
+        if o.re == 0.0 && o.im == 0.0 {
             return Err(CellError::Num);
         }
-        Ok(Cx::new((self.re * o.re + self.im * o.im) / d, (self.im * o.re - self.re * o.im) / d))
+        Ok(if o.re.abs() >= o.im.abs() {
+            let r = o.im / o.re;
+            let d = o.re + o.im * r;
+            Cx::new((self.re + self.im * r) / d, (self.im - self.re * r) / d)
+        } else {
+            let r = o.re / o.im;
+            let d = o.re * r + o.im;
+            Cx::new((self.re * r + self.im) / d, (self.im * r - self.re) / d)
+        })
     }
     fn abs(self) -> f64 {
         self.re.hypot(self.im)
     }
+    /// The angle the way Excel computes it: `atan(im / re)` moved by pi in the left half-plane, not
+    /// `atan2` (they differ in the last bit, and IMARGUMENT returns the whole double). The caller
+    /// rules out zero.
     fn arg(self) -> f64 {
-        self.im.atan2(self.re)
-    }
-    fn exp(self) -> Cx {
-        let e = self.re.exp();
-        Cx::new(e * self.im.cos(), e * self.im.sin())
+        if self.re == 0.0 {
+            return std::f64::consts::FRAC_PI_2.copysign(self.im);
+        }
+        let t = (self.im / self.re).atan();
+        if self.re > 0.0 {
+            t
+        } else if self.im < 0.0 {
+            t - PI
+        } else {
+            t + PI
+        }
     }
     fn ln(self) -> R<Cx> {
         if self.re == 0.0 && self.im == 0.0 {
@@ -547,31 +564,90 @@ impl Cx {
         }
         Ok(Cx::new(self.abs().ln(), self.arg()))
     }
-    fn sin(self) -> Cx {
-        Cx::new(self.re.sin() * self.im.cosh(), self.re.cos() * self.im.sinh())
-    }
-    fn cos(self) -> Cx {
-        Cx::new(self.re.cos() * self.im.cosh(), -self.re.sin() * self.im.sinh())
-    }
-    fn sinh(self) -> Cx {
-        Cx::new(self.re.sinh() * self.im.cos(), self.re.cosh() * self.im.sin())
-    }
-    fn cosh(self) -> Cx {
-        Cx::new(self.re.cosh() * self.im.cos(), self.re.sinh() * self.im.sin())
-    }
-    fn powf(self, n: f64) -> R<Cx> {
-        if self.re == 0.0 && self.im == 0.0 {
-            return if n > 0.0 { Ok(Cx::new(0.0, 0.0)) } else { Err(CellError::Num) };
-        }
-        let r = self.abs().powf(n);
-        let t = self.arg() * n;
-        Ok(Cx::new(r * t.cos(), r * t.sin()))
-    }
 }
 
 const ONE: Cx = Cx { re: 1.0, im: 0.0 };
 
-/// Parses a real number written in a complex string (no spaces, optional exponent).
+/// `pi / 2` is 1.5707963267948966 in a double; Excel reduces trigonometric arguments with an x87-style
+/// pi of 64 mantissa bits (0xC90FDAA22168C235 / 2^62), which is 5.0166E-20 above the true one. `HALF_PI_LO`
+/// is the rest of that half pi beyond `FRAC_PI_2`.
+const HALF_PI_LO: f64 = 6.1257422745431e-17;
+/// Excel gives #NUM! for a sine or cosine argument from 2^27.
+const TRIG_LIMIT: f64 = 134_217_728.0;
+
+/// Sum and rounding error of two doubles.
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let s = a + b;
+    let bb = s - a;
+    (s, (a - (s - bb)) + (b - bb))
+}
+
+/// `(sin x, cos x)` as Excel evaluates them. Reducing with its pi leaves `k * 2.5E-20` in the angle after
+/// `k` quarter turns, so `cos(1.5707963267949)` is -3.49145625605507E-15 and `sin(pi)` is
+/// 1.22514845490862E-16, not the exact-pi values. #NUM! from 2^27.
+fn xl_sincos(x: f64) -> R<(f64, f64)> {
+    if x.is_nan() || x.abs() >= TRIG_LIMIT {
+        return Err(CellError::Num);
+    }
+    let k = (x * std::f64::consts::FRAC_2_PI).round();
+    let hi_part = k * std::f64::consts::FRAC_PI_2;
+    let hi_err = k.mul_add(std::f64::consts::FRAC_PI_2, -hi_part);
+    let (s, e) = two_sum(x - hi_part, -hi_err);
+    let (r, e2) = two_sum(s, -k * HALF_PI_LO);
+    let lo = e + e2;
+    let (sin, cos) = (r.sin() + lo * r.cos(), r.cos() - lo * r.sin());
+    Ok(match (k as i64).rem_euclid(4) {
+        0 => (sin, cos),
+        1 => (cos, -sin),
+        2 => (-sin, -cos),
+        _ => (-cos, sin),
+    })
+}
+
+/// A part below the smallest normal double is 0 in Excel's text.
+fn flush_subnormal(x: f64) -> f64 {
+    if x.abs() < f64::MIN_POSITIVE { 0.0 } else { x }
+}
+
+/// `(sinh b, cosh b)` formed as `(e^b -/+ e^-b) / 2` the way Excel's IMSIN and IMCOS do, so a small `b`
+/// loses digits to cancellation: `IMSIN("1E-10i")` is `1.00000008274037E-10i`.
+fn exp_sinh_cosh(b: f64) -> R<(f64, f64)> {
+    let e = flush_subnormal(b.exp());
+    if e == 0.0 || e.is_infinite() {
+        return Err(CellError::Num);
+    }
+    let inv = 1.0 / e;
+    Ok(((e - inv) / 2.0, (e + inv) / 2.0))
+}
+
+/// sinh or cosh of a real number: #NUM! where Excel's e^x overflows (from about 709.78).
+fn real_hyperbolic(x: f64, f: fn(f64) -> f64) -> R<Cx> {
+    if x.exp().is_finite() && (-x).exp().is_finite() { Ok(Cx::new(f(x), 0.0)) } else { Err(CellError::Num) }
+}
+
+/// Zeroes the mantissa digits past the 15th significant one: Excel reads no more than 15 of them
+/// (`IMSUM("1234567890123456")` is `1234567890123450`).
+fn truncate_digits(s: &str) -> String {
+    let (mantissa, exponent) = s.split_at(s.find(['e', 'E']).unwrap_or(s.len()));
+    let mut seen = 0;
+    let mut out: String = mantissa
+        .chars()
+        .map(|c| {
+            if !c.is_ascii_digit() {
+                return c;
+            }
+            if seen > 0 || c != '0' {
+                seen += 1;
+            }
+            if seen > 15 { '0' } else { c }
+        })
+        .collect();
+    out.push_str(exponent);
+    out
+}
+
+/// Parses a real number written in a complex string (no spaces, optional exponent). Excel refuses a
+/// number below the smallest normal double or from 1E308.
 fn parse_real(s: &str) -> Option<f64> {
     if s.is_empty() || s.contains(char::is_whitespace) {
         return None;
@@ -580,7 +656,8 @@ fn parse_real(s: &str) -> Option<f64> {
     if !ok {
         return None;
     }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
+    let v = truncate_digits(s).parse::<f64>().ok().filter(|v| v.is_finite())?;
+    (v == 0.0 || (f64::MIN_POSITIVE..1e308).contains(&v.abs())).then_some(v)
 }
 
 /// Parses "a+bi" forms. Returns the number and its suffix ('i', 'j' or none).
@@ -643,36 +720,75 @@ fn merge_suffix(acc: Option<char>, s: Option<char>) -> R<Option<char>> {
     }
 }
 
+/// The 15 significant digits of a positive finite number as an integer, and its decimal exponent.
+/// Excel rounds an exact tie up where `format!` rounds it to even.
+fn sig15(a: f64) -> (u64, i32) {
+    let split = |s: &str| -> (Vec<u8>, i32) {
+        let (mantissa, exponent) = s.split_once('e').unwrap_or((s, "0"));
+        (mantissa.bytes().filter(u8::is_ascii_digit).collect(), exponent.parse().unwrap_or(0))
+    };
+    let leading = |d: &[u8]| d.iter().take(15).fold(0u64, |n, c| n * 10 + u64::from(c - b'0'));
+    let (long, long_exp) = split(&format!("{a:.20e}"));
+    if long.get(15) == Some(&b'5') && long.iter().skip(16).all(|&c| c == b'0') {
+        let n = leading(&long) + 1;
+        return if n >= 1_000_000_000_000_000 { (100_000_000_000_000, long_exp + 1) } else { (n, long_exp) };
+    }
+    let (short, exp) = split(&format!("{a:.14e}"));
+    (leading(&short), exp)
+}
+
+/// Excel's text for one part of a complex number: 15 significant digits, written out in full below
+/// 1E21 and down to 19 decimal places, scientific beyond (`0.0000000001`, `1.23456789012345E-07`,
+/// `123456789012345000000`, `1E+21`).
+fn complex_part_text(x: f64) -> String {
+    if x == 0.0 {
+        return "0".into();
+    }
+    let (n, exp) = sig15(x.abs());
+    let digits = n.to_string();
+    let digits = digits.trim_end_matches('0');
+    let sign = if x < 0.0 { "-" } else { "" };
+    if exp >= 21 || (exp < 0 && digits.len() as i32 - exp - 1 >= 20) {
+        let (head, tail) = digits.split_at(1);
+        let point = if tail.is_empty() { "" } else { "." };
+        return format!("{sign}{head}{point}{tail}E{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
+    }
+    if exp < 0 {
+        return format!("{sign}0.{}{digits}", "0".repeat((-exp - 1) as usize));
+    }
+    let int_len = exp as usize + 1;
+    if digits.len() <= int_len {
+        format!("{sign}{digits}{}", "0".repeat(int_len - digits.len()))
+    } else {
+        let (int, frac) = digits.split_at(int_len);
+        format!("{sign}{int}.{frac}")
+    }
+}
+
 fn fmt_complex(z: Cx, suffix: char) -> R<Value> {
     if !z.re.is_finite() || !z.im.is_finite() {
         return Err(CellError::Num);
     }
-    let re = clean(z.re);
-    let im = clean(z.im);
+    let (re, im) = (flush_subnormal(z.re), flush_subnormal(z.im));
     let mut s = String::new();
     if im == 0.0 {
-        s.push_str(&number_to_text(re));
+        s.push_str(&complex_part_text(re));
         return text_val(s);
     }
     if re != 0.0 {
-        s.push_str(&number_to_text(re));
+        s.push_str(&complex_part_text(re));
         if im > 0.0 {
             s.push('+');
         }
     }
+    // Only an exact 1 is written as a bare `i`: 1.0000000000000002 is `1i`.
     if im == -1.0 {
         s.push('-');
     } else if im != 1.0 {
-        s.push_str(&number_to_text(im));
+        s.push_str(&complex_part_text(im));
     }
     s.push(suffix);
     text_val(s)
-}
-
-/// Rounds to 15 significant digits so values like 0.999999999999999999 print as 1.
-fn clean(x: f64) -> f64 {
-    let s = format!("{:.14e}", x);
-    s.parse().unwrap_or(x)
 }
 
 fn complex(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -706,44 +822,202 @@ macro_rules! im1 {
 }
 
 im1!(imconjugate, |z: Cx| Ok(Cx::new(z.re, -z.im)));
-im1!(imexp, |z: Cx| Ok(z.exp()));
+im1!(imexp, |z: Cx| {
+    let e = z.re.exp();
+    if z.im == 0.0 {
+        // A real result from 1E308 up is #NUM! (IMEXP("709.78")).
+        return if e >= 1e308 { Err(CellError::Num) } else { Ok(Cx::new(e, 0.0)) };
+    }
+    let (s, c) = xl_sincos(z.im)?;
+    // With an imaginary part an overflowing e^re is clamped to the largest double, not an error.
+    let e = e.min(f64::MAX);
+    Ok(Cx::new(e * c, e * s))
+});
 im1!(imln, |z: Cx| z.ln());
 im1!(imlog10, |z: Cx| z.ln().map(|l| Cx::new(l.re / std::f64::consts::LN_10, l.im / std::f64::consts::LN_10)));
 im1!(imlog2, |z: Cx| z.ln().map(|l| Cx::new(l.re / std::f64::consts::LN_2, l.im / std::f64::consts::LN_2)));
-// Excel takes the polar route, so IMSQRT("-4") is 1.22514845490862E-16+2i, not 2i. Its cosine
-// reduces its argument with a 64-bit-mantissa pi, which is PI/2 + 2.5e-20 and shows up as the
-// stray real part. `+ 0.0` turns a -0 imaginary part into +0, so the angle stays +pi.
+// Excel takes the polar route, so IMSQRT("-4") is 1.22514845490862E-16+2i, not 2i: the stray real part
+// is the cosine of half pi under its reduction (see `xl_sincos`). `+ 0.0` turns a -0 imaginary part into
+// +0, so the angle stays +pi.
 // shortcut: parts above ~1E154 or below ~1E-155 keep the exact result (Excel gives #NUM! or 0), no known use.
-const HALF_PI_EXCESS: f64 = 2.508_278_806_33e-20;
 im1!(imsqrt, |z: Cx| {
     let im = z.im + 0.0;
-    let theta = match z.re {
-        0.0 => {
-            if im == 0.0 {
-                0.0
-            } else {
-                std::f64::consts::FRAC_PI_2.copysign(im)
-            }
-        }
-        x if x > 0.0 => (im / x).atan(),
-        x => (im / x).atan() + if im < 0.0 { -std::f64::consts::PI } else { std::f64::consts::PI },
-    };
-    let (half, root) = (theta / 2.0, z.abs().sqrt());
-    Ok(Cx::new(root * (half.cos() + HALF_PI_EXCESS * half.abs().sin()), root * half.sin()))
+    let theta = if z.re == 0.0 && im == 0.0 { 0.0 } else { Cx::new(z.re, im).arg() };
+    let (s, c) = xl_sincos(theta / 2.0)?;
+    let root = z.abs().sqrt();
+    Ok(Cx::new(root * c, root * s))
 });
-im1!(imsin, |z: Cx| Ok(z.sin()));
-im1!(imcos, |z: Cx| Ok(z.cos()));
-im1!(imtan, |z: Cx| z.sin().div(z.cos()));
-im1!(imcot, |z: Cx| z.cos().div(z.sin()));
-im1!(imsec, |z: Cx| ONE.div(z.cos()));
-im1!(imcsc, |z: Cx| ONE.div(z.sin()));
-im1!(imsinh, |z: Cx| Ok(z.sinh()));
-im1!(imcosh, |z: Cx| Ok(z.cosh()));
-im1!(imsech, |z: Cx| ONE.div(z.cosh()));
-im1!(imcsch, |z: Cx| ONE.div(z.sinh()));
+// The functions below follow what Excel returns, digit for digit, including its own noise: the angle
+// reduction of `xl_sincos`, the `(e^b - e^-b) / 2` form of IMSIN and IMCOS, and a separate formula for
+// a real, a purely imaginary and a general argument. Excel evaluates in extended precision, so the 15th
+// digit of an arbitrary argument can still differ by one.
+im1!(imsin, |z: Cx| {
+    let (s, c) = xl_sincos(z.re)?;
+    if z.im == 0.0 {
+        return Ok(Cx::new(s, 0.0));
+    }
+    let (sh, ch) = exp_sinh_cosh(z.im)?;
+    Ok(Cx::new(s * ch, c * sh))
+});
+im1!(imcos, |z: Cx| {
+    let (s, c) = xl_sincos(z.re)?;
+    if z.im == 0.0 {
+        return Ok(Cx::new(c, 0.0));
+    }
+    let (sh, ch) = exp_sinh_cosh(z.im)?;
+    Ok(Cx::new(c * ch, -s * sh))
+});
+im1!(imsinh, |z: Cx| {
+    if z.im == 0.0 {
+        return real_hyperbolic(z.re, f64::sinh);
+    }
+    let (s, c) = xl_sincos(z.im)?;
+    Ok(Cx::new(z.re.sinh() * c, z.re.cosh() * s))
+});
+im1!(imcosh, |z: Cx| {
+    if z.im == 0.0 {
+        return real_hyperbolic(z.re, f64::cosh);
+    }
+    let (s, c) = xl_sincos(z.im)?;
+    Ok(Cx::new(z.re.cosh() * c, z.re.sinh() * s))
+});
+im1!(imtan, |z: Cx| {
+    let (s, c) = xl_sincos(z.re)?;
+    if z.im == 0.0 {
+        return if c == 0.0 { Err(CellError::Num) } else { Ok(Cx::new(s / c, 0.0)) };
+    }
+    if z.re == 0.0 {
+        // tanh is exactly 1 from about 18.4 in Excel.
+        return Ok(Cx::new(0.0, if z.im.abs() < 18.4 { z.im.tanh() } else { 1.0_f64.copysign(z.im) }));
+    }
+    let (sh, ch) = (z.im.sinh(), z.im.cosh());
+    let den = c * c * ch * ch + s * s * sh * sh;
+    if !den.is_finite() {
+        return Ok(Cx::new(0.0, 1.0_f64.copysign(z.im)));
+    }
+    Ok(Cx::new(s * c / den, sh * ch / den))
+});
+im1!(imcot, |z: Cx| {
+    let (s, c) = xl_sincos(z.re)?;
+    if z.im == 0.0 {
+        return if s == 0.0 { Err(CellError::Num) } else { Ok(Cx::new(c / s, 0.0)) };
+    }
+    let (sh, ch) = (z.im.sinh(), z.im.cosh());
+    if z.re == 0.0 {
+        if z.im.abs() < 0.1 {
+            // Excel divides by (cosh 2b - 1) / 2 for a small b, so IMCOT("1E-10i") is #NUM!.
+            let den = ((2.0 * z.im).cosh() - 1.0) / 2.0;
+            return if den == 0.0 { Err(CellError::Num) } else { Ok(Cx::new(0.0, -(sh * ch) / den)) };
+        }
+        return Ok(Cx::new(0.0, -(1.0 / z.im.tanh())));
+    }
+    let den = s * s + sh * sh;
+    if !den.is_finite() {
+        return Ok(Cx::new(0.0, -1.0_f64.copysign(z.im)));
+    }
+    Ok(Cx::new(c * s / den, -(sh * ch) / den))
+});
+// From |b| of about 355 the squares of sinh and cosh overflow: the secant and cosecant (and their
+// hyperbolic kin below) then divide through by cosh(b)^2, which is how Excel keeps them finite.
+im1!(imsec, |z: Cx| {
+    let (s, c) = xl_sincos(z.re)?;
+    if z.im == 0.0 {
+        return if c == 0.0 { Err(CellError::Num) } else { Ok(Cx::new(1.0 / c, 0.0)) };
+    }
+    let (sh, ch) = (z.im.sinh(), z.im.cosh());
+    if z.re == 0.0 {
+        return Ok(Cx::new(1.0 / ch, 0.0));
+    }
+    if ch.is_infinite() {
+        return Ok(Cx::new(0.0, 0.0));
+    }
+    let den = c * c + sh * sh;
+    if den.is_finite() {
+        return Ok(Cx::new(c * ch / den, s * sh / den));
+    }
+    let (u, t) = (1.0 / ch, sh / ch);
+    let d = c * c * u * u + t * t;
+    Ok(Cx::new(c * u / d, s * t * u / d))
+});
+im1!(imcsc, |z: Cx| {
+    let (s, c) = xl_sincos(z.re)?;
+    if z.im == 0.0 {
+        return if s == 0.0 { Err(CellError::Num) } else { Ok(Cx::new(1.0 / s, 0.0)) };
+    }
+    let (sh, ch) = (z.im.sinh(), z.im.cosh());
+    if z.re == 0.0 {
+        // Excel divides by (cosh 2b - 1) / 2, so IMCSC("1E-10i") is #NUM! and a small b loses digits.
+        let den = ((2.0 * z.im).cosh() - 1.0) / 2.0;
+        if den == 0.0 {
+            return Err(CellError::Num);
+        }
+        return Ok(Cx::new(0.0, if den.is_finite() { -sh / den } else { -1.0 / sh }));
+    }
+    if ch.is_infinite() {
+        return Ok(Cx::new(0.0, 0.0));
+    }
+    let den = s * s + sh * sh;
+    if den.is_finite() {
+        return Ok(Cx::new(s * ch / den, -(c * sh) / den));
+    }
+    let (u, t) = (1.0 / ch, sh / ch);
+    let d = s * s * u * u + t * t;
+    Ok(Cx::new(s * u / d, -(c * t * u) / d))
+});
+im1!(imsech, |z: Cx| {
+    if z.im == 0.0 {
+        return Ok(Cx::new(1.0 / z.re.cosh(), 0.0));
+    }
+    let (s, c) = xl_sincos(z.im)?;
+    if z.re == 0.0 {
+        return if c == 0.0 { Err(CellError::Num) } else { Ok(Cx::new(1.0 / c, 0.0)) };
+    }
+    let (sh, ch) = (z.re.sinh(), z.re.cosh());
+    if ch.is_infinite() {
+        return Ok(Cx::new(0.0, 0.0));
+    }
+    let den = sh * sh + c * c;
+    if den.is_finite() {
+        return Ok(Cx::new(ch * c / den, -(sh * s) / den));
+    }
+    let (u, t) = (1.0 / ch, sh / ch);
+    let d = t * t + c * c * u * u;
+    Ok(Cx::new(c * u / d, -(t * s * u) / d))
+});
+// shortcut: from a real part of about 355 Excel returns IMCSCH negated (a sign slip); GridCraft keeps the right sign, no known use.
+im1!(imcsch, |z: Cx| {
+    if z.im == 0.0 {
+        return if z.re == 0.0 { Err(CellError::Num) } else { Ok(Cx::new(1.0 / z.re.sinh(), 0.0)) };
+    }
+    let (s, c) = xl_sincos(z.im)?;
+    if z.re == 0.0 {
+        return if s == 0.0 { Err(CellError::Num) } else { Ok(Cx::new(0.0, -1.0 / s)) };
+    }
+    let (sh, ch) = (z.re.sinh(), z.re.cosh());
+    if ch.is_infinite() {
+        return Ok(Cx::new(0.0, 0.0));
+    }
+    let den = sh * sh + s * s;
+    if den.is_finite() {
+        return Ok(Cx::new(sh * c / den, -(ch * s) / den));
+    }
+    let (u, t) = (1.0 / ch, sh / ch);
+    let d = t * t + s * s * u * u;
+    Ok(Cx::new(t * c * u / d, -(s * u) / d))
+});
 
+/// Excel scales by the larger part, `m * sqrt(1 + (n / m)^2)`, which differs from `hypot` in the last bit
+/// of the double (`IMABS("2+3i")` is 3.6055512754639896).
 fn imabs(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    im_real_fn(a, |z| Ok(z.abs()))
+    im_real_fn(a, |z| {
+        let (x, y) = (z.re.abs(), z.im.abs());
+        let (m, n) = (x.max(y), x.min(y));
+        if m == 0.0 {
+            return Ok(0.0);
+        }
+        let t = n / m;
+        Ok(m * (1.0 + t * t).sqrt())
+    })
 }
 fn imreal(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     im_real_fn(a, |z| Ok(z.re))
@@ -767,20 +1041,29 @@ fn imdiv(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
 fn imsub(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     im_binary(a, |x, y| Ok(x.sub(y)))
 }
+/// `z^n` the way Excel does it, in polar form: modulus^n and the angle times n through `xl_sincos`, so
+/// `IMPOWER("1+i",2)` is `1.22514845490862E-16+2i`. Integer exponents use `pow`, 0.5 and -0.5 the square
+/// root and any other exponent `exp(n ln r)`, which is where Excel's last digits come from.
+// shortcut: Excel squares the parts, so a modulus past 1E154 or below 1E-155 is #NUM! or 0 there; here it keeps the exact value.
+fn power(z: Cx, n: f64) -> R<Cx> {
+    if z.re == 0.0 && z.im == 0.0 {
+        return if n > 0.0 { Ok(Cx::new(0.0, 0.0)) } else { Err(CellError::Num) };
+    }
+    let squares = z.re * z.re + z.im * z.im;
+    let r = if squares >= f64::MIN_POSITIVE && squares.is_finite() { squares.sqrt() } else { z.abs() };
+    let p = if n == n.trunc() {
+        r.powf(n)
+    } else if n.abs() == 0.5 {
+        if n < 0.0 { 1.0 / r.sqrt() } else { r.sqrt() }
+    } else {
+        (n * r.ln()).exp()
+    };
+    let (s, c) = xl_sincos(n * z.arg())?;
+    Ok(Cx::new(p * c, p * s))
+}
 fn impower(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (z, s) = cx_arg(a, 0)?;
-    let n = num(a, 1)?;
-    // Integer powers by repeated multiplication are exact for small Gaussian integers.
-    let r = if n == n.trunc() && n.abs() <= 64.0 && !(z.re == 0.0 && z.im == 0.0) {
-        let mut acc = ONE;
-        for _ in 0..(n.abs() as u32) {
-            acc = acc.mul(z);
-        }
-        if n < 0.0 { ONE.div(acc)? } else { acc }
-    } else {
-        z.powf(n)?
-    };
-    fmt_complex(r, s.unwrap_or('i'))
+    fmt_complex(power(z, num(a, 1)?)?, s.unwrap_or('i'))
 }
 
 fn im_fold(a: &[Arg], init: Cx, f: fn(Cx, Cx) -> Cx) -> R<Value> {
@@ -796,6 +1079,10 @@ fn im_fold(a: &[Arg], init: Cx, f: fn(Cx, Cx) -> Cx) -> R<Value> {
             sfx = merge_suffix(sfx, s)?;
             acc = f(acc, z);
         }
+    }
+    // Where the other IM functions give #NUM!, a sum or product that overflows is #VALUE! in Excel.
+    if !acc.re.is_finite() || !acc.im.is_finite() {
+        return Err(CellError::Value);
     }
     fmt_complex(acc, sfx.unwrap_or('i'))
 }
@@ -1322,7 +1609,7 @@ mod tests {
         }
         is_text(ev("IMSQRT", vec![t("4")]), "2");
         is_text(ev("IMSQRT", vec![t("-2i")]), "1-i");
-        is_text(ev("IMPOWER", vec![t("2+3i"), n(3.0)]), "-46+9i");
+        is_text(ev("IMPOWER", vec![t("2+3i"), n(3.0)]), "-46+9.00000000000001i");
         cx(ev("IMPOWER", vec![t("2+3i"), n(0.5)]), 1.674_149_228_035_540_2, 0.895_977_476_129_838);
         cx(ev("IMSIN", vec![t("3+4i")]), 3.853_738_037_919_377, -27.016_813_258_003_93);
         cx(ev("IMCOS", vec![t("1+i")]), 0.833_730_025_131_149, -0.988_897_705_762_865);
@@ -1342,6 +1629,354 @@ mod tests {
         let Value::Text(csh) = ev("IMCSCH", vec![t("4+3i")]) else { panic!() };
         cx(ev("IMPRODUCT", vec![t(&sh), t(&csh)]), 1.0, 0.0);
         cx(ev("IMSUM", vec![t("1.5e1+2E-1j")]), 15.0, 0.2);
+    }
+
+    /// The result as Excel shows it: its text, or the error literal.
+    fn shown(v: Value) -> String {
+        match v {
+            Value::Text(s) => s.to_string(),
+            Value::Error(e) => e.as_str().to_string(),
+            v => format!("{v:?}"),
+        }
+    }
+
+    // The strings below were read back from Excel 16.0 (COM, a new workbook, one formula per case).
+    // They include its own rounding noise: the argument reduction with a 64-bit-mantissa pi, the
+    // (e^b - e^-b) / 2 form of IMSIN and IMCOS, and a separate formula for real, purely imaginary and
+    // general arguments.
+    #[test]
+    fn im_functions_match_excel() {
+        for (name, input, want) in [
+            ("IMEXP", "1E-10", "1.0000000001"),
+            ("IMEXP", "12345.6789", "#NUM!"),
+            ("IMEXP", "-4.71238898038469", "0.00898329102112943"),
+            ("IMEXP", "-18.8495559215388", "6.51241213607963E-09"),
+            ("IMEXP", "25.1327412287183", "82226315585.5911"),
+            ("IMEXP", "157.07963267949", "1.65507505109568E+68"),
+            ("IMEXP", "10.9955742875643", "59609.7414928736"),
+            ("IMEXP", "1.5707963267949i", "-3.49145625605507E-15+i"),
+            ("IMEXP", "3.14159265358979i", "-1+3.2311393144413E-15i"),
+            ("IMEXP", "4.71238898038469i", "-1.83772268236293E-16-i"),
+            ("IMEXP", "-25.1327412287183i", "1+4.71653965883334E-14i"),
+            ("IMEXP", "1E5+1E5i", "-1.79654406278214E+308+6.42653686938768E+306i"),
+            ("IMEXP", "1.5707963267949+i", "2.59911202126212+4.04787713915704i"),
+            ("IMEXP", "710+i", "9.71297746009434E+307+1.51270661257499E+308i"),
+            ("IMSIN", "10", "-0.54402111088937"),
+            ("IMSIN", "3.14159265358979", "3.2311393144413E-15"),
+            ("IMSIN", "2i", "3.62686040784702i"),
+            ("IMSIN", "1E-5i", "0.0000100000000000655i"),
+            ("IMSIN", "1E-10i", "1.00000008274037E-10i"),
+            ("IMSIN", "-12345.6789i", "#NUM!"),
+            ("IMSIN", "-31.4159265358979i", "-22015752930315.3i"),
+            ("IMSIN", "-314.159265358979i", "-1.36963671237828E+136i"),
+            ("IMSIN", "1+i", "1.29845758141598+0.634963914784736i"),
+            ("IMSIN", "-10-10i", "5991.43120767799+9240.89014825243i"),
+            ("IMSIN", "-i", "-1.1752011936438i"),
+            ("IMSIN", "1E-8i", "9.99999988371414E-09i"),
+            ("IMSIN", "710i", "#NUM!"),
+            ("IMSIN", "1-710i", "#NUM!"),
+            ("IMCOS", "0", "1"),
+            ("IMCOS", "1.5707963267949", "-3.49145625605507E-15"),
+            ("IMCOS", "15.707963267949", "-1"),
+            ("IMCOS", "18.8495559215388", "1"),
+            ("IMCOS", "-25.1327412287183", "1"),
+            ("IMCOS", "-31.4159265358979", "1"),
+            ("IMCOS", "12345.6789i", "#NUM!"),
+            ("IMCOS", "6.28318530717959i", "267.746761483749"),
+            ("IMCOS", "-10.9955742875643i", "29804.8707548247"),
+            ("IMCOS", "1+i", "0.833730025131149-0.988897705762865i"),
+            ("IMCOS", "-1-i", "0.833730025131149-0.988897705762865i"),
+            ("IMCOS", "1.5707963267949+i", "-5.38759853602311E-15-1.1752011936438i"),
+            ("IMCOS", "1E-6i", "1.0000000000005"),
+            ("IMCOS", "20i", "242582597.704895"),
+            ("IMSINH", "-1", "-1.1752011936438"),
+            ("IMSINH", "-3", "-10.0178749274099"),
+            ("IMSINH", "100", "1.34405857090807E+43"),
+            ("IMSINH", "1E10", "#NUM!"),
+            ("IMSINH", "-3i", "-0.141120008059867i"),
+            ("IMSINH", "1E-10i", "0.0000000001i"),
+            ("IMSINH", "-1.5707963267949i", "-i"),
+            ("IMSINH", "3.14159265358979i", "3.2311393144413E-15i"),
+            ("IMSINH", "7.85398163397448i", "i"),
+            ("IMSINH", "9.42477796076938i", "3.67544536472586E-16i"),
+            ("IMSINH", "-10.9955742875643i", "i"),
+            ("IMSINH", "1+i", "0.634963914784736+1.29845758141598i"),
+            ("IMSINH", "300", "9.71213197620628E+129"),
+            ("IMSINH", "356i", "-0.841487271489211i"),
+            ("IMCOSH", "15.707963267949", "3317811.99967075"),
+            ("IMCOSH", "314.159265358979", "1.36963671237828E+136"),
+            ("IMCOSH", "-10.9955742875643", "29804.8707548247"),
+            ("IMCOSH", "-1i", "0.54030230586814"),
+            ("IMCOSH", "1.5707963267949i", "-3.49145625605507E-15"),
+            ("IMCOSH", "4.71238898038469i", "-1.83772268236293E-16"),
+            ("IMCOSH", "25.1327412287183i", "1"),
+            ("IMCOSH", "-314.159265358979i", "1"),
+            ("IMCOSH", "1+i", "0.833730025131149+0.988897705762865i"),
+            ("IMCOSH", "1E-4", "1.000000005"),
+            ("IMCOSH", "0.01", "1.00005000041667"),
+            ("IMCOSH", "200i", "0.487187675007006"),
+            ("IMCOSH", "400i", "-0.525296338642536"),
+            ("IMCOSH", "700", "5.07116027367502E+303"),
+            ("IMTAN", "-1", "-1.5574077246549"),
+            ("IMTAN", "2", "-2.18503986326152"),
+            ("IMTAN", "1.5707963267949", "-286413440886091"),
+            ("IMTAN", "157.07963267949", "3.42040198247906E-13"),
+            ("IMTAN", "-10.9955742875643", "40916205840870.1"),
+            ("IMTAN", "-1i", "-0.761594155955765i"),
+            ("IMTAN", "-2i", "-0.964027580075817i"),
+            ("IMTAN", "1E-10i", "0.0000000001i"),
+            ("IMTAN", "9.42477796076938i", "0.999999986975176i"),
+            ("IMTAN", "-12.5663706143592i", "-0.999999999975677i"),
+            ("IMTAN", "2+3i", "-0.00376402564150425+1.00323862735361i"),
+            ("IMTAN", "1E-3i", "0.0009999996666668i"),
+            ("IMTAN", "700i", "i"),
+            ("IMTAN", "1+400i", "i"),
+            ("IMCOT", "12345.6789", "-1.01039293043387"),
+            ("IMCOT", "-12345.6789", "1.01039293043387"),
+            ("IMCOT", "-6.28318530717959", "-302326341840002"),
+            ("IMCOT", "-15.707963267949", "-30176648923443.4"),
+            ("IMCOT", "2i", "-1.03731472072755i"),
+            ("IMCOT", "1E-10i", "#NUM!"),
+            ("IMCOT", "18.8495559215388i", "-1i"),
+            ("IMCOT", "31.4159265358979i", "-i"),
+            ("IMCOT", "1+1E-10i", "0.642092615934331-1.41228292743739E-10i"),
+            ("IMCOT", "-i", "1.31303528549933i"),
+            ("IMCOT", "0.05i", "-20.0166638895505i"),
+            ("IMCOT", "50i", "-i"),
+            ("IMCOT", "200i", "-i"),
+            ("IMCOT", "356i", "-i"),
+            ("IMSEC", "2", "-2.40299796172238"),
+            ("IMSEC", "-2", "-2.40299796172238"),
+            ("IMSEC", "0.5", "1.13949392732455"),
+            ("IMSEC", "-9.42477796076938", "-1"),
+            ("IMSEC", "12.5663706143592", "1"),
+            ("IMSEC", "-25.1327412287183", "1"),
+            ("IMSEC", "-31.4159265358979", "1"),
+            ("IMSEC", "-0.5i", "0.886818883970074"),
+            ("IMSEC", "4.71238898038469i", "0.017965132264752"),
+            ("IMSEC", "15.707963267949i", "3.01403455077996E-07"),
+            ("IMSEC", "-31.4159265358979i", "4.54220213664834E-14"),
+            ("IMSEC", "1E-6i", "0.9999999999995"),
+            ("IMSEC", "1+355i", "7.2297909698426E-155+1.12597323040731E-154i"),
+            ("IMSEC", "1+710i", "0"),
+            ("IMCSC", "0", "#NUM!"),
+            ("IMCSC", "-6.28318530717959", "-302326341840002"),
+            ("IMCSC", "7.85398163397448", "1"),
+            ("IMCSC", "9.42477796076938", "2720758712936510"),
+            ("IMCSC", "-157.07963267949", "-2923632968061.88"),
+            ("IMCSC", "1E-10i", "#NUM!"),
+            ("IMCSC", "1E5i", "0"),
+            ("IMCSC", "12345.6789i", "0"),
+            ("IMCSC", "3.14159265358979i", "-0.0865895375300472i"),
+            ("IMCSC", "-4.71238898038469i", "0.0179680320537773i"),
+            ("IMCSC", "-6.28318530717959i", "0.00373489848828566i"),
+            ("IMCSC", "10+10i", "-0.0000493970406322853+0.0000761875769426749i"),
+            ("IMCSC", "400i", "-3.83033919342801E-174i"),
+            ("IMCSC", "1+355i", "1.12597323040731E-154-7.2297909698426E-155i"),
+            ("IMSECH", "-4.71238898038469", "0.017965132264752"),
+            ("IMSECH", "-2i", "-2.40299796172238"),
+            ("IMSECH", "12345.6789i", "1.40695904185943"),
+            ("IMSECH", "-12345.6789i", "1.40695904185943"),
+            ("IMSECH", "-7.85398163397448i", "336607132471617"),
+            ("IMSECH", "-9.42477796076938i", "-1"),
+            ("IMSECH", "-62.8318530717959i", "1"),
+            ("IMSECH", "-10.9955742875643i", "40916205840870.1"),
+            ("IMSECH", "1E-4i", "1.000000005"),
+            ("IMSECH", "0.01i", "1.00005000208342"),
+            ("IMSECH", "200i", "2.05259708178295"),
+            ("IMSECH", "800i", "-2.23150770819703"),
+            ("IMSECH", "355+i", "7.2297909698426E-155-1.12597323040731E-154i"),
+            ("IMSECH", "710+i", "0"),
+            ("IMCSCH", "1E-10", "10000000000"),
+            ("IMCSCH", "1E5", "0"),
+            ("IMCSCH", "-12345.6789", "0"),
+            ("IMCSCH", "6.28318530717959", "0.00373489848828566"),
+            ("IMCSCH", "-12.5663706143592", "-6.97468471250262E-06"),
+            ("IMCSCH", "-15.707963267949", "-3.0140345507801E-07"),
+            ("IMCSCH", "157.07963267949", "1.2084044156644E-68"),
+            ("IMCSCH", "1E15i", "#NUM!"),
+            ("IMCSCH", "7.85398163397448i", "-i"),
+            ("IMCSCH", "-2-3i", "0.27254866146294+0.0403005788568915i"),
+            ("IMCSCH", "1.5707963267949+i", "0.207093060817969-0.351662771927279i"),
+            ("IMCSCH", "1E-8", "100000000"),
+            ("IMCSCH", "200i", "1.1450854172917i"),
+            ("IMCSCH", "355i", "33173.708789657i"),
+        ] {
+            assert_eq!(shown(ev(name, vec![t(input)])), want, "{name}(\"{input}\")");
+        }
+    }
+
+    #[test]
+    fn impower_matches_excel() {
+        for (input, power, want) in [
+            ("-4", 0.5, "1.22514845490862E-16+2i"),
+            ("-4", 2.0, "16-3.92047505570758E-15i"),
+            ("i", 2.0, "-1+1.22514845490862E-16i"),
+            ("1+i", 2.0, "1.22514845490862E-16+2i"),
+            ("1+i", 0.0, "1"),
+            ("-2i", 3.0, "-1.47017814589034E-15+8i"),
+            ("2+3i", 3.0, "-46+9.00000000000001i"),
+            ("1E200", 2.0, "#NUM!"),
+            ("1E-170", 2.0, "0"),
+            ("0", 0.0, "#NUM!"),
+            ("0", -1.0, "#NUM!"),
+            ("1+i", 0.0, "1"),
+            ("2+3i", 0.5, "1.67414922803554+0.895977476129838i"),
+            ("-1E10", 0.5, "6.1257422745431E-12+100000i"),
+            ("-3-4i", -0.5, "0.2+0.4i"),
+            ("-i", 4.0, "1+2.45029690981724E-16i"),
+            ("0.5", 0.333333333333333, "0.7937005259841"),
+            ("2", -2.0, "0.25"),
+            ("-1", 7.0, "-1+8.57603918436034E-16i"),
+            ("-3-4i", 7.0, "-76443-16124.0000000001i"),
+            ("4", -2.0, "0.0625"),
+            ("0.5", 5.0, "0.03125"),
+            ("-1-i", 0.0, "1"),
+            ("-3-4i", -2.0, "-0.0112-0.0384i"),
+            ("1E5+1E5i", 3.0, "-2000000000000000+2000000000000000i"),
+            ("-3+4i", 0.333333333333333, "1.26495290635775+1.15061369838445i"),
+            ("2", 0.25, "1.18920711500272"),
+            ("-3+4i", 0.5, "1+2i"),
+            ("4", -1.0, "0.25"),
+            ("-2-3i", 0.333333333333333, "1.15322830402742-1.01064294709397i"),
+            ("-8", 3.0, "-512+1.88182802673964E-13i"),
+            ("-1+i", 2.0, "-3.67544536472586E-16-2i"),
+            ("2", 7.0, "128"),
+            ("i", -1.0, "6.1257422745431E-17-i"),
+            ("4", 4.0, "256"),
+            ("1+i", -2.0, "3.06287113727155E-17-0.5i"),
+            ("-3+4i", 0.0, "1"),
+            ("-i", 7.0, "-4.28801959218017E-16+i"),
+            ("2+3i", 10.0, "-341525-145668i"),
+            ("1+i", 0.333333333333333, "1.08421508149135+0.290514555507251i"),
+            ("-4", 0.0, "1"),
+            ("-1E10", -1.0, "-0.0000000001-1.22514845490862E-26i"),
+        ] {
+            assert_eq!(shown(ev("IMPOWER", vec![t(input), n(power)])), want, "IMPOWER(\"{input}\", {power})");
+        }
+    }
+
+    #[test]
+    fn complex_text_matches_excel() {
+        for (re, im, want) in [
+            (-1e-05, 1.0, "-0.00001+i"),
+            (-1e-10, 0.0, "-0.0000000001"),
+            (0.0, 1.23456789012345e-07, "1.23456789012345E-07i"),
+            (0.0, 1e-06, "0.000001i"),
+            (0.0, 0.000123456789012345, "0.000123456789012345i"),
+            (0.0, 0.123456789012345, "0.123456789012345i"),
+            (0.0, 1.00000000000001, "1.00000000000001i"),
+            (0.0, 1.5, "1.5i"),
+            (0.0, 100000.0, "100000i"),
+            (0.0, 1e+30, "1E+30i"),
+            (1.5e-23, 0.0, "1.5E-23"),
+            (9.99999999999999e-23, 0.0, "9.99999999999999E-23"),
+            (1.2345e-22, 0.0, "1.2345E-22"),
+            (1.23456789012345e-21, 0.0, "1.23456789012345E-21"),
+            (1.5e-21, 0.0, "1.5E-21"),
+            (9.99999999999999e-21, 0.0, "9.99999999999999E-21"),
+            (1.23456789012345e-19, 0.0, "1.23456789012345E-19"),
+            (9.99999999999999e-19, 0.0, "9.99999999999999E-19"),
+            (9.99999999999999e-18, 0.0, "9.99999999999999E-18"),
+            (1e-15, 1.0, "0.000000000000001+i"),
+            (1.5e-15, 0.0, "0.0000000000000015"),
+            (1.23456789012345e-14, 0.0, "1.23456789012345E-14"),
+            (1.23456789012345e-12, 0.0, "1.23456789012345E-12"),
+            (1.5e-12, 0.0, "0.0000000000015"),
+            (1.23456789012345e-11, 0.0, "1.23456789012345E-11"),
+            (1e-10, 1e-10, "0.0000000001+0.0000000001i"),
+            (1e-10, 1.0, "0.0000000001+i"),
+            (1.5e-10, 0.0, "0.00000000015"),
+            (9.99999999999999e-09, 0.0, "9.99999999999999E-09"),
+            (1.2345e-08, 0.0, "0.000000012345"),
+            (1.23456789012345e-08, 0.0, "1.23456789012345E-08"),
+            (1.5e-08, 0.0, "0.000000015"),
+            (9.9999999e-08, 1.0, "0.000000099999999+i"),
+            (1.2345e-07, 0.0, "0.00000012345"),
+            (1.5e-07, 1.5e-07, "0.00000015+0.00000015i"),
+            (1e-06, 1e-06, "0.000001+0.000001i"),
+            (1.5e-06, 0.0, "0.0000015"),
+            (1.2345e-05, 0.0, "0.000012345"),
+            (5e-05, 1.0, "0.00005+i"),
+            (0.0001, 0.0001, "0.0001+0.0001i"),
+            (0.000123456789012345, 0.000123456789012345, "0.000123456789012345+0.000123456789012345i"),
+            (0.00999999999999999, 0.0, "0.00999999999999999"),
+            (0.01, 0.01, "0.01+0.01i"),
+            (0.01, 1.0, "0.01+i"),
+            (0.1, 1.0, "0.1+i"),
+            (0.123456789012345, 0.123456789012345, "0.123456789012345+0.123456789012345i"),
+            (0.123456789012345, 1.0, "0.123456789012345+i"),
+            (1.0, 1.5e-09, "1+0.0000000015i"),
+            (1.0, 1e-06, "1+0.000001i"),
+            (1.0, 100000000000000.0, "1+100000000000000i"),
+            (1.0, 1000000000000000.0, "1+1000000000000000i"),
+            (1.00000000000001, 0.0, "1.00000000000001"),
+            (1.5, 0.0, "1.5"),
+            (1.5, 1.5, "1.5+1.5i"),
+            (100000.0, 100000.0, "100000+100000i"),
+            (123456789012345.0, 0.0, "123456789012345"),
+            (123456789012345.0, 1.0, "123456789012345+i"),
+            (1.23456789012345e+16, 0.0, "12345678901234500"),
+            (1e+18, 0.0, "1000000000000000000"),
+            (1.5e+18, 0.0, "1500000000000000000"),
+            (1e+19, 0.0, "10000000000000000000"),
+            (1.5e+19, 0.0, "15000000000000000000"),
+            (1e+20, 1.0, "100000000000000000000+i"),
+            (1e+21, 0.0, "1E+21"),
+            (1.5e+21, 0.0, "1.5E+21"),
+            (1e+24, 0.0, "1E+24"),
+            (1e+30, 1.0, "1E+30+i"),
+            (1e+30, 1e+30, "1E+30+1E+30i"),
+        ] {
+            assert_eq!(shown(ev("COMPLEX", vec![n(re), n(im)])), want, "COMPLEX({re}, {im})");
+        }
+    }
+
+    #[test]
+    fn complex_text_rounds_a_tie_up_and_flushes_subnormals() {
+        // 1E15 - 123.456 is 999999999999876.544 and 1E15 - 0.5 is 999999999999999.5: Excel rounds half up.
+        assert_eq!(shown(ev("IMSUB", vec![t("1E15"), t("123.456")])), "999999999999877");
+        assert_eq!(shown(ev("COMPLEX", vec![n(2.5e-308), n(0.0)])), "2.5E-308");
+        assert_eq!(shown(ev("COMPLEX", vec![n(2.0e-308), n(0.0)])), "0");
+        assert_eq!(shown(ev("IMPRODUCT", vec![t("1E-200"), t("1E-110")])), "0");
+    }
+
+    #[test]
+    fn complex_text_is_read_to_15_digits() {
+        // Excel keeps 15 significant digits of a number in complex text and zero-fills the rest.
+        assert_eq!(shown(ev("IMSUM", vec![t("1234567890123456")])), "1234567890123450");
+        assert_eq!(shown(ev("IMSUM", vec![t("0.1234567890123456")])), "0.123456789012345");
+        assert_eq!(shown(ev("IMSUM", vec![t("1234567890123456i")])), "1234567890123450i");
+        assert_eq!(shown(ev("IMPRODUCT", vec![t("1234567890123456"), t("1")])), "1234567890123450");
+        // Outside the normal doubles below 1E308 a part is #NUM!.
+        assert_eq!(shown(ev("IMSUM", vec![t("1E307")])), "1E+307");
+        assert_eq!(shown(ev("IMSUM", vec![t("1E308")])), "#NUM!");
+        assert_eq!(shown(ev("IMABS", vec![t("1E-310")])), "#NUM!");
+        assert_eq!(shown(ev("IMREAL", vec![t("1E-310")])), "#NUM!");
+    }
+
+    #[test]
+    fn im_sums_and_products_that_overflow_are_value_errors() {
+        assert_eq!(shown(ev("IMSUM", vec![t("9E307"), t("9E307")])), "#VALUE!");
+        assert_eq!(shown(ev("IMPRODUCT", vec![t("1E200"), t("1E200")])), "#VALUE!");
+        assert_eq!(shown(ev("IMPRODUCT", vec![t("1E154"), t("1E154")])), "1E+308");
+        assert_eq!(shown(ev("IMDIV", vec![t("1E300"), t("1E-300")])), "#NUM!");
+    }
+
+    #[test]
+    fn imargument_and_imabs_return_excels_doubles() {
+        // IMARGUMENT is atan(im / re) moved by pi, not atan2 (the doubles differ in the last bit), and
+        // IMABS scales by the larger part, not hypot.
+        let num = |v: Value| match v {
+            Value::Number(x) => x,
+            v => panic!("expected a number, got {v:?}"),
+        };
+        assert_eq!(num(ev("IMARGUMENT", vec![t("-4")])), std::f64::consts::PI);
+        assert_eq!(num(ev("IMARGUMENT", vec![t("1+i")])), std::f64::consts::FRAC_PI_4);
+        assert_eq!(num(ev("IMARGUMENT", vec![t("100+0.001i")])), 9.999999999666668e-06);
+        assert_eq!(num(ev("IMABS", vec![t("2+3i")])), 3.6055512754639896);
+        assert_eq!(num(ev("IMABS", vec![t("1.5707963267949+i")])), 1.8620958891185897);
+        assert_eq!(num(ev("IMABS", vec![t("3+4i")])), 5.0);
     }
 
     #[test]
