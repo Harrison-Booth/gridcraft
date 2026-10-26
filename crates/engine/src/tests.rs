@@ -5177,7 +5177,7 @@ fn align_on_false_clears_only_the_active_alignment() {
     s.execute("home.alignRight", json!({"range": "A1", "on": false})).unwrap();
     assert_eq!(h(&mut s), json!("Left"));
     s.execute("home.alignLeft", json!({"range": "A1", "on": false})).unwrap();
-    assert_ne!(h(&mut s), json!("Left"));
+    assert_eq!(h(&mut s), json!("General"));
 }
 
 #[test]
