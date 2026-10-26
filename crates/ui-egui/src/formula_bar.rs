@@ -299,6 +299,10 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
     let mine = ed.from_formula_bar == is_bar || (is_bar && cell_editor_hidden);
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
     let focused = ui.ctx().memory(|m| m.focused());
+    // Back on the sheet the edit started on, the bar's field that took the keys there hands them back.
+    if mine && !is_bar && !ed.from_formula_bar && focused == Some(egui::Id::unique("gridcraft.formula_bar")) {
+        ed.request_focus = true;
+    }
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
     let mut action: Option<(i64, i64, bool, bool)> = None;
     let mut arrow = false;
