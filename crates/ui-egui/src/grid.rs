@@ -3753,12 +3753,13 @@ fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet)
 /// Used by `EditState` users to keep the active cell visible while pointing.
 pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, extend: bool) {
     let Some(d) = app.session.active() else { return };
-    let from = ed.point_cell.unwrap_or(ed.cell);
+    // Before any pointing on another sheet, the arrows start from the cell selected there.
+    let from = ed.point_cell.unwrap_or_else(|| if ed.sheet == d.wb.active_sheet() { ed.cell } else { d.selection.active });
     let to = from.offset_clamped(dr, dc);
     let anchor = if extend {
         // The anchor is the corner opposite the moving end: the written range is normalized, so
         // after extending up or left its first cell is the moving end, not the anchor.
-        let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(RangeRef::parse);
+        let pointed = ed.point.and_then(|(s, e)| ed.text.get(s..e)).and_then(|t| RangeRef::parse(t.rsplit('!').next().unwrap_or(t)));
         let inferred_anchor = pointed
             .map(|r| {
                 CellRef::new(
@@ -3773,9 +3774,26 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     };
     let text = if extend { RangeRef::new(anchor, to).a1() } else { to.a1() };
     let sheet = d.wb.active_sheet();
+    // Pointing on another sheet than the one the edit started on names it, as a click there does.
+    let text = match d.wb.active() {
+        Some(on) if ed.sheet != sheet => format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&on.name)),
+        _ => text,
+    };
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
     ed.point_anchor = Some((sheet, anchor));
+    app.grid.ensure_visible = true;
+}
+
+/// Ctrl+PageDown / Ctrl+PageUp while a formula waits for a reference (`command` is `sheet.next` or
+/// `sheet.previous`): the formula carries on on that sheet and the arrows point from the cell
+/// selected there. The edit stays on the sheet it started on, which Enter returns to.
+pub fn point_sheet(app: &mut SheetApp, ed: &mut EditState, command: &str) {
+    if app.session.run(command, json!({})).is_err() {
+        return;
+    }
+    ed.point_cell = app.session.active().map(|d| d.selection.active);
+    ed.point_anchor = None;
     app.grid.ensure_visible = true;
 }
 

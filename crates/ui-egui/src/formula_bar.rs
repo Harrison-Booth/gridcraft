@@ -388,6 +388,21 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
                 arrow = true;
             }
         }
+        // Ctrl+PageDown / Ctrl+PageUp while a formula waits for a reference: on to the next / previous sheet.
+        if ed.can_point() {
+            let step = ui.input_mut(|i| {
+                if i.consume_key(egui::Modifiers::COMMAND, Key::PageDown) {
+                    Some("sheet.next")
+                } else if i.consume_key(egui::Modifiers::COMMAND, Key::PageUp) {
+                    Some("sheet.previous")
+                } else {
+                    None
+                }
+            });
+            if let Some(command) = step {
+                crate::grid::point_sheet(app, &mut ed, command);
+            }
+        }
         // F4 cycles $ anchors of the reference before the caret.
         if ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::F4)) {
             cycle_anchor(&mut ed);
