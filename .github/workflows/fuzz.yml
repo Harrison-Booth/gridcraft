@@ -3,10 +3,13 @@ name: Fuzz
 # Nightly soak of the command-sequence fuzzer (`crates/engine/tests/it/command_sequence_fuzz.rs`):
 # random command sequences checked against undo/redo, XLSX round-trip and full-recalc invariants.
 # `cargo xtask ci` runs it with a tiny budget; this job runs 200 seeds of 200 steps so a sequence bug
-# is found without anyone remembering to soak by hand. It is not a required check and never runs on
-# pull requests. A failing seed fails this run only (the job and the Actions tab), never `main`, and
-# uploads the failing seeds with their shrunk command sequences as an artifact.
+# is found without anyone remembering to soak by hand. It is not a required check. A failing seed
+# fails this run only (the job and the Actions tab), never `main`, and uploads the failing seeds with
+# their shrunk command sequences as an artifact. A pull request that touches this file or the harness
+# runs a small budget (20 by 50) so the workflow is exercised before it reaches `main`.
 on:
+  pull_request:
+    paths: [".github/workflows/fuzz.yml", "crates/engine/tests/it/command_sequence_fuzz.rs"]
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
@@ -23,7 +26,7 @@ permissions:
 
 concurrency:
   group: fuzz-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   fuzz:
@@ -36,8 +39,8 @@ jobs:
       RUST_BACKTRACE: 1
       # The engine and its dependencies have no egui, fonts or system libraries, so no apt packages
       # and no craft-fonts checkout.
-      GRIDCRAFT_FUZZ_SEEDS: ${{ inputs.seeds || '200' }}
-      GRIDCRAFT_FUZZ_STEPS: ${{ inputs.steps || '200' }}
+      GRIDCRAFT_FUZZ_SEEDS: ${{ inputs.seeds || (github.event_name == 'pull_request' && '20' || '200') }}
+      GRIDCRAFT_FUZZ_STEPS: ${{ inputs.steps || (github.event_name == 'pull_request' && '50' || '200') }}
       GRIDCRAFT_FUZZ_KEEP_GOING: "1"
       GRIDCRAFT_FUZZ_SHRINK: "1"
     steps:

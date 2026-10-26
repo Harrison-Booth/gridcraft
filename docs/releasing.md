@@ -288,8 +288,8 @@ row in `ATTRIBUTION.md` (`cargo xtask assets`).
 - `.github/workflows/freebsd.yml`: FreeBSD build + tests (manual run from `release`).
 - `.github/workflows/fuzz.yml` (nightly at 03:17 UTC, or run it by hand from the Actions tab): builds
   in release and soaks the command-sequence fuzzer at 200 seeds by 200 steps with
-  `GRIDCRAFT_FUZZ_KEEP_GOING` and `GRIDCRAFT_FUZZ_SHRINK`. It is not a required check and does not run
-  on pull requests. A failure fails that run only (never `main`) and uploads the `fuzz-failures`
+  `GRIDCRAFT_FUZZ_KEEP_GOING` and `GRIDCRAFT_FUZZ_SHRINK`. It is not a required check; a pull request that touches the workflow
+  or the fuzz harness runs it at 20 seeds by 50 steps. A failure fails that run only (never `main`) and uploads the `fuzz-failures`
   artifact: the full log, `failing-seeds.txt` and each failing seed's shrunk command sequence. Replay
   with the `GRIDCRAFT_FUZZ_SEED=<seed>` line in the run summary.
 
