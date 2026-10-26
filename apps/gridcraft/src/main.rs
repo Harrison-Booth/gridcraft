@@ -63,6 +63,7 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
+        self.0.recovery.finish();
         save_prefs(&self.0);
         // macOS (#117): end the process here, before eframe tears the window down. AccessKit's
         // macOS adapter subclasses the window's content view and restores its class on teardown;
@@ -320,6 +321,17 @@ fn main() -> eframe::Result<()> {
     app.after_engine(); // Show warnings from the sample.
     let control_port = control_port;
     load_prefs(&mut app);
+    if prefs_enabled() {
+        app.recovery.dir = config_dir().map(|d| d.join("recovery"));
+        // Workbooks a crash left unsaved come back before the files named on the command line.
+        let n = app.recovery.restore(&mut app.session);
+        if n > 0 {
+            app.message = Some((
+                "GridCraft".into(),
+                format!("GridCraft closed unexpectedly. {n} workbook(s) with unsaved changes were recovered: save them to keep them."),
+            ));
+        }
+    }
     // Files named on the command line (a double-click on Windows and Linux) open as File › Open
     // opens them: a password-protected one asks for its password, and errors are shown, not
     // only logged. Each replaces the untouched blank Book1, as a file opened from Finder does.

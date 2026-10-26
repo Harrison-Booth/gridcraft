@@ -33,6 +33,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+pub mod recover;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -319,6 +320,8 @@ pub struct SheetApp {
     pub autosave_job: Option<autosave::InFlight>,
     /// Failed AutoSaves in a row; each one doubles the wait before the next try (up to 64 s).
     pub autosave_failures: u32,
+    /// AutoRecover copies of workbooks with unsaved changes ([`recover`]).
+    pub recovery: recover::Recovery,
     pub grid: grid::GridState,
     pub perf: Perf,
     pub fonts_ready: bool,
@@ -415,6 +418,7 @@ impl SheetApp {
             control_rx: None,
             autosave_job: None,
             autosave_failures: 0,
+            recovery: Default::default(),
             grid: grid::GridState {
                 last_border: "bottom".into(),
                 last_fill: "#FFFF00".into(),
@@ -1490,6 +1494,7 @@ impl SheetApp {
         // Files read asynchronously (web file picker, dropped files).
         self.poll_async_opens();
         self.autosave(ctx);
+        self.recovery.tick(&self.session, ctx, now_ms());
         self.update_title(ctx);
         self.request_hidden_paint(ctx);
         // One window always shows a workbook, unless each workbook has a native window of its own

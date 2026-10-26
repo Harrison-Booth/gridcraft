@@ -21,6 +21,7 @@ pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
 pub mod record;
+pub mod recover;
 pub mod sample;
 pub mod selection;
 pub mod tables;
