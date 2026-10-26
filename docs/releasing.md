@@ -293,7 +293,7 @@ row in `ATTRIBUTION.md` (`cargo xtask assets`).
   artifact: the full log, `failing-seeds.txt` and each failing seed's shrunk command sequence. Replay
   with the `GRIDCRAFT_FUZZ_SEED=<seed>` line in the run summary.
 
-**Only the `release` branch builds installers.** No packaging workflow runs on `main` or pull
+**Only the `release` branch builds installers.** No installer build workflow runs on `main` or pull
 requests; every build job checks `github.ref == 'refs/heads/release'`, so a manual run from another
 branch is skipped. Only `packaging-lint.yml` (no build, no secrets) runs on `main` and PRs, besides
 the CI gate and the test-only `fuzz.yml` (nightly, and on PRs that touch it or the fuzz harness).
