@@ -244,11 +244,29 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             // the cell; a cell elsewhere (or on another sheet) gets a one-cell array.
             let selected = cx.sel.current();
             let range = if sheet == active_sheet && selected.contains(at) { selected } else { RangeRef::cell(at) };
+            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
+            // Excel forms no array from a constant: every cell of the selection takes the value.
+            if cell.formula.is_none() && !range.is_single() {
+                if range.count() > crate::fill::MAX_FILL_CELLS {
+                    return Err(EngineError::Other("That selection is too large to fill.".into()));
+                }
+                for c in range.iter() {
+                    let filled = input_to_cell(&input, sheet, c, &mut cx.wb)?;
+                    let sh = cx.sheet_mut(sheet)?;
+                    match filled {
+                        Some(f) => sh.set_cell(c, f),
+                        None => {
+                            sh.remove_cell(c);
+                        }
+                    }
+                    cx.touch(sheet, c);
+                }
+                return Ok(Json::Null);
+            }
             // A table header can't hold an array's value, and a table resizes under it.
             if !range.is_single() && cx.wb.sheet(sheet).is_some_and(|sh| sh.tables.iter().any(|t| t.range.intersects(&range))) {
                 return Err(EngineError::Other("Multi-cell array formulas aren't allowed in tables.".into()));
             }
-            let mut cell = input_to_cell(&input, sheet, range.start, &mut cx.wb)?.unwrap_or_default();
             if let Some(f) = cell.formula.as_mut() {
                 std::sync::Arc::make_mut(f).array = Some(range);
             }
@@ -2153,7 +2171,7 @@ mod tests {
     }
 
     #[test]
-    fn array_entering_a_constant_recalculates_readers_of_the_cleared_cells() {
+    fn array_entering_a_constant_recalculates_readers_of_the_cells_it_fills() {
         // Found by the command-sequence fuzzer (seeds 4, 1213): only the array's first cell was
         // marked changed, so formulas reading the cells it cleared kept their old values.
         let mut s = Session::new();
@@ -2162,8 +2180,13 @@ mod tests {
         s.execute("selection.set", json!({"active": "A1", "range": "A1:B1"})).unwrap();
         s.execute("cell.set", json!({"cell": "A1", "input": "7", "array": true})).unwrap();
         let sh = s.doc().unwrap().wb.active().unwrap();
-        assert_eq!(sh.value(CellRef::parse("B1").unwrap()), Value::Empty);
-        assert_eq!(sh.value(CellRef::parse("C1").unwrap()), Value::number(1.0));
+        // Excel fills both cells with the constant and forms no array.
+        for a in ["A1", "B1"] {
+            let c = sh.cell(CellRef::parse(a).unwrap()).unwrap();
+            assert_eq!(c.value, Value::number(7.0));
+            assert!(c.formula.is_none());
+        }
+        assert_eq!(sh.value(CellRef::parse("C1").unwrap()), Value::number(8.0));
 
         // The fuzzer's minimal repro on the budget sample.
         let mut s = Session::new();
@@ -2175,9 +2198,26 @@ mod tests {
     }
 
     #[test]
-    fn a_whole_column_array_clears_its_whole_area() {
-        // The clearing loop stopped after a million addresses, so content further down the
-        // column survived inside the array (and its readers weren't recalculated).
+    fn array_entering_a_formula_fills_every_cell_as_an_array() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A2", "input": "5"})).unwrap();
+        for (input, want) in [("=1", 1.0), ("=A2", 5.0)] {
+            s.execute("selection.set", json!({"active": "A1", "range": "A1:B1"})).unwrap();
+            s.execute("cell.set", json!({"cell": "A1", "input": input, "array": true})).unwrap();
+            let sh = s.doc().unwrap().wb.active().unwrap();
+            for a in ["A1", "B1"] {
+                assert_eq!(sh.value(CellRef::parse(a).unwrap()), Value::number(want), "{input} {a}");
+            }
+            let f = sh.cell(CellRef::parse("A1").unwrap()).and_then(|c| c.formula.clone()).unwrap();
+            assert_eq!(f.array, Some(RangeRef::parse("A1:B1").unwrap()));
+        }
+    }
+
+    #[test]
+    fn a_whole_column_constant_fills_its_whole_area() {
+        // The loop stopped after a million addresses, so cells further down the column kept
+        // their old content (and their readers weren't recalculated).
         let mut s = Session::new();
         s.new_workbook();
         s.execute("cell.set", json!({"cell": "D1048000", "input": "41"})).unwrap();
@@ -2185,9 +2225,9 @@ mod tests {
         s.execute("selection.set", json!({"active": "D1", "range": "D:D"})).unwrap();
         s.execute("cell.set", json!({"cell": "D1", "input": "1", "array": true})).unwrap();
         let sh = s.doc().unwrap().wb.active().unwrap();
-        assert_eq!(sh.value(CellRef::parse("D1048000").unwrap()), Value::Empty);
-        assert_eq!(sh.value(CellRef::parse("F1").unwrap()), Value::number(1.0));
-        assert_eq!(fully_recalculated(&s, "F1"), Value::number(1.0));
+        assert_eq!(sh.value(CellRef::parse("D1048000").unwrap()), Value::number(1.0));
+        assert_eq!(sh.value(CellRef::parse("F1").unwrap()), Value::number(2.0));
+        assert_eq!(fully_recalculated(&s, "F1"), Value::number(2.0));
     }
 
     #[test]
