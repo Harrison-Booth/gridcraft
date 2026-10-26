@@ -32,7 +32,7 @@ const WZ_DESCRIPTION: u16 = 0x0381;
 const FBSE_HEAD: usize = 36;
 /// Nesting of OfficeArt containers followed at most.
 const MAX_DEPTH: usize = 16;
-/// Pictures placed on one sheet at most (each placement walks the sheet's row heights).
+/// Pictures placed on one sheet at most.
 const MAX_PICTURES: usize = 2_000;
 
 /// One picture of the store, shared by every shape that shows it.
@@ -232,21 +232,41 @@ pub(super) fn collect(parts: &[&[u8]], out: &mut Vec<Placed>) {
     flush(shape, out);
 }
 
+/// Cumulative sizes: entry `i` is the distance from the start to line `i`, for `n` lines.
+fn offsets(n: u32, size: impl Fn(u32) -> f32) -> Vec<f64> {
+    let mut at = 0.0;
+    let mut out = vec![0.0];
+    for i in 0..n {
+        at += f64::from(size(i));
+        out.push(at);
+    }
+    out
+}
+
 /// Adds the pictures to the sheet, sized from the cells they cover. Returns how many it placed.
 pub(super) fn place(shapes: &[Placed], blips: &BlipStore, sheet: &mut Sheet) -> usize {
+    if shapes.is_empty() {
+        return 0;
+    }
+    // A BIFF8 anchor names a column up to 255 and a row up to 65,535; the positions are summed
+    // once, not per picture.
+    let cols = offsets(256, |c| sheet.col_width(c));
+    let rows = offsets(65_536, |r| sheet.row_height(r));
+    let left = |col: u32| cols.get(col as usize).copied().unwrap_or(0.0);
+    let top = |row: u32| rows.get(row as usize).copied().unwrap_or(0.0);
     let mut placed = 0;
     for p in shapes {
         let Some(Some(blip)) = (p.pib as usize).checked_sub(1).and_then(|i| blips.get(i)) else { continue };
         let [flags, col_l, dx_l, row_t, dy_t, col_r, dx_r, row_b, dy_b] = p.anchor;
         let (col_l, col_r) = (u32::from(col_l.min(255)), u32::from(col_r.min(255)));
         let (row_t, row_b) = (u32::from(row_t), u32::from(row_b));
-        let x = |col: u32, dx: u16| sheet.col_left(col) + f64::from(dx.min(1023)) / 1024.0 * f64::from(sheet.col_width(col));
-        let y = |row: u32, dy: u16| sheet.row_top(row) + f64::from(dy.min(255)) / 256.0 * f64::from(sheet.row_height(row));
+        let x = |col: u32, dx: u16| left(col) + f64::from(dx.min(1023)) / 1024.0 * f64::from(sheet.col_width(col));
+        let y = |row: u32, dy: u16| top(row) + f64::from(dy.min(255)) / 256.0 * f64::from(sheet.row_height(row));
         let (x1, y1, x2, y2) = (x(col_l, dx_l), y(row_t, dy_t), x(col_r, dx_r), y(row_b, dy_b));
         let anchor = Anchor {
             cell: CellRef::new(row_t, col_l),
-            dx: (x1 - sheet.col_left(col_l)) as f32,
-            dy: (y1 - sheet.row_top(row_t)) as f32,
+            dx: (x1 - left(col_l)) as f32,
+            dy: (y1 - top(row_t)) as f32,
             width: (x2 - x1).max(0.0) as f32,
             height: (y2 - y1).max(0.0) as f32,
             // Excel writes 0 (move and size with cells), 2 (move but don't size) and 3 (don't
