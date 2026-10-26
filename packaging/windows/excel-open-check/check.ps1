@@ -33,13 +33,14 @@ $probe = {
     param($path)
     $x = $null
     try {
-        $x = New-Object -ComObject Excel.Application
-        $x.Visible = $false
-        # Report this instance's process id so the caller can stop exactly it and nothing else.
+        # Compiled before Excel starts, so nothing between the start and the PID line can fail or stall on it.
         Add-Type -Namespace Win -Name U -MemberDefinition '[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);'
+        $x = New-Object -ComObject Excel.Application
+        # Report this instance's process id so the caller can stop exactly it and nothing else.
         $xlPid = [uint32]0
         [void][Win.U]::GetWindowThreadProcessId([IntPtr]$x.Hwnd, [ref]$xlPid)
         "PID`t$xlPid"
+        $x.Visible = $false
         $x.DisplayAlerts = $false
         $x.AutomationSecurity = 3 # msoAutomationSecurityForceDisable: no VBA macros (XLM is screened by Test-HasXlm)
         # Named arguments: PowerShell can't skip the optional ones in between positionally.
@@ -51,6 +52,7 @@ $probe = {
     } catch {
         "FAIL`t" + ($_.Exception.Message -replace '\s+', ' ')
     } finally {
+        # Also covers a failure before the PID line: this process's own instance is quit, no other is touched.
         if ($x) { try { $x.Quit() } catch {} }
     }
 }
