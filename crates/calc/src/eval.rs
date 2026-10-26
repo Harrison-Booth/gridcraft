@@ -48,6 +48,21 @@ enum Tail {
     Call(Arc<Lambda>, Vec<(String, Ev)>),
 }
 
+/// A tail call can pass a closure that captures the previous one, thousands deep. Releasing the
+/// chain is a loop, not a recursion, so it cannot overflow the native stack.
+impl Drop for Lambda {
+    fn drop(&mut self) {
+        let mut pending = std::mem::take(&mut self.env);
+        while let Some((_, ev)) = pending.pop() {
+            if let Ev::L(l) = ev
+                && let Ok(mut inner) = Arc::try_unwrap(l)
+            {
+                pending.append(&mut inner.env);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Ev {
     V(Value),
@@ -628,6 +643,17 @@ impl<'h> Evaluator<'h> {
         }
     }
 
+    /// `IF` with an array condition: element-wise.
+    fn if_elementwise(&mut self, arr: &Array, args: &[Expr]) -> Ev {
+        let t = self.arg_val(args, 1).unwrap_or(Value::Bool(true));
+        let f = if args.len() > 2 { self.arg_val(args, 2).unwrap_or(Value::Bool(false)) } else { Value::Bool(false) };
+        Ev::V(zip3(arr, &t, &f, |c, t, f| match c.to_bool() {
+            Ok(true) => t.clone(),
+            Ok(false) => f.clone(),
+            Err(e) => Value::Error(e),
+        }))
+    }
+
     fn call(&mut self, name: &str, args: &[Expr]) -> Ev {
         match name {
             "IF" => {
@@ -636,14 +662,7 @@ impl<'h> Evaluator<'h> {
                 }
                 let c = self.arg_val(args, 0).unwrap_or_default();
                 if let Value::Array(arr) = &c {
-                    // Array condition: element-wise.
-                    let t = self.arg_val(args, 1).unwrap_or(Value::Bool(true));
-                    let f = if args.len() > 2 { self.arg_val(args, 2).unwrap_or(Value::Bool(false)) } else { Value::Bool(false) };
-                    return Ev::V(zip3(arr, &t, &f, |c, t, f| match c.to_bool() {
-                        Ok(true) => t.clone(),
-                        Ok(false) => f.clone(),
-                        Err(e) => Value::Error(e),
-                    }));
+                    return self.if_elementwise(arr, args);
                 }
                 match c.to_bool() {
                     Ok(true) => match args.get(1) {
@@ -1070,9 +1089,8 @@ impl<'h> Evaluator<'h> {
             Expr::Paren(x) => self.tail_step(x),
             Expr::Call(name, args) if name == "IF" && (2..=3).contains(&args.len()) => {
                 let c = self.arg_val(args, 0).unwrap_or_default();
-                // An array condition picks element-wise, which evaluates `e` whole.
-                if matches!(c, Value::Array(_)) {
-                    return Tail::Done(self.eval(e));
+                if let Value::Array(arr) = &c {
+                    return Tail::Done(self.if_elementwise(arr, args));
                 }
                 match c.to_bool() {
                     Ok(true) => self.tail_step_branch(args.get(1)),

@@ -1097,7 +1097,7 @@ fn a_recursive_lambda_stops_at_the_same_call_on_any_stack_size() {
                     comment: String::new(),
                     hidden: false,
                 });
-                // A tail call reuses its frame, so the tail chain is bounded by `MAX_TAIL_CALLS`, as in Excel
+                // W's call to `f` is a tail call, so a wrapped call level costs one call in progress, not two. A tail call reuses its frame, so the tail chain is bounded by `MAX_TAIL_CALLS`, as in Excel
                 // (5,459 ok, 5,460 #NUM!). F(F,n) otherwise has n + 1 calls in progress at its deepest; W adds
                 // one more call per step.
                 let tail = |n: u32| format!("=LET(F,LAMBDA(me,n,IF(n=0,0,me(me,n-1))),F(F,{n}))");
@@ -1109,7 +1109,7 @@ fn a_recursive_lambda_stops_at_the_same_call_on_any_stack_size() {
             .expect("recursion must not overflow the stack")
     };
     let small = run(1 << 20);
-    assert_eq!(small, [Value::Number(0.0), Value::Error(CellError::Num), Value::Number(69.0), Value::Error(CellError::Num), Value::Number(131.0)]);
+    assert_eq!(small, [Value::Number(0.0), Value::Error(CellError::Num), Value::Number(69.0), Value::Number(70.0), Value::Number(131.0)]);
     assert_eq!(run(64 << 20), small);
 }
 
@@ -1133,7 +1133,9 @@ fn a_tail_recursive_lambda_reaches_excels_depth_on_a_small_stack() {
                 let paren = "=LET(F,LAMBDA(me,n,IF(n=0,7,(me(me,n-1)))),F(F,5000))".to_string();
                 let invoke = "=LET(F,LAMBDA(me,n,IF(n=0,7,LAMBDA(a,b,me(me,a))(n-1,0))),F(F,2000))".to_string();
                 let endless = "=LET(f,LAMBDA(g,x,g(g,x)),f(f,1))".to_string();
-                [tail(5000), tail(5459), tail(5460), tail(10000), paren, invoke, endless, "=TAILN(5000)".to_string()]
+                // Each call passes a closure that captures the last, 5,000 deep: releasing them must not recurse.
+                let closures = "=LET(F,LAMBDA(me,n,acc,IF(n=0,0,me(me,n-1,LAMBDA(x,acc)))),F(F,5000,0))".to_string();
+                [tail(5000), tail(5459), tail(5460), tail(10000), paren, invoke, endless, "=TAILN(5000)".to_string(), closures]
                     .map(|f| crate::evaluate(&wb, 0, c("B1"), &f))
             })
             .expect("spawn")
@@ -1144,7 +1146,17 @@ fn a_tail_recursive_lambda_reaches_excels_depth_on_a_small_stack() {
     let small = run(1 << 20);
     assert_eq!(
         small,
-        [Value::Number(0.0), Value::Number(0.0), num.clone(), num.clone(), Value::Number(7.0), Value::Number(7.0), num, Value::Number(0.0)]
+        [
+            Value::Number(0.0),
+            Value::Number(0.0),
+            num.clone(),
+            num.clone(),
+            Value::Number(7.0),
+            Value::Number(7.0),
+            num,
+            Value::Number(0.0),
+            Value::Number(0.0)
+        ]
     );
     assert_eq!(run(64 << 20), small);
 }
