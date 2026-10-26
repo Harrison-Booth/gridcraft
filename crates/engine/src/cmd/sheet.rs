@@ -36,7 +36,7 @@ pub fn specs() -> Vec<CommandSpec> {
             p,
             Axis::Cols
         )),
-        cmd!("sheet.moveColumns", "Move Columns", [], None, "{cols?: \"B:C\", before: zero-based column index}", has_doc, move_columns),
+        cmd!("sheet.moveColumns", "Move Columns", [], None, "{cols?: \"B:C\", before: zero-based column index, count?}", has_doc, move_columns),
         cmd!("home.insertCells", "Insert Cells…", ["Home", "Cells", "Insert"], None, "{range?, shift: right|down|row|column}", has_doc, insert_cells),
         cmd!(
             "home.insertCopiedCells",

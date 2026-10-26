@@ -5155,6 +5155,8 @@ fn documented_keys_reads_the_words_in_braces() {
     assert_eq!(documented_keys(r#"{a?: "skip me", b_2?: bool} → {c} then prose"#), ["a", "b_2", "bool", "c"]);
     assert_eq!(documented_keys("{} no params"), Vec::<&str>::new());
     assert_eq!(documented_keys("{x?: `not this`}"), ["x"]);
+    // An escaped quote does not end the quoted text: the keys after it still count.
+    assert_eq!(documented_keys(r#"{q?: "\"", after?}"#), ["q", "after"]);
     // Every key a command's doc lists passes, whatever the doc's shape.
     for spec in crate::cmd::command_specs() {
         let params: serde_json::Map<String, serde_json::Value> =

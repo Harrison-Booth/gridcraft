@@ -89,29 +89,55 @@ pub fn journal_params(params: &Json) -> Json {
     }
 }
 
-/// Params that choose where a command acts. The shared target helpers read them for commands whose
-/// params doc names only `range`, so [`check_params`] always lets them through.
-const TARGET_KEYS: &[&str] = &["range", "cell", "sheet", "window", "doc"];
+/// Params that choose where a command acts, and the alias of `mode` that every object command
+/// reads. The shared helpers read them for commands whose params doc names only `range` or `mode`,
+/// so [`check_params`] always lets them through.
+const SHARED_KEYS: &[&str] = &["range", "cell", "sheet", "window", "doc", "anchorMode"];
 
-/// Commands [`check_params`] leaves alone: they copy their params into another call, or read keys
-/// by a name the params doc cannot list.
+/// Commands [`check_params`] leaves alone: they copy their params into another command or read
+/// them in a way a params doc cannot list (found by listing the commands whose code uses `p`
+/// other than to read a named key).
 const FREE_FORM_PARAMS: &[&str] = &[
+    "data.analysisToolPak",
+    "data.removeDuplicates",
+    "data.textToColumns",
     "data.flashFill",
+    "edit.paste",
+    "edit.pasteSpecial",
+    "edit.find",
     "chart.changeType",
     "arrange.group",
     "table.removeDuplicates",
+    "automate.recordActions",
+    "automate.runScript",
+    "pageLayout.themeColors",
+    "pageLayout.themeFonts",
+    "pageLayout.background",
+    "home.drawBorder",
+    "formulas.recentlyUsed",
     "formulas.moreFunctions",
+    "file.save",
+    "file.saveAs",
     "home.doubleUnderline",
+    "home.formatCells",
+    "formulas.selectPrecedents",
+    "formulas.selectDependents",
+    "home.formatAsTable",
     "insert.recommendedCharts",
     "insert.textBox",
-    "review.newNote",
-    "review.newComment",
+    "table.summarizePivot",
+    "pivot.grandTotals",
     "pivot.subtotals",
+    "pivot.refresh",
+    "data.refreshAll",
+    "pageLayout.pageSetup",
+    "data.solver",
+    "data.solverReport",
 ];
 
 /// Every word inside the `{…}` groups of a params doc outside quotes: the names of the params it lists.
 pub(crate) fn documented_keys(doc: &str) -> Vec<&str> {
-    let (mut keys, mut depth, mut quote, mut start) = (Vec::new(), 0usize, None, None);
+    let (mut keys, mut depth, mut quote, mut start, mut escaped) = (Vec::new(), 0usize, None, None, false);
     for (i, c) in doc.char_indices().chain(std::iter::once((doc.len(), ' '))) {
         if let Some(from) = start {
             if c.is_alphanumeric() || c == '_' {
@@ -121,6 +147,8 @@ pub(crate) fn documented_keys(doc: &str) -> Vec<&str> {
             start = None;
         }
         match (quote, c) {
+            (Some(_), _) if escaped => escaped = false,
+            (Some(_), '\\') => escaped = true,
             (Some(q), c) if c == q => quote = None,
             (Some(_), _) => {}
             (None, '"' | '`') => quote = Some(c),
@@ -144,7 +172,7 @@ pub fn check_params(id: &str, params: &Json) -> Result<()> {
         return Ok(());
     }
     let known = documented_keys(spec.params);
-    let mut unknown: Vec<&str> = given.keys().map(String::as_str).filter(|k| !TARGET_KEYS.contains(k) && !known.contains(k)).collect();
+    let mut unknown: Vec<&str> = given.keys().map(String::as_str).filter(|k| !SHARED_KEYS.contains(k) && !known.contains(k)).collect();
     if unknown.is_empty() {
         return Ok(());
     }
