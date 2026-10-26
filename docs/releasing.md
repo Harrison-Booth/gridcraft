@@ -286,6 +286,12 @@ row in `ATTRIBUTION.md` (`cargo xtask assets`).
 - `.github/workflows/windows-arm64.yml` (on `release` pushes): packages ARM64 on x64, then
   installs, runs and uninstalls the MSI on a Windows 11 ARM64 runner.
 - `.github/workflows/freebsd.yml`: FreeBSD build + tests (manual run from `release`).
+- `.github/workflows/fuzz.yml` (nightly at 03:17 UTC, or run it by hand from the Actions tab): builds
+  in release and soaks the command-sequence fuzzer at 200 seeds by 200 steps with
+  `GRIDCRAFT_FUZZ_KEEP_GOING` and `GRIDCRAFT_FUZZ_SHRINK`. It is not a required check and does not run
+  on pull requests. A failure fails that run only (never `main`) and uploads the `fuzz-failures`
+  artifact: the full log, `failing-seeds.txt` and each failing seed's shrunk command sequence. Replay
+  with the `GRIDCRAFT_FUZZ_SEED=<seed>` line in the run summary.
 
 **Only the `release` branch builds.** No build workflow runs on `main` or pull requests; every
 build job checks `github.ref == 'refs/heads/release'`, so a manual run from another branch is
