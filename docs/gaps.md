@@ -1,6 +1,6 @@
 # Gaps
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-23 · **Change:** minor (§7: `.xls` import reads cell formatting, conditional formats and data validation; §8: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-26 · **Change:** minor (§7: `.xls` import reads pictures, cell formatting, conditional formats and data validation; §8: PivotTable Show Details) · **Target:** Microsoft Excel (Microsoft 365)
 
 Every known shortfall against Excel, one entry each, ranked by user impact (what blocks someone
 using GridCraft for real work first). This is the work list: pick from the top, check the open
@@ -73,13 +73,13 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 7. Legacy `.xls` only partly read; encrypted workbooks can't be saved with a password (FF)
 - **Evidence:** #121: Excel 97-2003 (BIFF8) `.xls` files now open (values, formulas, number
   formats, merges, sizes, names, cell formatting (fonts, fills, borders, alignment), conditional
-  formats and data validation); exact theme colours (XFExt), charts, pictures, comments and BIFF5 files are not read, and `.xls` is never written. Password-encrypted
+  formats, data validation, notes, hyperlinks, frozen panes and pictures); exact theme colours (XFExt), charts, shapes, metafile pictures and BIFF5 files are not read, and `.xls` is never written. Password-encrypted
   `.xlsx` workbooks (Agile and Standard encryption) open with their password since #11, but are
   saved without it: GridCraft can't write an encrypted file yet. Encrypted `.xls` (FILEPASS) and
   RC4-encrypted files are still refused with a message.
 - **Impact:** common in finance, government and anything older than 2007; encrypted files are
   routine in business.
-- **Estimate:** 12–18 h (`.xls` objects 8–12, encryption 4–6). [file-format-parity.md](file-format-parity.md)
+- **Estimate:** 9–14 h (`.xls` charts and shapes 5–8, encryption 4–6). [file-format-parity.md](file-format-parity.md)
 
 ### 8. PivotTables: no slicers, calculated items, PivotCharts; unverified in Excel (F)
 - **Evidence:** `parity-checklist.md` missing `insert.slicer`, `insert.timeline`,
@@ -188,6 +188,7 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 | 2026-10-22 | minor | §20: a native window per workbook window, New Window on the same workbook and Arrange All on the desktop; left: Arrange All across monitors, the web's one window, pen pressure (estimate 10–14 h → 5–8 h) |
 | 2026-10-20 | minor | §11: the Japanese catalog covers the dialogs, messages and menus — 943 keys (~43%), matching the pt-BR coverage; a test keeps the two catalogs in step |
 | 2026-10-17 | minor | §6: the five reports it tracked are closed and their PRs merged (#57, #133, #139, #140, #134; PRs #148, #155, #156, #157); the entry stays open for §15's oracle suite |
+| 2026-10-26 | minor | §7: `.xls` import reads pictures (PNG, JPEG, TIFF, bitmaps) with their place, size, move/size setting and alternative text (#121) |
 | 2026-10-15 | minor | §7: `.xls` import reads conditional formats and data validation (#121) |
 | 2026-10-15 | minor | §6: Maximum Iterations and Maximum Change in File › Options › Formulas; dropped the stale "no Options dialog yet" |
 | 2026-10-15 | minor | §13: Solver prepares reports before committing the solution, model and report sheets together; report refusal preserves the workbook and Undo/Redo (#1050) |

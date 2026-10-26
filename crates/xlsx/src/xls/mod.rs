@@ -8,12 +8,13 @@
 //! system, merged cells, column widths, row heights, defined names, print areas, print titles,
 //! the calculation settings (mode, iteration, precision as displayed), conditional formats,
 //! data validation, cell notes, hyperlinks, frozen panes and the sheet display options (see
-//! `objects`). Everything else (charts, pictures, macros) is skipped with a warning.
+//! `objects`) and pictures (PNG, JPEG, TIFF and bitmaps). Everything else (charts, shapes, macros) is skipped with a warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
 
 mod formula;
 mod ftab;
 mod objects;
+mod pictures;
 mod records;
 mod rules;
 mod styles;
@@ -143,6 +144,8 @@ struct Globals {
     links: Links,
     names: Vec<Lbl>,
     precision_as_displayed: bool,
+    /// The pictures of the workbook (MsoDrawingGroup).
+    blips: pictures::BlipStore,
 }
 
 /// Reads an Excel 97-2003 workbook. Inspect the report's warnings for what was skipped.
@@ -197,6 +200,11 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
         if wb.sheets.is_empty() {
             wb.calc = calc;
         }
+        // Object ids are unique across the workbook.
+        let first_id = wb.next_object_id();
+        for (img, id) in sheet.images.iter_mut().zip(first_id..) {
+            img.id = id;
+        }
         model_index.push(Some(wb.sheets.len()));
         wb.sheets.push(Arc::new(sheet));
     }
@@ -209,7 +217,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, conditional formats, data validation, merged cells, column widths, row heights, defined names, notes, hyperlinks and frozen panes were read. Charts, pictures and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, conditional formats, data validation, merged cells, column widths, row heights, defined names, notes, hyperlinks, frozen panes and pictures were read. Charts, shapes and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
@@ -285,6 +293,7 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
             0x0293 => g.styles.style(&mut c),
             0x088D => rules::dxf_format(&mut c, &mut g.dxf_formats),
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
+            0x00EB => g.blips = pictures::blip_store(&rec.parts, budget)?,
             0x01AE => {
                 let _ctab = c.u16()?;
                 let cch = c.u16()?;
@@ -598,7 +607,7 @@ fn worksheet(
     resolve_pending(&mut st, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
     std::mem::take(&mut st.rules).finish(&g.links, &mut st.sheet, report);
-    std::mem::take(&mut st.objects).finish(&mut st.sheet, report);
+    std::mem::take(&mut st.objects).finish(&mut st.sheet, &g.blips, report);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
     }

@@ -5,7 +5,9 @@
 //!   in the `Continue` records after it) and Note (2.4.179, the cell, author and shown flag);
 //! - hyperlinks: HLink (2.4.140) holding a Hyperlink Object ([MS-OSHARED] 2.3.7.1) with a URL
 //!   or file moniker and/or a location in the workbook, and HLinkTooltip (2.4.141);
-//! - panes: Window2 (2.4.346, the display flags and whether panes are frozen) and Pane (2.4.189).
+//! - panes: Window2 (2.4.346, the display flags and whether panes are frozen) and Pane (2.4.189);
+//! - pictures: the shapes of MsoDrawing (2.4.157), read by `pictures`; their Obj records only
+//!   tell how many pictures the sheet has.
 //!
 //! The records are gathered while the substream is read and applied when it ends, so their
 //! order in the file doesn't matter. A malformed note or hyperlink is skipped with a warning;
@@ -17,6 +19,7 @@ use gridcraft_core::{CellRef, MAX_ROWS, RangeRef};
 use gridcraft_model::{Comment, Hyperlink, Sheet, SheetViewMode};
 
 use super::Budget;
+use super::pictures::{self, BlipStore};
 use super::records::{Cursor, Record};
 use crate::{IoError, ReadReport};
 
@@ -46,6 +49,8 @@ const MAX_ANTI: usize = 64;
 
 /// FtCmo.ot of a note ([MS-XLS] 2.5.143).
 const OT_NOTE: u16 = 0x0019;
+/// FtCmo.ot of a picture.
+const OT_PICTURE: u16 = 0x0008;
 /// CLSID_URLMoniker {79EAC9E0-BAF9-11CE-8C82-00AA004BA90B} as stored.
 const URL_MONIKER: [u8; 16] = [0xE0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B];
 /// CLSID_FileMoniker {00000303-0000-0000-C000-000000000046} as stored.
@@ -76,6 +81,9 @@ pub(super) struct Objects {
     /// Index in `links` of the last link for each range, for the tooltips that follow.
     link_at: HashMap<RangeRef, usize>,
     drawing: bool,
+    pictures: Vec<pictures::Placed>,
+    /// Obj records that are pictures, to tell when one couldn't be read.
+    picture_objs: usize,
     any_object: bool,
     other_objects: bool,
     bad_notes: bool,
@@ -224,7 +232,10 @@ impl Objects {
     pub(super) fn record(&mut self, rec: &Record<'_>, budget: &mut Budget) -> Result<(), IoError> {
         let mut c = Cursor::new(&rec.parts);
         match rec.id {
-            MSO_DRAWING => self.drawing = true,
+            MSO_DRAWING => {
+                self.drawing = true;
+                pictures::collect(&rec.parts, &mut self.pictures);
+            }
             OBJ => {
                 self.any_object = true;
                 self.note_obj = None;
@@ -232,6 +243,7 @@ impl Objects {
                 let cmo = (|| Ok::<_, IoError>((c.u16()?, c.u16()?, c.u16()?, c.u16()?)))();
                 match cmo {
                     Ok((0x0015, _, OT_NOTE, id)) => self.note_obj = Some(id),
+                    Ok((0x0015, _, OT_PICTURE, _)) => self.picture_objs += 1,
                     _ => self.other_objects = true,
                 }
             }
@@ -308,7 +320,7 @@ impl Objects {
     }
 
     /// Applies what was read to the sheet.
-    pub(super) fn finish(self, sheet: &mut Sheet, report: &mut ReadReport) {
+    pub(super) fn finish(self, sheet: &mut Sheet, blips: &BlipStore, report: &mut ReadReport) {
         for n in self.notes {
             let raw = self.texts.get(&n.obj).map_or("", String::as_str);
             let text = note_text(raw, &n.author);
@@ -374,9 +386,13 @@ impl Objects {
         if self.bad_links {
             report.warn("Some hyperlinks in this .xls file could not be read and were skipped.");
         }
-        // Notes are drawing objects too: warn only for the other kinds.
+        let placed = pictures::place(&self.pictures, blips, sheet);
+        if self.picture_objs > placed {
+            report.warn("Some pictures in this .xls file could not be read (metafile pictures are not supported) and were skipped.");
+        }
+        // Notes and pictures are drawing objects too: warn only for the other kinds.
         if self.other_objects || (self.drawing && !self.any_object) {
-            report.warn("Pictures, charts and shapes in .xls files are not imported yet.");
+            report.warn("Charts and shapes in .xls files are not imported yet.");
         }
     }
 }
