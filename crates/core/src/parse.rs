@@ -644,6 +644,9 @@ mod tests {
             assert_eq!(r.value, Value::Number(n), "{text}");
             assert_eq!(r.format, None, "{text}");
         }
+        // Excel keeps the scientific format a typed exponent gets, euro sign or not.
+        assert_eq!(p("1e3€").value, Value::Number(1000.0));
+        assert_eq!(p("1e3€").format, Some("0.00E+00"));
         for text in ["65,00€", "£5", "¥5", "65.00€%", "5 $", "12€3"] {
             assert_eq!(p(text).value, Value::text(text), "{text}");
         }

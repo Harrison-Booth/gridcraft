@@ -333,13 +333,22 @@ pub fn ignore_errors(list: &mut Vec<IgnoredError>, range: RangeRef, kinds: u16) 
     if kinds == 0 {
         return;
     }
+    if !list.iter().any(|e| e.kinds == kinds && e.ranges.iter().any(|r| r.contains_range(&range))) {
+        add_ranges(list, kinds, [range]);
+    }
+}
+
+/// Adds `ranges` to the record for `kinds` without checking for duplicates, so reading a file
+/// with thousands of ranges stays linear.
+pub fn add_ranges(list: &mut Vec<IgnoredError>, kinds: u16, ranges: impl IntoIterator<Item = RangeRef>) {
+    let kinds = kinds & error_rule::ALL;
+    let mut ranges = ranges.into_iter().peekable();
+    if kinds == 0 || ranges.peek().is_none() {
+        return;
+    }
     match list.iter_mut().find(|e| e.kinds == kinds) {
-        Some(e) => {
-            if !e.ranges.iter().any(|r| r.contains_range(&range)) {
-                e.ranges.push(range);
-            }
-        }
-        None => list.push(IgnoredError { ranges: vec![range], kinds }),
+        Some(e) => e.ranges.extend(ranges),
+        None => list.push(IgnoredError { ranges: ranges.collect(), kinds }),
     }
 }
 
@@ -355,12 +364,8 @@ pub fn unignore_errors(list: &mut Vec<IgnoredError>, range: RangeRef, kinds: u16
         let kept = e.kinds & !kinds;
         for r in &e.ranges {
             // Outside `range` the rules stay as they were; inside, only those not being cleared.
-            for piece in range_minus(*r, range) {
-                ignore_errors(&mut out, piece, e.kinds);
-            }
-            if let Some(inside) = r.intersection(&range) {
-                ignore_errors(&mut out, inside, kept);
-            }
+            add_ranges(&mut out, e.kinds, range_minus(*r, range));
+            add_ranges(&mut out, kept, r.intersection(&range));
         }
     }
     *list = out;

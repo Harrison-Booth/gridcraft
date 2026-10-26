@@ -794,7 +794,7 @@ fn kinds_param(p: &Json, default: u16) -> Result<u16> {
     let names: Vec<&str> = match p.get("kinds") {
         None | Some(Json::Null) => return Ok(default),
         Some(Json::String(n)) => vec![n.as_str()],
-        Some(Json::Array(a)) => a.iter().filter_map(Json::as_str).collect(),
+        Some(Json::Array(a)) => a.iter().map(|n| n.as_str().ok_or_else(|| bad("kinds", "expected rule names (text)"))).collect::<Result<_>>()?,
         Some(_) => return Err(bad("kinds", "expected a rule name or a list of rule names")),
     };
     let mut mask = 0;

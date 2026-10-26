@@ -4729,6 +4729,8 @@ fn ignore_error_is_per_cell_and_rule_and_forgotten_on_edit() {
         ])
     );
     assert!(s.execute("formulas.ignoreError", json!({"range": "A1", "kinds": ["nonsense"]})).is_err());
+    assert!(s.execute("formulas.ignoreError", json!({"range": "A1", "kinds": ["evalError", 4]})).is_err());
+    assert!(s.execute("formulas.ignoreError", json!({"range": "A1", "kinds": 4})).is_err());
     // Another rule on the same cells is its own record; the same rule on more cells joins one.
     s.execute("formulas.ignoreError", json!({"range": "A3"})).unwrap();
     assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A1:A2", "A3"]));
