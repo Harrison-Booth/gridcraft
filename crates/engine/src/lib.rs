@@ -6,6 +6,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod autosave;
 pub mod catalog;
 pub mod cf;
 mod chart_svg;
@@ -20,6 +21,7 @@ pub mod paper;
 pub mod pivot;
 pub mod pivot_calc;
 pub mod record;
+pub mod recover;
 pub mod sample;
 pub mod selection;
 pub mod tables;

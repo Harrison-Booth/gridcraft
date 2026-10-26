@@ -101,6 +101,9 @@ No alpha blockers: every core workflow passes the [alpha gate](roadmap.md#alpha-
 ### 10. Crashes and freezes reported from the field (S)
 - **Evidence:** #120 (Intel UHD crash on Windows), #117 (error on close, macOS), #166 (freeze opening
   from Finder; PRs #164, #167), #76 (flashing on Windows 11), #130 (caught panic in table styles).
+- AutoRecover (10-26): workbooks with unsaved changes, never-saved ones included, are copied to a
+  recovery folder every 10 s and reopened after a crash or kill; the crash/kill soak is a test. Not yet
+  verified against Excel's Document Recovery pane; the field crashes above remain.
 - **Estimate:** 8–12 h plus an autosave/recovery soak.
 
 ## After beta
