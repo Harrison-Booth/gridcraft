@@ -68,3 +68,13 @@ fn whole_column_borders_reach_blank_cells_of_styled_rows_and_leave_inner_ends_al
     let b2 = border_of(&s, "B2");
     assert!(b2.top.style == Default::default() && b2.left.style != Default::default());
 }
+
+#[test]
+fn whole_row_none_clears_the_facing_edge_of_a_blank_cell_that_inherits_it_from_a_column() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("home.borders", json!({"preset": "all", "range": "B:B"})).unwrap();
+    assert!(border_of(&s, "B4").bottom.style != Default::default());
+    s.execute("home.borders", json!({"preset": "none", "range": "5:5"})).unwrap();
+    assert!(border_of(&s, "B4").bottom.style == Default::default());
+}

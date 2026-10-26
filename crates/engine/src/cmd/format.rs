@@ -586,8 +586,18 @@ fn borders(s: &mut Session, p: &Json) -> Result<Json> {
                             RangeRef::new(CellRef::new(n.row, r.start.col), CellRef::new(n.row, r.end.col))
                         };
                         let line = if cols { n.col } else { n.row };
-                        let existing: Vec<CellRef> =
+                        let mut existing: Vec<CellRef> =
                             cx.wb.sheet(sheet).map(|sh| sh.cells.iter_range(strip).map(|(c, _)| c).collect()).unwrap_or_default();
+                        // Blank neighbours inherit their edges from a styled perpendicular line.
+                        if let Some(sh) = cx.wb.sheet(sheet) {
+                            if cols {
+                                existing.extend(sh.rows.iter().filter(|(_, i)| i.style.is_some()).map(|(row, _)| CellRef::new(*row, n.col)));
+                            } else {
+                                existing.extend(sh.cols.iter().filter(|(_, i)| i.style.is_some()).map(|(col, _)| CellRef::new(n.row, *col)));
+                            }
+                        }
+                        existing.sort_unstable();
+                        existing.dedup();
                         for c in existing {
                             let st = cx.wb.sheet(sheet).map(|sh| sh.style_id(c)).unwrap_or_default();
                             let new = cx.wb.styles.derive(st, |s| facing(s, dr, dc));
