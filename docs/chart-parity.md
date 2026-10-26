@@ -74,7 +74,10 @@ Excel writes a workbook-scoped name as `[0]!Name` in `<c:f>`. GridCraft reads it
 name and writes it back with `[0]!`; a sheet-scoped name is written `Sheet!Name`. Excel needs the
 qualifier: with a bare name in `<c:f>` it draws the whole chart blank, without a repair prompt
 (observed in Excel for Windows, Microsoft 365). External books (`[1]Sheet1!…`) are kept as they
-are (#1686). Such series get no `numCache`/`strCache` on save (#1690).
+are (#1686). Series through a name are saved with the same `numCache`/`strCache` as the plain
+reference, `formatCode` from the first cell (#1690), and the chart reads number formats and date
+categories through the name (#1689). The file writer can't calculate, so a name whose size comes
+from a calculation (`OFFSET(…,COUNTA(…))`) is saved without a cache; Excel recalculates it on open.
 
 ## Work (40–60 h)
 
