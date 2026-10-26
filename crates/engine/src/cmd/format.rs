@@ -588,9 +588,20 @@ pub(crate) fn merge_json(mut base: Json, patch: &Json) -> Json {
 }
 
 fn halign(s: &mut Session, p: &Json, a: HAlign) -> Result<Json> {
-    // Clicking the active alignment again returns to General.
+    // Clicking the active alignment again returns to General; `on: false` does so only while it is the active one.
     let cur = active_style(s)?.align.h;
-    let a = if cur == a && p.get("on").is_none() { HAlign::General } else { a };
+    let toggled = if cur == a { HAlign::General } else { a };
+    let a = match p.get("on").map(Json::as_bool) {
+        None => toggled,
+        Some(Some(false)) => {
+            if cur == a {
+                HAlign::General
+            } else {
+                cur
+            }
+        }
+        Some(_) => a,
+    };
     apply_style(s, p, |st| st.align.h = a)
 }
 

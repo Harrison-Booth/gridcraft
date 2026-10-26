@@ -103,7 +103,6 @@ const FREE_FORM_PARAMS: &[&str] = &[
     "data.textToColumns",
     "data.flashFill",
     "edit.paste",
-    "edit.pasteSpecial",
     "chart.changeType",
     "arrange.group",
     "table.removeDuplicates",
@@ -134,15 +133,20 @@ const FREE_FORM_PARAMS: &[&str] = &[
     "data.solverReport",
 ];
 
-/// Every word inside the `{…}` groups of a params doc outside quotes: the names of the params it lists.
+/// The names of the params a params doc lists: the words that start a `{…}` group or follow a comma
+/// directly inside one (outside quotes, brackets and parentheses). The words of a value, such as
+/// `index` in `before?: index`, are not names.
 pub(crate) fn documented_keys(doc: &str) -> Vec<&str> {
-    let (mut keys, mut depth, mut quote, mut start, mut escaped) = (Vec::new(), 0usize, None, None, false);
+    let (mut keys, mut depth, mut nest, mut quote, mut start, mut escaped) = (Vec::new(), 0usize, 0usize, None, None, false);
+    let (mut expect, mut is_key) = (false, false);
     for (i, c) in doc.char_indices().chain(std::iter::once((doc.len(), ' '))) {
         if let Some(from) = start {
             if c.is_alphanumeric() || c == '_' {
                 continue;
             }
-            keys.extend(doc.get(from..i));
+            if is_key {
+                keys.extend(doc.get(from..i));
+            }
             start = None;
         }
         match (quote, c) {
@@ -151,9 +155,17 @@ pub(crate) fn documented_keys(doc: &str) -> Vec<&str> {
             (Some(q), c) if c == q => quote = None,
             (Some(_), _) => {}
             (None, '"' | '`') => quote = Some(c),
-            (None, '{') => depth += 1,
+            (None, '{') => {
+                depth += 1;
+                expect = true;
+            }
             (None, '}') => depth = depth.saturating_sub(1),
-            (None, c) if depth > 0 && (c.is_alphabetic() || c == '_') => start = Some(i),
+            (None, '[' | '(') => nest += 1,
+            (None, ']' | ')') => nest = nest.saturating_sub(1),
+            (None, ',') if depth > 0 && nest == 0 => expect = true,
+            (None, c) if depth > 0 && (c.is_alphabetic() || c == '_') => {
+                (start, is_key, expect) = (Some(i), expect && nest == 0, false);
+            }
             _ => {}
         }
     }

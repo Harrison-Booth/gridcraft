@@ -5148,11 +5148,13 @@ fn check_params_names_the_keys_a_command_does_not_take() {
     }
 }
 
-/// The keys are the words inside the braces of a params doc, outside quotes.
+/// The keys are the names a params doc lists inside its braces, not the words of their values.
 #[test]
 fn documented_keys_reads_the_words_in_braces() {
     use crate::cmd::documented_keys;
-    assert_eq!(documented_keys(r#"{a?: "skip me", b_2?: bool} → {c} then prose"#), ["a", "b_2", "bool", "c"]);
+    assert_eq!(documented_keys(r#"{a?: "skip me", b_2?: bool} → {c} then prose"#), ["a", "b_2", "c"]);
+    assert_eq!(documented_keys("{name?, before?: index}"), ["name", "before"]);
+    assert_eq!(documented_keys("{v: [[1, two], [3]], w?}"), ["v", "w"]);
     assert_eq!(documented_keys("{} no params"), Vec::<&str>::new());
     assert_eq!(documented_keys("{x?: `not this`}"), ["x"]);
     // An escaped quote does not end the quoted text: the keys after it still count.
@@ -5163,4 +5165,24 @@ fn documented_keys_reads_the_words_in_braces() {
             documented_keys(spec.params).into_iter().map(|k| (k.to_string(), json!(null))).collect();
         crate::cmd::check_params(spec.id, &serde_json::Value::Object(params)).unwrap_or_else(|e| panic!("{}: {e}", spec.id));
     }
+}
+
+#[test]
+fn align_on_false_clears_only_the_active_alignment() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let h = |s: &mut Session| s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["align"]["h"].clone();
+    s.execute("home.alignLeft", json!({"range": "A1", "on": true})).unwrap();
+    assert_eq!(h(&mut s), json!("left"));
+    s.execute("home.alignRight", json!({"range": "A1", "on": false})).unwrap();
+    assert_eq!(h(&mut s), json!("left"));
+    s.execute("home.alignLeft", json!({"range": "A1", "on": false})).unwrap();
+    assert_ne!(h(&mut s), json!("left"));
+}
+
+#[test]
+fn paste_special_and_insert_sheet_reject_a_misspelled_key() {
+    assert!(crate::cmd::check_params("edit.pasteSpecial", &json!({"waht": "values"})).is_err());
+    assert!(crate::cmd::check_params("edit.pasteSpecial", &json!({"what": "values", "at": "C3"})).is_ok());
+    assert!(crate::cmd::check_params("home.insertSheet", &json!({"index": 0})).is_err());
 }
