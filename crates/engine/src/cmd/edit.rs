@@ -1164,6 +1164,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             source.comments.retain(|c, _| !src.contains(*c));
             source.hyperlinks.retain(|c, _| !src.contains(*c));
             source.merges.retain(|m| !src.contains_range(m));
+            gridcraft_model::unignore_errors(&mut source.ignored_errors, src, gridcraft_model::error_rule::ALL);
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }
@@ -1354,6 +1355,14 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                             cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
                         }
                         cx.touch(dest_sheet, dest);
+                        if cut_move {
+                            // A structural commit skips the ignored-error cleanup, so each overwritten cell drops its rules here.
+                            gridcraft_model::unignore_errors(
+                                &mut cx.sheet_mut(dest_sheet)?.ignored_errors,
+                                RangeRef::cell(dest),
+                                gridcraft_model::error_rule::ALL,
+                            );
+                        }
                     }
                 }
             }
@@ -1384,10 +1393,6 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             cx.structural = true;
         }
         let end = at.offset_clamped((tiles_r * h) as i64 - 1, (tiles_c * w) as i64 - 1);
-        if cut_move && let Some(sh) = cx.wb.sheet_mut(dest_sheet) {
-            // A structural commit skips the ignored-error cleanup, so the overwritten cells drop theirs here.
-            gridcraft_model::unignore_errors(&mut sh.ignored_errors, RangeRef::new(at, end), gridcraft_model::error_rule::ALL);
-        }
         *cx.sel = crate::Selection { active: at, anchor: at, ranges: vec![RangeRef::new(at, end)] };
         Ok(())
     })?;
