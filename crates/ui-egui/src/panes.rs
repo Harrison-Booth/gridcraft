@@ -6,6 +6,59 @@ use serde_json::{Value as Json, json};
 use crate::SheetApp;
 use crate::theme::{self, Tokens};
 
+/// The places F6 moves between, in the order it visits them (Shift+F6 goes the other way).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Zone {
+    Sheet,
+    SheetTabs,
+    StatusBar,
+    TaskPane,
+    /// The ribbon, reached through its access keys.
+    Ribbon,
+}
+
+/// The zone after `from` among `open` (the zones that exist now), wrapping at both ends. A `from` that is not open
+/// (its pane just closed) counts as the sheet.
+pub fn next_zone(open: &[Zone], from: Zone, back: bool) -> Zone {
+    let at = open.iter().position(|z| *z == from).unwrap_or(0);
+    let step = if back { open.len().saturating_sub(1) } else { 1 };
+    open.get((at + step) % open.len().max(1)).copied().unwrap_or(Zone::Sheet)
+}
+
+fn zone_key(zone: Zone) -> egui::Id {
+    egui::Id::unique(("gridcraft.pane_zone", zone as u8))
+}
+
+/// Marks `resp` as the widget that stands for `zone`: it takes focus when F6 asks for the zone, and focus on it
+/// tells [`zone_of_focus`] where the keyboard is.
+pub fn zone_widget(app: &mut SheetApp, ctx: &egui::Context, zone: Zone, resp: &egui::Response) {
+    ctx.data_mut(|d| d.insert_temp(zone_key(zone), resp.id));
+    if zone == Zone::SheetTabs {
+        // The arrows switch sheets (see `SheetApp::pane_keys`) instead of moving focus to the next widget.
+        ctx.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() }));
+    }
+    if app.grid.focus_request == Some(zone) {
+        app.grid.focus_request = None;
+        resp.request_focus();
+    }
+}
+
+/// The zone whose widget has keyboard focus; the sheet when none does.
+pub fn zone_of_focus(ctx: &egui::Context) -> Zone {
+    let focused = ctx.memory(|m| m.focused());
+    [Zone::SheetTabs, Zone::StatusBar, Zone::TaskPane]
+        .into_iter()
+        .find(|z| focused.is_some() && ctx.data(|d| d.get_temp::<egui::Id>(zone_key(*z))) == focused)
+        .unwrap_or(Zone::Sheet)
+}
+
+/// Outlines the focused zone's widget, which draws itself without egui's focus ring.
+pub fn focus_ring(ui: &Ui, resp: &egui::Response, rect: egui::Rect) {
+    if resp.has_focus() {
+        ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(2.0, Tokens::get(ui.ctx()).accent), egui::StrokeKind::Inside);
+    }
+}
+
 pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     // The Comments pane is engine state (`review.showComments`, so agents can drive it); the other
     // panes are UI state. One pane shows at a time: opening another one closes Comments.
@@ -31,7 +84,10 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             };
             ui.label(egui::RichText::new(title).font(theme::ui_bold(15.0)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, "Close", vec2(22.0, 22.0)).clicked() {
+                let close = crate::widgets::icon_button(ui, crate::icons::Icon::Close, t.text_dim, "Close", vec2(22.0, 22.0));
+                zone_widget(app, ui.ctx(), Zone::TaskPane, &close);
+                focus_ring(ui, &close, close.rect);
+                if close.clicked() {
                     if pane == "comments" {
                         app.run_or_alert("review.showComments", json!({"on": false}));
                     }

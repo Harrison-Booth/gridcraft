@@ -9,6 +9,7 @@ use gridcraft_engine::Session;
 use gridcraft_engine::core::{CellRef, Value};
 use gridcraft_engine::model::HAlign;
 use gridcraft_ui_egui::SheetApp;
+use gridcraft_ui_egui::panes::Zone;
 use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, SheetApp>;
@@ -767,4 +768,101 @@ fn border_keytips_without_a_command_stay_silent() {
         assert!(!h.state().session.journal.iter().any(|(id, _)| id.starts_with("home.")), "H,B,{k:?} must not run a command");
         assert_eq!(borders(&h, "A1"), Default::default(), "H,B,{k:?} must not draw a border");
     }
+}
+
+fn zone(h: &Harness) -> Zone {
+    h.state().pane_zone(&h.ctx)
+}
+
+fn shift_f6(h: &mut Harness) {
+    events(h, [key_event(Key::F6, true, Modifiers::SHIFT), key_event(Key::F6, false, Modifiers::SHIFT)]);
+}
+
+#[test]
+fn f6_visits_the_sheet_tabs_status_bar_and_ribbon_then_wraps_to_the_sheet() {
+    let mut h = harness(blank());
+    assert_eq!(zone(&h), Zone::Sheet);
+    for want in [Zone::SheetTabs, Zone::StatusBar, Zone::Ribbon, Zone::Sheet, Zone::SheetTabs] {
+        key(&mut h, Key::F6);
+        assert_eq!(zone(&h), want);
+    }
+    assert_eq!(h.state().keytips.prefix(), None, "leaving the ribbon hides its access keys");
+}
+
+#[test]
+fn a_hidden_status_bar_is_not_a_stop() {
+    let mut h = harness(blank());
+    h.state_mut().ui.status_bar = false;
+    for want in [Zone::SheetTabs, Zone::Ribbon, Zone::Sheet] {
+        key(&mut h, Key::F6);
+        assert_eq!(zone(&h), want);
+    }
+}
+
+#[test]
+fn shift_f6_goes_the_other_way() {
+    let mut h = harness(blank());
+    for want in [Zone::Ribbon, Zone::StatusBar, Zone::SheetTabs, Zone::Sheet] {
+        shift_f6(&mut h);
+        assert_eq!(zone(&h), want);
+    }
+}
+
+#[test]
+fn an_open_task_pane_sits_between_the_status_bar_and_the_ribbon() {
+    let mut h = harness(blank());
+    h.state_mut().grid.pane = Some("watch".into());
+    h.run_steps(2);
+    for want in [Zone::SheetTabs, Zone::StatusBar, Zone::TaskPane, Zone::Ribbon, Zone::Sheet] {
+        key(&mut h, Key::F6);
+        assert_eq!(zone(&h), want);
+    }
+}
+
+#[test]
+fn a_task_pane_that_closed_under_the_focus_counts_as_the_sheet() {
+    let mut h = harness(blank());
+    h.state_mut().grid.pane = Some("watch".into());
+    h.run_steps(2);
+    for _ in 0..3 {
+        key(&mut h, Key::F6);
+    }
+    assert_eq!(zone(&h), Zone::TaskPane);
+    h.state_mut().grid.pane = None;
+    h.run_steps(2);
+    key(&mut h, Key::F6);
+    assert_eq!(zone(&h), Zone::SheetTabs, "from the sheet, the next stop is the sheet tabs");
+}
+
+#[test]
+fn left_and_right_on_the_focused_sheet_tabs_switch_sheets() {
+    let mut s = blank();
+    s.execute("home.insertSheet", json!({})).unwrap();
+    s.execute("sheet.previous", json!({})).unwrap();
+    let mut h = harness(s);
+    let active = |h: &Harness| h.state().session.active().unwrap().wb.active_sheet.get();
+    assert_eq!(active(&h), 0);
+    key(&mut h, Key::F6);
+    key(&mut h, Key::ArrowRight);
+    assert_eq!((active(&h), zone(&h)), (1, Zone::SheetTabs), "the focus follows the active tab");
+    key(&mut h, Key::ArrowLeft);
+    assert_eq!((active(&h), zone(&h)), (0, Zone::SheetTabs));
+}
+
+#[test]
+fn escape_returns_from_a_pane_to_the_sheet() {
+    let mut h = harness(blank());
+    key(&mut h, Key::F6);
+    assert_eq!(zone(&h), Zone::SheetTabs);
+    key(&mut h, Key::Escape);
+    assert_eq!(zone(&h), Zone::Sheet);
+}
+
+#[test]
+fn f6_ends_end_mode_because_the_keytip_router_consumes_it() {
+    let mut h = harness(blank());
+    key(&mut h, Key::End);
+    assert!(h.state().grid.end_mode);
+    key(&mut h, Key::F6);
+    assert!(!h.state().grid.end_mode);
 }

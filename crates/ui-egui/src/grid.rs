@@ -176,6 +176,10 @@ pub struct GridState {
     pub list_picker: Option<CellRef>,
     /// Open task pane: comments, watch, selection, formatChart.
     pub pane: Option<String>,
+    /// End mode (Excel's End key): the next arrow key jumps to the edge of the data region.
+    pub end_mode: bool,
+    /// The pane F6 just moved to; the widget that stands for it takes keyboard focus when it is drawn.
+    pub focus_request: Option<crate::panes::Zone>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
@@ -3113,8 +3117,14 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 }
                 return;
             }
-            egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
+            egui::Event::Key { key, physical_key, pressed: true, repeat, modifiers: m, .. } => {
                 use egui::Key;
+                // End mode lasts for one key: only an unmodified End press arms it, and any other key
+                // (a shortcut included) ends it before it runs.
+                let end_jump = app.grid.end_mode && m.is_none() && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
+                if key != Key::End || !m.is_none() {
+                    app.grid.end_mode = false;
+                }
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
                     continue;
@@ -3123,7 +3133,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 let shift = m.shift;
                 let mv = |app: &mut SheetApp, dr: i64, dc: i64| {
                     let from = app.session.active().map(|d| if shift { d.selection.moving_end() } else { d.selection.active });
-                    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd}));
+                    let _ = app.session.run("selection.move", json!({"dr": dr, "dc": dc, "extend": shift, "jump": cmd || end_jump}));
                     app.grid.ensure_visible = true;
                     app.grid.reveal_moving_end = shift;
                     app.grid.reveal_from = from;
@@ -3149,6 +3159,8 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         let _ = app.session.run("selection.set", json!({"cell": end.a1()}));
                         app.grid.ensure_visible = true;
                     }
+                    // A held End key repeats; only the first press toggles.
+                    Key::End if m.is_none() && !repeat => app.grid.end_mode = !app.grid.end_mode,
                     Key::Home => {
                         let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
                         let _ = app.session.run("selection.set", json!({"cell": CellRef::new(a.row, 0).a1()}));
