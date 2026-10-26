@@ -1,0 +1,42 @@
+use gridcraft_engine::Session;
+use serde_json::json;
+
+fn c4(s: &Session) -> String {
+    format!("{:?}", s.doc().unwrap().wb.active().unwrap().cell(gridcraft_core::CellRef::parse("C4").unwrap()))
+}
+
+/// Fuzz seed 7, shrunk. Borders on a whole column used to write a cell per row, so one undo step
+/// outgrew the history's byte budget and the steps before it were dropped.
+#[test]
+fn whole_column_borders_keep_every_undo_step() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"sample": "budget"})).unwrap();
+    let start = c4(&s);
+    s.execute("home.borders", json!({"preset": "outside", "range": "F:F"})).unwrap();
+    assert!(s.doc().unwrap().wb.active().unwrap().cells.len() < 10_000);
+    s.execute("home.insertCells", json!({"range": "C15:G22", "shift": "column"})).unwrap();
+    s.execute("home.insertCells", json!({"range": "H3:I3", "shift": "column"})).unwrap();
+    assert_eq!(s.doc().unwrap().undo.len(), 3);
+    for _ in 0..3 {
+        s.execute("edit.undo", json!({})).unwrap();
+    }
+    assert_eq!(c4(&s), start);
+}
+
+#[test]
+fn whole_column_outside_borders_apply_to_the_column_and_its_ends() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({})).unwrap();
+    s.execute("home.borders", json!({"preset": "outside", "range": "B:C"})).unwrap();
+    let sh = s.doc().unwrap().wb.clone();
+    let sh = sh.active().unwrap();
+    let styles = &s.doc().unwrap().wb.styles;
+    let border = |id| styles.get(id).borders.clone();
+    let col = |c: u32| border(sh.cols.get(&c).and_then(|i| i.style).unwrap());
+    assert!(col(1).left.style != Default::default() && col(1).right.style == Default::default() && col(1).top.style == Default::default());
+    assert!(col(2).right.style != Default::default() && col(2).left.style == Default::default());
+    let top = border(sh.style_id(gridcraft_core::CellRef::parse("B1").unwrap()));
+    assert!(top.top.style != Default::default() && top.left.style != Default::default());
+    let bottom = border(sh.style_id(gridcraft_core::CellRef::new(1_048_575, 2)));
+    assert!(bottom.bottom.style != Default::default() && bottom.right.style != Default::default());
+}
