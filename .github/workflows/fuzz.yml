@@ -73,6 +73,13 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p fuzz-out
+          # A zero count builds an empty seed list and passes without running anything.
+          for count in "$GRIDCRAFT_FUZZ_SEEDS" "$GRIDCRAFT_FUZZ_STEPS"; do
+            if [[ ! "$count" =~ ^[0-9]+$ ]] || (( 10#$count == 0 )); then
+              echo "Fuzz counts must be positive integers, got '$count'" >&2
+              exit 1
+            fi
+          done
           cargo test --release -p gridcraft-engine --test it command_sequence_fuzz:: 2>&1 | tee fuzz-out/fuzz.log
 
       - name: Collect failing seeds
