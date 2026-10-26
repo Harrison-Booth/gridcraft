@@ -21,6 +21,8 @@ const TEMPLATE: &str = "bug_report.yml";
 const VALUE_CAP: usize = 80;
 /// The longest `system-info` value, in UTF-8 bytes.
 const SYSTEM_CAP: usize = 400;
+/// The longest address, in bytes: well inside what browsers and GitHub accept.
+const ADDRESS_CAP: usize = 2047;
 
 /// What the issue form is filled in with. Every field is already capped.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -104,7 +106,7 @@ fn facts(app: &SheetApp) -> Facts {
 }
 
 /// The issue form's address, with the facts as its four prefilled fields. A trailing `body` carries
-/// the same details as plain text: GitHub ignores it when the form template exists and uses it to
+/// the same details as plain text, cut to keep the address under 2 KiB: GitHub ignores it when the form template exists and uses it to
 /// prefill a blank issue while the template isn't on the repository yet, so no detail is lost.
 fn url(facts: &Facts) -> String {
     let mut url = format!("{NEW_ISSUE}?template={TEMPLATE}");
@@ -113,7 +115,17 @@ fn url(facts: &Facts) -> String {
     {
         let _ = write!(url, "&{field}={}", encode(value));
     }
-    let _ = write!(url, "&body={}", encode(&details_text(facts)));
+    // The body is the lowest priority: it takes only the room the fields leave under the cap.
+    url.push_str("&body=");
+    let mut room = ADDRESS_CAP.saturating_sub(url.len());
+    for c in details_text(facts).chars() {
+        let encoded = encode(c.encode_utf8(&mut [0; 4]));
+        match room.checked_sub(encoded.len()) {
+            Some(left) => room = left,
+            None => break,
+        }
+        url.push_str(&encoded);
+    }
     url
 }
 
@@ -222,15 +234,15 @@ mod tests {
         assert!(facts.version.len() <= VALUE_CAP && facts.os.len() <= VALUE_CAP && facts.document_info.len() <= VALUE_CAP);
         assert!(facts.system_info.len() <= SYSTEM_CAP, "{}", facts.system_info.len());
         let url = url(&facts);
-        assert!(url.len() < 4096, "{} bytes", url.len());
+        assert!(url.len() < 2048, "{} bytes", url.len());
     }
 
     #[test]
-    fn the_longest_possible_address_stays_under_four_kib() {
-        // Every byte of every field at its cap, each encoded to three characters, and again in `body`.
+    fn the_longest_possible_address_stays_under_two_kib() {
+        // Every byte of every field at its cap, each encoded to three characters.
         let facts = Facts { version: "é".repeat(40), os: "é".repeat(40), system_info: "\n".repeat(SYSTEM_CAP), document_info: "é".repeat(40) };
         let url = url(&facts);
-        assert!(url.len() < 4096, "{} bytes", url.len());
+        assert!(url.len() < 2048, "{} bytes", url.len());
     }
 
     #[test]
