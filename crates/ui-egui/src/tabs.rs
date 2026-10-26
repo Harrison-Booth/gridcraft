@@ -187,6 +187,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                 if active && reveal_active {
                                     resp.scroll_to_me(None);
                                 }
+                                if active {
+                                    crate::panes::zone_widget(app, ui.ctx(), crate::panes::Zone::SheetTabs, &resp);
+                                }
                                 let r = r.shrink2(vec2(0.0, 1.0));
                                 if active {
                                     ui.painter().rect_filled(Rect::from_min_max(pos2(r.left(), r.top() - 2.0), r.max), 4.0, t.tab_active);
@@ -205,6 +208,9 @@ pub fn sheet_tabs(app: &mut SheetApp, ui: &mut Ui) {
                                 } else if active {
                                     let band = Rect::from_center_size(pos2(r.center().x, r.bottom() - 3.0), vec2(tw.min(48.0), 2.5));
                                     ui.painter().rect_filled(band, 1.0, t.accent);
+                                }
+                                if active {
+                                    crate::panes::focus_ring(ui, &resp, r);
                                 }
                                 if renaming {
                                     let mut text = app.grid.rename_text.clone();
@@ -389,6 +395,7 @@ pub fn status_bar(app: &mut SheetApp, ui: &mut Ui) {
                     let mut z = zoom as f32;
                     let slider = ui.add(egui::Slider::new(&mut z, 10.0..=400.0).show_value(false).logarithmic(true));
                     ui.ctx().accesskit_node_builder(slider.id, |node| node.set_label(app.ui.language.tr("Zoom")));
+                    crate::panes::zone_widget(app, ui.ctx(), crate::panes::Zone::StatusBar, &slider);
                     if slider.changed() {
                         let _ = app.session.run("view.zoom", json!({"percent": z.round()}));
                     }

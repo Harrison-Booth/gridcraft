@@ -23,6 +23,8 @@ pub enum Action {
     /// handler (which carries the right params), instead of firing the engine command with
     /// empty params.
     Control(&'static str),
+    /// F6 (false) or Shift+F6 (true): move to the next or previous pane. The host owns the panes.
+    CyclePane(bool),
 }
 
 #[derive(Default)]
@@ -45,6 +47,12 @@ impl KeyTips {
         self.alt_armed = false;
         self.alt_held = false;
         self.held.clear();
+    }
+
+    /// Show the access keys, as F10 does.
+    pub fn arm(&mut self) {
+        self.prefix = Some(String::new());
+        self.alt_armed = false;
     }
 
     fn toggle(&mut self) {
@@ -114,8 +122,11 @@ impl KeyTips {
                         self.held.retain(|held| held != key);
                     } else if *repeat && (self.prefix.is_some() || self.held.contains(key)) {
                         handled = true;
-                    } else if (*key == Key::F10 && modifiers.is_none()) || (*key == Key::F6 && !modifiers.alt) {
+                    } else if *key == Key::F10 && modifiers.is_none() {
                         self.toggle();
+                        handled = true;
+                    } else if *key == Key::F6 && !modifiers.alt {
+                        actions.push(Action::CyclePane(modifiers.shift));
                         handled = true;
                     } else if self.prefix.is_some() && !matches!(key, Key::ShiftLeft | Key::ShiftRight) {
                         handled = true;

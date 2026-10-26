@@ -178,6 +178,8 @@ pub struct GridState {
     pub pane: Option<String>,
     /// End mode (Excel's End key): the next arrow key jumps to the edge of the data region.
     pub end_mode: bool,
+    /// The pane F6 just moved to; the widget that stands for it takes keyboard focus when it is drawn.
+    pub focus_request: Option<crate::panes::Zone>,
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).

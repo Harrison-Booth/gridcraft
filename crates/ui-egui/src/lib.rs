@@ -1628,6 +1628,55 @@ impl SheetApp {
                 // runs its click handler with the right params (the engine command alone would
                 // be missing them).
                 keytips::Action::Control(id) => self.ui.keytip_invoke = Some(id),
+                keytips::Action::CyclePane(back) => self.cycle_pane(ctx, back),
+            }
+        }
+        self.pane_keys(ctx);
+    }
+
+    /// The zone the keyboard is in: the ribbon while its access keys are showing, else the pane whose widget has focus.
+    pub fn pane_zone(&self, ctx: &egui::Context) -> panes::Zone {
+        if self.keytips.prefix().is_some() { panes::Zone::Ribbon } else { panes::zone_of_focus(ctx) }
+    }
+
+    /// F6 / Shift+F6: move to the next / previous of the sheet, sheet tabs, status bar, task pane (when one is open)
+    /// and ribbon, wrapping around.
+    fn cycle_pane(&mut self, ctx: &egui::Context, back: bool) {
+        use panes::Zone;
+        let mut open = vec![Zone::Sheet];
+        if self.session.active().is_some() {
+            open.push(Zone::SheetTabs);
+        }
+        open.push(Zone::StatusBar);
+        if self.grid.pane.is_some() || self.session.comments_pane {
+            open.push(Zone::TaskPane);
+        }
+        open.push(Zone::Ribbon);
+        let from = self.pane_zone(ctx);
+        let to = panes::next_zone(&open, from, back);
+        self.grid.end_mode = false;
+        self.grid.focus_request = None;
+        if from == Zone::Ribbon {
+            self.keytips.clear();
+        } else if let Some(focused) = ctx.memory(|m| m.focused()) {
+            ctx.memory_mut(|m| m.surrender_focus(focused));
+        }
+        match to {
+            Zone::Ribbon => self.keytips.arm(),
+            Zone::Sheet => {}
+            zone => self.grid.focus_request = Some(zone),
+        }
+    }
+
+    /// Keys of the pane that has focus: Left and Right on the sheet tabs go to the previous and next sheet.
+    fn pane_keys(&mut self, ctx: &egui::Context) {
+        if self.pane_zone(ctx) != panes::Zone::SheetTabs {
+            return;
+        }
+        for (key, command) in [(egui::Key::ArrowLeft, "sheet.previous"), (egui::Key::ArrowRight, "sheet.next")] {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, key)) {
+                self.run_or_alert(command, json!({}));
+                self.grid.focus_request = Some(panes::Zone::SheetTabs);
             }
         }
     }
