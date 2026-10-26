@@ -92,6 +92,16 @@ fn text_that_is_not_a_formula_leaves_ctrl_page_down_alone() {
 }
 
 #[test]
+fn a_formula_edited_in_the_formula_bar_leaves_ctrl_page_down_alone() {
+    let mut h = pointing("=");
+    h.state_mut().cancel_edit();
+    h.state_mut().begin_edit(Some("=".into()), true);
+    h.run_steps(4);
+    press(&mut h, Key::PageDown, CTRL);
+    assert_eq!(shown(&h), 0, "the arrows do not point there, so the sheet does not switch");
+}
+
+#[test]
 fn on_the_last_sheet_ctrl_page_down_keeps_the_pointing_where_it_was() {
     let mut h = pointing("=");
     press(&mut h, Key::ArrowDown, Modifiers::NONE);

@@ -397,7 +397,8 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
             }
         }
         // Ctrl+PageDown / Ctrl+PageUp while a formula waits for a reference: on to the next / previous sheet.
-        if ed.can_point() {
+        // Only where the arrows point too, so every switch leaves the arrows working on the new sheet.
+        if ed.enter_mode && !ed.from_formula_bar && ed.can_point() {
             let step = ui.input_mut(|i| {
                 if i.consume_key(egui::Modifiers::CTRL, Key::PageDown) {
                     Some("sheet.next")
