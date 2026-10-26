@@ -89,6 +89,70 @@ pub fn journal_params(params: &Json) -> Json {
     }
 }
 
+/// Params that choose where a command acts. The shared target helpers read them for commands whose
+/// params doc names only `range`, so [`check_params`] always lets them through.
+const TARGET_KEYS: &[&str] = &["range", "cell", "sheet", "window", "doc"];
+
+/// Commands [`check_params`] leaves alone: they copy their params into another call, or read keys
+/// by a name the params doc cannot list.
+const FREE_FORM_PARAMS: &[&str] = &[
+    "data.flashFill",
+    "chart.changeType",
+    "arrange.group",
+    "table.removeDuplicates",
+    "formulas.moreFunctions",
+    "home.doubleUnderline",
+    "insert.recommendedCharts",
+    "insert.textBox",
+    "review.newNote",
+    "review.newComment",
+    "pivot.subtotals",
+];
+
+/// Every word inside the `{…}` groups of a params doc outside quotes: the names of the params it lists.
+pub(crate) fn documented_keys(doc: &str) -> Vec<&str> {
+    let (mut keys, mut depth, mut quote, mut start) = (Vec::new(), 0usize, None, None);
+    for (i, c) in doc.char_indices().chain(std::iter::once((doc.len(), ' '))) {
+        if let Some(from) = start {
+            if c.is_alphanumeric() || c == '_' {
+                continue;
+            }
+            keys.extend(doc.get(from..i));
+            start = None;
+        }
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '`') => quote = Some(c),
+            (None, '{') => depth += 1,
+            (None, '}') => depth = depth.saturating_sub(1),
+            (None, c) if depth > 0 && (c.is_alphabetic() || c == '_') => start = Some(i),
+            _ => {}
+        }
+    }
+    keys
+}
+
+/// Refuses a key in `params` that the command's params doc does not list, naming it, so a typo
+/// (`{"nam": "Report"}`) is an error instead of a command that ran with its defaults (#2256).
+/// For callers that take a command and its params from a script, an agent or a person: commands
+/// the engine runs for itself are not checked. A command with no params doc to read, or listed in
+/// [`FREE_FORM_PARAMS`], accepts anything.
+pub fn check_params(id: &str, params: &Json) -> Result<()> {
+    let (Some(spec), Some(given)) = (find_command(id), params.as_object()) else { return Ok(()) };
+    if FREE_FORM_PARAMS.contains(&id) || !spec.params.contains('{') {
+        return Ok(());
+    }
+    let known = documented_keys(spec.params);
+    let mut unknown: Vec<&str> = given.keys().map(String::as_str).filter(|k| !TARGET_KEYS.contains(k) && !known.contains(k)).collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    let (plural, list) = (if unknown.len() == 1 { "key" } else { "keys" }, unknown.join("`, `"));
+    Err(bad(id, format!("unknown {plural} `{list}` (takes {})", spec.params)))
+}
+
 pub fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }

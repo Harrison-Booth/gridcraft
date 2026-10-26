@@ -5117,3 +5117,48 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     assert_eq!(v(&saved, "B1"), Value::Number(6.0));
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
 }
+
+/// A key a command's params doc does not list is refused by name, so a typo is not a command that
+/// ran with its defaults (#2256); the keys it lists, and the ones that choose where it acts, pass.
+#[test]
+fn check_params_names_the_keys_a_command_does_not_take() {
+    use crate::cmd::check_params;
+    let err = |id: &str, params: serde_json::Value| check_params(id, &params).unwrap_err().to_string();
+    let e = err("home.insertSheet", json!({"nam": "Report3"}));
+    assert!(e.contains("unknown key `nam`") && e.contains("{name?, before?: index}"), "{e}");
+    let e = err("home.insertSheet", json!({"name": "R", "colour": 1, "args": {}}));
+    assert!(e.contains("unknown keys `args`, `colour`"), "{e}");
+    for (id, params) in [
+        ("home.insertSheet", json!({"name": "R", "before": 0})),
+        ("home.insertSheet", json!({})),
+        ("cell.set", json!({"cell": "A1", "input": "1", "sheet": 0})),
+        ("home.bold", json!({"range": "A1", "sheet": "Sheet1", "on": true})),
+        ("home.alignLeft", json!({"range": "A1", "on": true})),
+        ("home.insertRows", json!({"rows": "2:3", "count": 2})),
+        ("home.deleteColumns", json!({"cols": "B", "count": 2})),
+        ("file.open", json!({"base64": "", "name": "a.csv", "csvAsText": true})),
+        ("home.insertSheet", json!({"window": 1, "doc": 1})),
+        // Commands with free-form params, ids that are not engine commands and a params value
+        // that is not an object are left to the command.
+        ("insert.textBox", json!({"fill": "red"})),
+        ("ui.dialog", json!({"anything": 1})),
+        ("home.insertSheet", serde_json::Value::Null),
+    ] {
+        check_params(id, &params).unwrap_or_else(|e| panic!("{id} {params}: {e}"));
+    }
+}
+
+/// The keys are the words inside the braces of a params doc, outside quotes.
+#[test]
+fn documented_keys_reads_the_words_in_braces() {
+    use crate::cmd::documented_keys;
+    assert_eq!(documented_keys(r#"{a?: "skip me", b_2?: bool} → {c} then prose"#), ["a", "b_2", "bool", "c"]);
+    assert_eq!(documented_keys("{} no params"), Vec::<&str>::new());
+    assert_eq!(documented_keys("{x?: `not this`}"), ["x"]);
+    // Every key a command's doc lists passes, whatever the doc's shape.
+    for spec in crate::cmd::command_specs() {
+        let params: serde_json::Map<String, serde_json::Value> =
+            documented_keys(spec.params).into_iter().map(|k| (k.to_string(), json!(null))).collect();
+        crate::cmd::check_params(spec.id, &serde_json::Value::Object(params)).unwrap_or_else(|e| panic!("{}: {e}", spec.id));
+    }
+}
