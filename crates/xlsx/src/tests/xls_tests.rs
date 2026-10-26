@@ -609,6 +609,235 @@ fn a_format_shorter_than_its_count_keeps_its_characters() {
     assert!(report.warnings.iter().any(|w| w.contains("declared length")), "{:?}", report.warnings);
 }
 
+// ---------------------------------------------------------------- notes, hyperlinks, panes
+
+/// CLSID_StdHlink, CLSID_URLMoniker and CLSID_FileMoniker as stored ([MS-XLS] 2.4.140,
+/// [MS-OSHARED] 2.3.7.2).
+const STD_HLINK: [u8; 16] = [0xD0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B];
+const URL_MONIKER: [u8; 16] = [0xE0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B];
+const FILE_MONIKER: [u8; 16] = [0x03, 0x03, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
+
+fn utf16z(s: &str) -> Vec<u8> {
+    u16s(&s.encode_utf16().chain([0]).collect::<Vec<_>>())
+}
+
+/// HyperlinkString: character count including the NUL, then UTF-16.
+fn hstr(s: &str) -> Vec<u8> {
+    cat(&[&(s.encode_utf16().count() as u32 + 1).to_le_bytes(), &utf16z(s)])
+}
+
+fn url_moniker(url: &str) -> Vec<u8> {
+    let u = utf16z(url);
+    cat(&[&URL_MONIKER, &(u.len() as u32).to_le_bytes(), &u])
+}
+
+fn file_moniker(anti: u16, path: &str) -> Vec<u8> {
+    let wide = u16s(&path.encode_utf16().collect::<Vec<_>>());
+    let ansi = cat(&[b"OLD~1.XLS", &[0]]);
+    cat(&[
+        &FILE_MONIKER,
+        &anti.to_le_bytes(),
+        &(ansi.len() as u32).to_le_bytes(),
+        &ansi,
+        &u16s(&[0xFFFF, 0xDEAD]),
+        &[0; 20],
+        &(wide.len() as u32 + 6).to_le_bytes(),
+        &(wide.len() as u32).to_le_bytes(),
+        &3u16.to_le_bytes(),
+        &wide,
+    ])
+}
+
+fn hlink(r: [u16; 4], flags: u32, body: &[u8]) -> Vec<u8> {
+    rec(0x01B8, &cat(&[&u16s(&r), &STD_HLINK, &2u32.to_le_bytes(), &flags.to_le_bytes(), body]))
+}
+
+fn tooltip(r: [u16; 4], tip: &str) -> Vec<u8> {
+    rec(0x0800, &cat(&[&0x0800u16.to_le_bytes(), &u16s(&r), &utf16z(tip)]))
+}
+
+/// Obj with an FtCmo of type `ot` and an ftEnd.
+fn obj(ot: u16, id: u16) -> Vec<u8> {
+    rec(0x005D, &cat(&[&u16s(&[0x15, 0x12, ot, id, 0x4011]), &[0; 12], &u16s(&[0, 0])]))
+}
+
+/// TxO header, then its text in `Continue` records (each with its compression flag) and the
+/// formatting runs.
+fn txo(cch: u16, text_parts: &[Vec<u8>]) -> Vec<u8> {
+    let mut v = rec(0x01B6, &cat(&[&u16s(&[0x0212, 0]), &[0; 6], &u16s(&[cch, 16, 0, 0])]));
+    for p in text_parts {
+        v.extend(rec(0x003C, p));
+    }
+    v.extend(rec(0x003C, &[0; 16]));
+    v
+}
+
+fn note(row: u16, col: u16, shown: bool, id: u16, author: &str) -> Vec<u8> {
+    rec(0x001C, &cat(&[&u16s(&[row, col, if shown { 2 } else { 0 }, id]), &xlstr(author), &[0]]))
+}
+
+fn window2(grbit: u16) -> Vec<u8> {
+    rec(0x023E, &u16s(&[grbit, 0, 0, 0x40, 0, 0, 0, 0, 0]))
+}
+
+fn pane(x: u16, y: u16, top: u16, left: u16) -> Vec<u8> {
+    rec(0x0041, &cat(&[&u16s(&[x, y, top, left]), &[3, 0]]))
+}
+
+/// Two worksheets: "Notes" with notes, hyperlinks and frozen panes, "Split" with display
+/// options changed, a split pane and (optionally) a picture.
+fn objects_sample(picture: bool) -> Vec<u8> {
+    let draw = rec(0x00EC, &[0; 8]);
+    // Note 1: "Ann:\nFirst " compressed, then "çline" as UTF-16 in a second Continue.
+    let part1 = cat(&[&[0], b"Ann:\nFirst "]);
+    let part2 = cat(&[&[1], &u16s(&"çline".encode_utf16().collect::<Vec<_>>())]);
+    let part3 = cat(&[&[0], b"a\r\nb"]);
+    let notes = cat(&[
+        &draw,
+        &obj(0x19, 1),
+        &draw,
+        &txo(16, &[part1, part2]),
+        &draw,
+        &obj(0x19, 2),
+        &draw,
+        &txo(4, &[part3]),
+        &note(0, 0, false, 1, "Ann"),
+        &note(1, 1, true, 2, "Bo"),
+        &note(2, 2, false, 99, "Cy"), // no TxO for this object
+    ]);
+    let links = cat(&[
+        &hlink([4, 4, 0, 0], 0x17, &cat(&[&hstr("web"), &url_moniker("https://example.com/p?q=1")])),
+        &tooltip([4, 4, 0, 0], "Example tip"),
+        &hlink([5, 5, 0, 0], 0x0B, &cat(&[&file_moniker(2, "dir\\Book.xls"), &hstr("Sheet1!A1")])),
+        &hlink([6, 6, 0, 0], 0x03, &url_moniker("mailto:a@example.com?subject=Hi")),
+        &hlink([7, 7, 0, 0], 0x08, &hstr("'Split'!B2")),
+        &hlink([0, 1, 2, 3], 0x03, &url_moniker("https://example.org/")),
+        &tooltip([0, 1, 2, 3], "Range tip"),
+        &hlink([8, 8, 0, 0], 0x103, &hstr("\\\\srv\\share\\x.xlsx")),
+        // A moniker kind GridCraft doesn't read, and a range past the last column.
+        &hlink([9, 9, 0, 0], 0x03, &cat(&[&[0xAA; 16], &[0; 8]])),
+        &hlink([10, 10, 0, 300], 0x03, &url_moniker("https://example.net/")),
+    ]);
+    let sheet1 = cat(&[
+        &bof(0x0010),
+        &rec(0x0203, &cat(&[&cell(0, 0, 0), &1.0f64.to_le_bytes()])),
+        &notes,
+        &window2(0x06BE),
+        &pane(1, 2, 2, 1),
+        &links,
+        &eof(),
+    ]);
+    let pic = if picture { cat(&[&draw, &obj(0x08, 3)]) } else { vec![] };
+    let sheet2 = cat(&[&bof(0x0010), &pic, &window2(0x0040 | 0x0001), &pane(1200, 900, 3, 2), &eof()]);
+    let boundsheet = |pos: u32, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, name.len() as u8, 0], name.as_bytes()]));
+    let globals = |p1: u32, p2: u32| cat(&[&bof(0x0005), &boundsheet(p1, "Notes"), &boundsheet(p2, "Split"), &eof()]);
+    let p1 = globals(0, 0).len() as u32;
+    let p2 = p1 + sheet1.len() as u32;
+    cat(&[&globals(p1, p2), &sheet1, &sheet2])
+}
+
+#[test]
+fn reads_notes_hyperlinks_and_panes() {
+    let (wb, report) = read_xls(&compound("Workbook", &objects_sample(false))).unwrap();
+    let at = |a1: &str| CellRef::parse(a1).unwrap();
+    let s = &wb.sheets[0];
+    let n = |a1: &str| s.comments.get(&at(a1)).map(|c| (c.author.as_str(), c.text.as_str(), c.visible));
+    assert_eq!(n("A1"), Some(("Ann", "First çline", false)));
+    assert_eq!(n("B2"), Some(("Bo", "a\nb", true)));
+    assert_eq!(n("C3"), Some(("Cy", "", false)));
+    assert_eq!(s.comments.len(), 3);
+    assert!(s.comments.values().all(|c| !c.threaded));
+
+    let l = |a1: &str| s.hyperlinks.get(&at(a1)).map(|h| (h.target.as_str(), h.tooltip.as_deref(), h.external));
+    assert_eq!(l("A5"), Some(("https://example.com/p?q=1", Some("Example tip"), true)));
+    assert_eq!(l("A6"), Some(("..\\..\\dir\\Book.xls#Sheet1!A1", None, true)));
+    assert_eq!(l("A7"), Some(("mailto:a@example.com?subject=Hi", None, true)));
+    assert_eq!(l("A8"), Some(("'Split'!B2", None, false)));
+    assert_eq!(l("A9"), Some(("\\\\srv\\share\\x.xlsx", None, true)));
+    for a1 in ["C1", "D1", "C2", "D2"] {
+        assert_eq!(l(a1), Some(("https://example.org/", Some("Range tip"), true)), "{a1}");
+    }
+    assert_eq!(l("A10"), None);
+    assert_eq!(l("A11"), None);
+    assert_eq!(s.hyperlinks.len(), 9);
+    assert!(report.warnings.iter().any(|w| w.contains("hyperlinks") && w.contains("skipped")), "{:?}", report.warnings);
+
+    assert_eq!(s.freeze, Some((2, 1)));
+    assert_eq!(s.view_top_left, at("B3"));
+    assert!(s.show_gridlines && s.show_headings && s.show_zeros && !s.show_formulas);
+
+    let s2 = &wb.sheets[1];
+    assert_eq!(s2.freeze, None);
+    assert!(!s2.show_gridlines && !s2.show_headings && !s2.show_zeros && s2.show_formulas && s2.right_to_left);
+    assert!(report.warnings.iter().any(|w| w.contains("Split")), "{:?}", report.warnings);
+    // Notes are drawing objects, but they are imported: no warning about pictures.
+    assert!(!report.warnings.iter().any(|w| w.contains("Pictures") || w.contains("comments")), "{:?}", report.warnings);
+    // A picture object with no picture behind it is reported as skipped.
+    let (_, report) = read_xls(&compound("Workbook", &objects_sample(true))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("pictures") && w.contains("skipped")), "{:?}", report.warnings);
+
+    // Saved as .xlsx and read back, the notes, links and panes are the same.
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let b = &back.sheets[0];
+    assert_eq!(b.freeze, s.freeze);
+    assert_eq!(b.hyperlinks, s.hyperlinks);
+    let notes = |sh: &gridcraft_model::Sheet| sh.comments.iter().map(|(k, c)| (*k, c.author.clone(), c.text.clone(), c.visible)).collect::<Vec<_>>();
+    assert_eq!(notes(b), notes(s));
+}
+
+#[test]
+fn hostile_object_records_never_panic() {
+    let stream = objects_sample(true);
+    let good = compound("Workbook", &stream);
+    for cut in (0..good.len()).step_by(11) {
+        let _ = read_xls(&good[..cut]);
+    }
+    for at in 0..stream.len() {
+        for x in [0xA5u8, 0xFF] {
+            let mut s = stream.clone();
+            s[at] ^= x;
+            let _ = read_xls(&compound("Workbook", &s));
+        }
+    }
+    // A hyperlink over the whole sheet is capped; huge declared string, path and text lengths
+    // are bounded by the record.
+    let whole = hlink([0, 65535, 0, 255], 0x03, &url_moniker("https://example.com/"));
+    let liar = hlink([0, 0, 1, 1], 0x1B, &cat(&[&u32::MAX.to_le_bytes(), b"ab"]));
+    let file = hlink([1, 1, 1, 1], 0x03, &cat(&[&FILE_MONIKER, &u16s(&[0xFFFF]), &u32::MAX.to_le_bytes(), b"x"]));
+    let big_txo = cat(&[&obj(0x19, 1), &txo(0xFFFF, &[cat(&[&[1], b"ab"])]), &note(0, 0, false, 1, "A")]);
+    let sheet = cat(&[&bof(0x0010), &whole, &liar, &file, &big_txo, &eof()]);
+    let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
+    let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
+    assert_eq!(wb.sheets[0].hyperlinks.len(), 10_000);
+    assert!(report.warnings.iter().any(|w| w.contains("first 10000 cells")), "{:?}", report.warnings);
+    assert!(wb.sheets[0].comments.contains_key(&CellRef::new(0, 0)));
+}
+
+#[test]
+fn hyperlink_targets_copied_onto_cells_are_capped_by_bytes() {
+    // A 1,700-byte target over 9,999 cells: the sheet copies at most 16 MiB of target text, so
+    // 9,868 copies fit before the 10,000-cell cap is reached. Kept small: the test writer's
+    // compound file can't hold a stream of many megabytes.
+    let long = "a".repeat(1_700);
+    let sheet = cat(&[&bof(0x0010), &hlink([0, 9_998, 0, 0], 0x03, &url_moniker(&long)), &eof()]);
+    let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
+    let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
+    assert_eq!(wb.sheets[0].hyperlinks.len(), 9_868);
+    assert!(report.warnings.iter().any(|w| w.contains("bytes")), "{:?}", report.warnings);
+}
+
+#[test]
+fn tooltip_goes_to_the_last_link_on_its_range() {
+    let first = hlink([0, 0, 0, 0], 0x03, &url_moniker("https://first.example/"));
+    let second = hlink([0, 0, 0, 0], 0x03, &url_moniker("https://second.example/"));
+    let sheet = cat(&[&bof(0x0010), &first, &second, &tooltip([0, 0, 0, 0], "Second tip"), &eof()]);
+    let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
+    let (wb, _) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
+    let link = wb.sheets[0].hyperlinks.get(&CellRef::new(0, 0)).unwrap();
+    assert_eq!(link.target, "https://second.example/");
+    assert_eq!(link.tooltip.as_deref(), Some("Second tip"));
+}
+
 fn one_sheet_with(sheet_records: &[u8]) -> Vec<u8> {
     let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 6, 0], b"Sheet1"])), &eof()]);
     let sheet = cat(&[&bof(0x0010), sheet_records, &rec(0x0203, &cat(&[&cell(0, 0, 0), &7.0f64.to_le_bytes()])), &eof()]);
@@ -635,4 +864,169 @@ fn xls_short_window2_is_ignored() {
         assert_eq!((sh.right_to_left, sh.show_gridlines, sh.show_headings, sh.show_zeros), (false, true, true, true));
         assert_eq!(v(&wb, 0, "A1"), Value::Number(7.0));
     }
+}
+
+// ---------------------------------------------------------------- pictures
+
+/// An OfficeArt record ([MS-ODRAW] 2.2.1).
+fn art(ver: u16, inst: u16, kind: u16, body: &[u8]) -> Vec<u8> {
+    cat(&[&((inst << 4) | ver).to_le_bytes(), &kind.to_le_bytes(), &(body.len() as u32).to_le_bytes(), body])
+}
+
+/// An OfficeArtFBSE holding one blip of record type `kind` and instance `inst` (an odd instance
+/// has two UIDs).
+fn blip_entry(bt: u8, kind: u16, inst: u16, data: &[u8]) -> Vec<u8> {
+    let uids = if inst & 1 == 1 { 32 } else { 16 };
+    let blip = art(0, inst, kind, &cat(&[&vec![0xAB; uids], &[0xFF], data]));
+    let head = cat(&[&[bt, bt], &[0; 16], &[0xFF, 0], &(blip.len() as u32).to_le_bytes(), &1u32.to_le_bytes(), &[0; 4], &[0; 4]]);
+    art(2, u16::from(bt), 0xF007, &cat(&[&head, &blip]))
+}
+
+/// The MsoDrawingGroup record with these store entries.
+fn drawing_group(entries: &[Vec<u8>]) -> Vec<u8> {
+    let store = art(0xF, entries.len() as u16, 0xF001, &entries.concat());
+    rec(0x00EB, &art(0xF, 0, 0xF000, &cat(&[&art(0, 0, 0xF006, &[0; 16]), &store])))
+}
+
+/// A picture frame shape: store index `pib`, ClientAnchor, and Excel's name and description
+/// properties.
+fn picture_shape(pib: u32, anchor: [u16; 9], alt: &str) -> Vec<u8> {
+    let (name, descr) = (utf16z("Picture 1"), utf16z(alt));
+    let props: [(u16, u32); 4] = [(0x007F, 0x01FB_0000), (0x4104, pib), (0x8380, name.len() as u32), (0x8381, descr.len() as u32)];
+    let table: Vec<u8> = props.iter().flat_map(|(id, v)| cat(&[&id.to_le_bytes(), &v.to_le_bytes()])).collect();
+    let fopt = art(3, props.len() as u16, 0xF00B, &cat(&[&table, &name, &descr]));
+    let body = cat(&[&art(2, 0x4B, 0xF00A, &[0; 8]), &fopt, &art(0, 0, 0xF010, &u16s(&anchor)), &art(0, 0, 0xF011, &[])]);
+    art(0xF, 0, 0xF004, &body)
+}
+
+/// The MsoDrawing and Obj records of a sheet's pictures; the first MsoDrawing holds the drawing
+/// and group shape, later ones a shape each, as Excel writes them.
+fn picture_records(shapes: &[Vec<u8>]) -> Vec<u8> {
+    let mut out = vec![];
+    for (i, shape) in shapes.iter().enumerate() {
+        let drawing = if i == 0 {
+            let group = art(0xF, 0, 0xF004, &art(2, 0, 0xF00A, &[0; 8]));
+            art(0xF, 0, 0xF002, &cat(&[&art(0, 1, 0xF008, &[0; 8]), &art(0xF, 0, 0xF003, &cat(&[&group, shape]))]))
+        } else {
+            shape.clone()
+        };
+        out.extend(cat(&[&rec(0x00EC, &drawing), &obj(0x08, i as u16 + 1)]));
+    }
+    out
+}
+
+fn book_with_pictures(group: &[u8], sheets: &[Vec<u8>]) -> Vec<u8> {
+    let sheet_stream = |records: &[u8]| cat(&[&bof(0x0010), records, &eof()]);
+    let streams: Vec<Vec<u8>> = sheets.iter().map(|r| sheet_stream(r)).collect();
+    let boundsheet = |pos: u32, i: usize| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 2, 0], format!("S{i}").as_bytes()]));
+    let globals = |pos: &[u32]| {
+        let sheets: Vec<u8> = pos.iter().enumerate().flat_map(|(i, p)| boundsheet(*p, i)).collect();
+        cat(&[&bof(0x0005), group, &sheets, &eof()])
+    };
+    let mut pos = globals(&vec![0; sheets.len()]).len() as u32;
+    let mut offsets = vec![];
+    for s in &streams {
+        offsets.push(pos);
+        pos += s.len() as u32;
+    }
+    cat(&[&globals(&offsets), &streams.concat()])
+}
+
+fn dib() -> Vec<u8> {
+    // A 1x1, 24-bit BITMAPINFOHEADER and one padded pixel row.
+    cat(&[&40u32.to_le_bytes(), &1u32.to_le_bytes(), &1u32.to_le_bytes(), &u16s(&[1, 24]), &[0; 24], &[1, 2, 3, 0]])
+}
+
+#[test]
+fn reads_pictures() {
+    let (png, jpg) = (b"\x89PNG picture bytes".to_vec(), b"\xFF\xD8 jpeg bytes".to_vec());
+    let group = drawing_group(&[
+        blip_entry(6, 0xF01E, 0x6E0, &png),
+        blip_entry(5, 0xF01D, 0x46B, &jpg),
+        blip_entry(7, 0xF01F, 0x7A8, &dib()),
+        blip_entry(2, 0xF01A, 0x3D4, b"compressed metafile"),
+    ]);
+    let first = picture_records(&[
+        picture_shape(1, [0, 1, 512, 2, 128, 3, 0, 4, 0], "first alt"),
+        picture_shape(2, [2, 0, 0, 0, 0, 1, 0, 1, 0], ""),
+        picture_shape(1, [3, 5, 0, 5, 0, 6, 0, 6, 0], ""),
+        picture_shape(3, [0, 0, 0, 0, 0, 1, 0, 1, 0], ""),
+        picture_shape(4, [0, 0, 0, 0, 0, 1, 0, 1, 0], ""), // a metafile: skipped
+        picture_shape(9, [0, 0, 0, 0, 0, 1, 0, 1, 0], ""), // no such store entry: skipped
+    ]);
+    let second = picture_records(&[picture_shape(2, [0, 0, 0, 0, 0, 1, 0, 1, 0], "")]);
+    let (wb, report) = read_xls(&compound("Workbook", &book_with_pictures(&group, &[first, second]))).unwrap();
+
+    let s = &wb.sheets[0];
+    assert_eq!(s.images.len(), 4);
+    let (a, b, c, d) = (&s.images[0], &s.images[1], &s.images[2], &s.images[3]);
+    assert_eq!((a.mime.as_str(), a.data.as_slice(), a.alt.as_str()), ("image/png", png.as_slice(), "first alt"));
+    assert_eq!((b.mime.as_str(), b.data.as_slice()), ("image/jpeg", jpg.as_slice()));
+    // The same store entry shown twice is held once.
+    assert!(std::sync::Arc::ptr_eq(&a.data, &c.data));
+    // A DIB gets a bitmap file header whose pixel offset is past the 40-byte header.
+    assert_eq!(d.mime, "image/bmp");
+    assert_eq!(&d.data[..2], b"BM");
+    assert_eq!(d.data.len(), 14 + dib().len());
+    assert_eq!(u32::from_le_bytes([d.data[10], d.data[11], d.data[12], d.data[13]]), 54);
+    assert_eq!(&d.data[14..], dib().as_slice());
+
+    // The anchor: top-left cell, offsets within it, and a size from the cells it covers.
+    assert_eq!(a.anchor.cell, CellRef::new(2, 1));
+    let near = |x: f32, y: f64| (f64::from(x) - y).abs() < 0.01;
+    assert!(near(a.anchor.dx, f64::from(s.col_width(1)) / 2.0));
+    assert!(near(a.anchor.dy, f64::from(s.row_height(2)) / 2.0));
+    assert!(near(a.anchor.width, s.col_left(3) - s.col_left(1) - f64::from(s.col_width(1)) / 2.0));
+    assert!(near(a.anchor.height, s.row_top(4) - s.row_top(2) - f64::from(s.row_height(2)) / 2.0));
+    use gridcraft_model::AnchorMode::{Absolute, MoveAndSize, MoveOnly};
+    assert_eq!((a.anchor.mode, b.anchor.mode, c.anchor.mode), (MoveAndSize, MoveOnly, Absolute));
+
+    // Object ids are unique across the workbook.
+    let ids: std::collections::HashSet<u32> = wb.sheets.iter().flat_map(|s| s.images.iter().map(|i| i.id)).collect();
+    assert_eq!(ids.len(), 5);
+    assert_eq!(wb.sheets[1].images.len(), 1);
+
+    let said = |part: &str| report.warnings.iter().any(|w| w.contains(part));
+    assert!(said("pictures") && said("skipped"), "{:?}", report.warnings);
+    assert!(!said("Charts and shapes"), "{:?}", report.warnings);
+
+    // Saved as .xlsx and read back, the pictures are the same.
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].images.len(), 4);
+    assert_eq!(back.sheets[0].images[0].data, a.data);
+    assert_eq!(back.sheets[0].images[0].alt, "first alt");
+}
+
+#[test]
+fn pictures_beside_charts_and_shapes_warn_only_for_those() {
+    let group = drawing_group(&[blip_entry(6, 0xF01E, 0x6E0, b"png")]);
+    let records = cat(&[&picture_records(&[picture_shape(1, [0, 0, 0, 0, 0, 1, 0, 1, 0], "")]), &rec(0x00EC, &[0; 8]), &obj(0x05, 9)]);
+    let (wb, report) = read_xls(&compound("Workbook", &book_with_pictures(&group, &[records]))).unwrap();
+    assert_eq!(wb.sheets[0].images.len(), 1);
+    assert!(report.warnings.iter().any(|w| w.contains("Charts and shapes")), "{:?}", report.warnings);
+    assert!(!report.warnings.iter().any(|w| w.contains("pictures") && w.contains("skipped")), "{:?}", report.warnings);
+}
+
+#[test]
+fn hostile_picture_records_never_panic() {
+    let group = drawing_group(&[blip_entry(6, 0xF01E, 0x6E0, b"png"), blip_entry(7, 0xF01F, 0x7A8, &dib())]);
+    let sheet = picture_records(&[picture_shape(1, [0, 1, 2, 3, 4, 5, 6, 7, 8], "alt"), picture_shape(2, [0, 0, 0, 0, 0, 1, 0, 1, 0], "")]);
+    let stream = book_with_pictures(&group, &[sheet]);
+    for cut in (0..stream.len()).step_by(7) {
+        let _ = read_xls(&compound("Workbook", &stream[..cut]));
+    }
+    for at in 0..stream.len() {
+        for x in [0x5Au8, 0xFF] {
+            let mut s = stream.clone();
+            s[at] ^= x;
+            let _ = read_xls(&compound("Workbook", &s));
+        }
+    }
+    // Containers nested far past the limit, and anchors far outside the grid, are bounded.
+    let nested = (0..300).fold(vec![], |inner, _| art(0xF, 0, 0xF004, &inner));
+    let far = picture_shape(1, [3, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535], "");
+    let sheet = cat(&[&rec(0x00EC, &nested), &picture_records(&[far])]);
+    let (wb, _) = read_xls(&compound("Workbook", &book_with_pictures(&group, &[sheet]))).unwrap();
+    let image = &wb.sheets[0].images[0];
+    assert!(image.anchor.width.is_finite() && image.anchor.height.is_finite());
 }
