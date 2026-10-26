@@ -1,5 +1,6 @@
 //! Worksheets and structure: insert/delete rows, columns and cells; sheet tabs.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
@@ -176,15 +177,10 @@ pub(crate) fn refit_objects(before: &Workbook, after: &mut Arc<Workbook>) {
             continue;
         }
         // Prior anchors by object id, so a sheet of many objects is matched in one pass.
-        let was = |anchors: Vec<(u32, &Anchor)>| anchors.into_iter().collect::<std::collections::HashMap<u32, &Anchor>>();
-        let (old_charts, old_images, old_shapes) = (
-            was(old.charts.iter().map(|o| (o.id, &o.anchor)).collect()),
-            was(old.images.iter().map(|o| (o.id, &o.anchor)).collect()),
-            was(old.shapes.iter().map(|o| (o.id, &o.anchor)).collect()),
-        );
-        let fit = |olds: &std::collections::HashMap<u32, &Anchor>, id: u32, now: &Anchor| {
-            olds.get(&id).map_or(*now, |was| refit_anchor(old, new, was, now))
-        };
+        let old_charts: HashMap<u32, &Anchor> = old.charts.iter().map(|o| (o.id, &o.anchor)).collect();
+        let old_images: HashMap<u32, &Anchor> = old.images.iter().map(|o| (o.id, &o.anchor)).collect();
+        let old_shapes: HashMap<u32, &Anchor> = old.shapes.iter().map(|o| (o.id, &o.anchor)).collect();
+        let fit = |olds: &HashMap<u32, &Anchor>, id: u32, now: &Anchor| olds.get(&id).map_or(*now, |was| refit_anchor(old, new, was, now));
         let charts: Vec<Anchor> = new.charts.iter().map(|n| fit(&old_charts, n.id, &n.anchor)).collect();
         let images: Vec<Anchor> = new.images.iter().map(|n| fit(&old_images, n.id, &n.anchor)).collect();
         let shapes: Vec<Anchor> = new.shapes.iter().map(|n| fit(&old_shapes, n.id, &n.anchor)).collect();
