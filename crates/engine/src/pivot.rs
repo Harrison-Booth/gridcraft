@@ -1635,6 +1635,18 @@ pub fn chart_series(sheet: &str, origin: CellRef, out: &Output) -> Vec<Series> {
         .collect()
 }
 
+/// Error bars stay with the series of the same name; duplicate names pair up in order, each old series used once.
+fn carry_error_bars(old: &[Series], new: &mut [Series]) {
+    let mut used = vec![false; old.len()];
+    for s in new {
+        let hit = old.iter().enumerate().find(|(i, o)| !used[*i] && o.name == s.name).map(|(i, _)| i);
+        if let Some(i) = hit {
+            used[i] = true;
+            s.error_bars = old[i].error_bars.clone();
+        }
+    }
+}
+
 /// Rebuilds the series of every PivotChart of a PivotTable after its report was written.
 fn rebind_charts(wb: &mut Workbook, sheet: &str, pivot: &str, origin: CellRef, out: &Output) {
     let linked = |ch: &Chart| ch.pivot.as_deref().is_some_and(|l| links_to(l, sheet, pivot));
@@ -1646,14 +1658,9 @@ fn rebind_charts(wb: &mut Workbook, sheet: &str, pivot: &str, origin: CellRef, o
     for i in hits {
         let Some(sh) = wb.sheet_mut(i) else { continue };
         for ch in sh.charts.iter_mut().filter(|c| linked(c)) {
-            // Error bars stay with the series of the same name.
             let old = std::mem::take(&mut ch.series);
             ch.series = series.clone();
-            for s in &mut ch.series {
-                if let Some(o) = old.iter().find(|o| o.name == s.name) {
-                    s.error_bars = o.error_bars.clone();
-                }
-            }
+            carry_error_bars(&old, &mut ch.series);
         }
     }
 }
@@ -1679,5 +1686,35 @@ mod fit_tests {
         assert!(!data_cols_exceed_sheet(64, false, 256));
         assert!(!data_cols_exceed_sheet(16_384, false, 0));
         assert!(data_cols_exceed_sheet(16_385, false, 0));
+    }
+}
+
+#[cfg(test)]
+mod carry_error_bars_tests {
+    use super::*;
+
+    fn series(name: &str, bars: usize) -> Series {
+        Series {
+            name: Some(name.into()),
+            categories: None,
+            values: String::new(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            quartiles: Default::default(),
+            smooth: false,
+            trendlines: Vec::new(),
+            error_bars: vec![Default::default(); bars],
+        }
+    }
+
+    #[test]
+    fn duplicate_names_take_distinct_old_series() {
+        let old = [series("a", 1), series("a", 0)];
+        let mut new = [series("a", 0), series("a", 0), series("a", 0)];
+        carry_error_bars(&old, &mut new);
+        let counts: Vec<usize> = new.iter().map(|s| s.error_bars.len()).collect();
+        assert_eq!(counts, [1, 0, 0]);
     }
 }
