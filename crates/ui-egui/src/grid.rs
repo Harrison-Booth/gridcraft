@@ -3051,6 +3051,14 @@ fn select_ranges(app: &mut SheetApp, r: RangeRef, add: bool, active: CellRef) {
     let _ = app.session.run("selection.set", params);
 }
 
+/// The status bar draws before the grid handles keys, so a change repaints to show "End Mode" at once.
+fn set_end_mode(app: &mut SheetApp, ctx: &egui::Context, on: bool) {
+    if app.grid.end_mode != on {
+        app.grid.end_mode = on;
+        ctx.request_repaint();
+    }
+}
+
 /// Grid keyboard handling when no text field has focus.
 fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     // Focus left on an editor that no longer exists goes back to the grid.
@@ -3072,7 +3080,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
     {
         // Keys typed elsewhere count as "another key": End mode does not wait for the grid's return.
-        app.grid.end_mode = false;
+        set_end_mode(app, ctx, false);
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
@@ -3123,7 +3131,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                 // (a shortcut included) ends it before it runs.
                 let end_jump = app.grid.end_mode && m.is_none() && matches!(key, Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight);
                 if key != Key::End || !m.is_none() {
-                    app.grid.end_mode = false;
+                    set_end_mode(app, ctx, false);
                 }
                 if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
                     shortcut_ran = true;
@@ -3160,7 +3168,7 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
                         app.grid.ensure_visible = true;
                     }
                     // A held End key repeats; only the first press toggles.
-                    Key::End if m.is_none() && !repeat => app.grid.end_mode = !app.grid.end_mode,
+                    Key::End if m.is_none() && !repeat => set_end_mode(app, ctx, !app.grid.end_mode),
                     Key::Home => {
                         let a = app.session.active().map(|d| d.selection.active).unwrap_or_default();
                         let _ = app.session.run("selection.set", json!({"cell": CellRef::new(a.row, 0).a1()}));
