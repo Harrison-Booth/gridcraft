@@ -2080,7 +2080,7 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
                     {
                         let locale = app.ui.language.formula_locale();
                         let name =
-                            app.session.active().map(|d| crate::formula_locale::completion_name(n, locale, &d.wb, d.wb.active_sheet)).unwrap_or(n);
+                            app.session.active().map(|d| crate::formula_locale::completion_name(n, locale, &d.wb, d.wb.active_sheet())).unwrap_or(n);
                         let desc = crate::formula_locale::description(n, locale, app.ui.language).unwrap_or_default();
                         if ui.button(name).on_hover_text(desc).clicked() {
                             app.run_or_alert("formulas.insertFunction", json!({"name": n}));
@@ -2109,7 +2109,7 @@ fn formulas(app: &mut SheetApp, ui: &mut Ui) {
             // The menu lists the names Paste Names lists; clicking one runs `formulas.useInFormula`, which puts it at the caret.
             // Listed when the menu opens, and again only after the workbook changes.
             let cache = egui::Id::unique("gridcraft.use_in_formula_names");
-            let key = app.session.active().map(|d| (d.uid, d.revision, d.wb.active_sheet));
+            let key = app.session.active().map(|d| (d.uid, d.revision, d.wb.active_sheet()));
             let cached = ui.ctx().data(|m| m.get_temp::<(Option<(u64, u64, usize)>, std::sync::Arc<Vec<String>>)>(cache)).filter(|(k, _)| *k == key);
             let names = match cached {
                 Some((_, names)) => names,
@@ -2513,6 +2513,16 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
         act(app, "view.zoomToSelection", json!({"viewWidth": r.width(), "viewHeight": r.height()}));
     }
     sep(ui);
+    let __k = big_button(ui, Icon::NewFile, "New\nWindow", "New Window", false);
+    control_keytip(app, ui, &__k, "view.newWindow");
+    if __k.clicked() {
+        act(app, "view.newWindow", json!({}));
+    }
+    let __k = big_button(ui, Icon::Table, "Arrange\nAll", "Arrange All", false);
+    control_keytip(app, ui, &__k, "view.arrangeAll");
+    if __k.clicked() {
+        app.open_dialog("arrangeAll", json!({}));
+    }
     let fp = big_button(ui, Icon::Freeze, "Freeze\nPanes", "Freeze Panes", true);
     for sequence in
         keytip_table::group_extension(app.keytips.prefix().unwrap_or_default(), &["view.freezePanes", "view.freezeTopRow", "view.freezeFirstColumn"])
@@ -2531,6 +2541,7 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             ],
         );
     });
+    switch_windows(app, ui);
     ui.vertical(|ui| {
         let label_response = ui.label(lang.tr("Display theme"));
         let mode = app.ui.theme_mode();
@@ -2592,6 +2603,24 @@ fn view(app: &mut SheetApp, ui: &mut Ui) {
             })
             .response
             .labelled_by(label.id);
+    });
+}
+
+/// View › Switch Windows: the open workbooks, the active one checked and unsaved ones marked;
+/// choosing one brings it forward.
+fn switch_windows(app: &mut SheetApp, ui: &mut Ui) {
+    let anchor = big_button(ui, Icon::Book, "Switch\nWindows", "Switch Windows", true);
+    anchor.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), "Switch Windows"));
+    control_keytip(app, ui, &anchor, "view.switchWindows");
+    let forced = std::mem::take(&mut app.open_switch_windows) | invoke(app, "view.switchWindows");
+    egui::Popup::menu(&anchor).open_memory(popup_command(forced, anchor.clicked())).show(|ui| {
+        for w in app.open_windows() {
+            let label = theme::available_text(ui, &format!("{}{}", if w.active { "✓ " } else { "    " }, w.label()));
+            if ui.add(egui::Button::selectable(w.active, label).min_size(vec2(220.0, 22.0))).clicked() {
+                act(app, "view.switchWindows", json!({"window": w.window}));
+                ui.close();
+            }
+        }
     });
 }
 

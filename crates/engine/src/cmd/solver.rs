@@ -301,7 +301,7 @@ fn parse_model(s: &Session, p: &Json) -> Result<Model> {
     let d = s.doc()?;
     let wb = &d.wb;
     let obj_text = str_param(p, "objective").or_else(|| str_param(p, "setObjective")).or_else(|| str_param(p, "set")).unwrap_or("");
-    let (sheet, obj) = cells_of(wb, obj_text, wb.active_sheet, 1).map_err(|_| EngineError::Other("The objective must be a single cell.".into()))?;
+    let (sheet, obj) = cells_of(wb, obj_text, wb.active_sheet(), 1).map_err(|_| EngineError::Other("The objective must be a single cell.".into()))?;
     let objective = *obj.first().ok_or_else(|| EngineError::Other("The objective must be a single cell.".into()))?;
     let sh = wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     if sh.cell(objective).is_none_or(|c| c.formula.is_none()) {
@@ -1913,8 +1913,8 @@ fn write_reports(cx: &mut Ctx, at: usize, built: Vec<(String, Lines)>) -> Vec<St
             *sc += count;
         }
     }
-    if cx.wb.active_sheet >= at {
-        cx.wb.active_sheet += count;
+    if cx.wb.active_sheet() >= at {
+        cx.wb.set_active_sheet(cx.wb.active_sheet().saturating_add(count));
     }
     cx.structural = true;
     names
@@ -1939,7 +1939,7 @@ fn report(s: &mut Session, p: &Json) -> Result<Json> {
     let params = match p.get("model") {
         Some(m @ Json::Object(_)) => m.clone(),
         Some(Json::Null) | None => {
-            let mut params = saved_model(&d.wb, d.wb.active_sheet).unwrap_or_else(|| json!({}));
+            let mut params = saved_model(&d.wb, d.wb.active_sheet()).unwrap_or_else(|| json!({}));
             if let (Some(base), Some(over)) = (params.as_object_mut(), p.as_object()) {
                 for (k, v) in over {
                     base.insert(k.clone(), v.clone());
@@ -1988,7 +1988,7 @@ fn report(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn run(s: &mut Session, p: &Json) -> Result<Json> {
     let d = s.doc()?;
-    let active = d.wb.active_sheet;
+    let active = d.wb.active_sheet();
     let mut params = p.clone();
     if bool_param(p, "saved").unwrap_or(false) {
         let saved = saved_model(&d.wb, active).ok_or_else(|| EngineError::Other("This sheet has no saved Solver model.".into()))?;
@@ -2145,7 +2145,7 @@ mod tests {
     /// The first saved-model name scoped to the active sheet.
     fn saved(s: &Session) -> String {
         let d = s.doc().unwrap();
-        d.wb.names.iter().find(|n| n.scope == Some(d.wb.active_sheet)).map(|n| n.name.clone()).unwrap_or_default()
+        d.wb.names.iter().find(|n| n.scope == Some(d.wb.active_sheet())).map(|n| n.name.clone()).unwrap_or_default()
     }
     fn set(s: &mut Session, cells: &[(&str, &str)]) {
         for (c, v) in cells {
