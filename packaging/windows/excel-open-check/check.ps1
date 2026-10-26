@@ -118,5 +118,6 @@ foreach ($w in $work) {
 $rows | Format-Table -AutoSize -Wrap | Out-String -Width 220 | Write-Output
 if ($Csv) { $rows | Export-Csv -NoTypeInformation -Path $Csv }
 $bad = @($rows | Where-Object { $_.Saved -ne 'PASS' -or $_.Original -eq 'SKIP-XLM' }).Count
-"{0} of {1} saved files pass" -f ($rows.Count - $bad), $rows.Count
+$savedBad = @($rows | Where-Object Saved -ne 'PASS').Count
+"{0} of {1} saved files pass" -f ($rows.Count - $savedBad), $rows.Count
 if ($bad) { exit 1 }
