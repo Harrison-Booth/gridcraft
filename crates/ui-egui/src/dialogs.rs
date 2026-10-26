@@ -873,6 +873,7 @@ impl Dialog {
             "manageRules" => Dialog::custom("manageRules", "Conditional Formatting Rules Manager", json!({})),
             "commandSearch" => Dialog::custom("commandSearch", "Search Commands", json!({})),
             "agents" => Dialog::custom("agents", "Agent Control", json!({})),
+            "failedLink" => Dialog::custom("failedLink", "Couldn't open your web browser", json!({"url": p("url"), "details": p("details")})),
             "about" => {
                 let mut d = Dialog::custom("about", "About GridCraft", json!({}));
                 d.tab = match p("tab").as_str() {
@@ -1265,6 +1266,30 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
     v
 }
 
+/// Report an Issue… when no browser opened: the address and the details to copy. It stays open
+/// until closed, so the user can still report the issue by hand.
+fn failed_link(app: &SheetApp, ui: &mut egui::Ui, d: &Dialog, open: &mut bool) {
+    let lang = app.ui.language;
+    let text = |key: &str| d.values.get(key).and_then(Json::as_str).unwrap_or_default().to_string();
+    let (url, details) = (text("url"), text("details"));
+    let label = ui.label(lang.tr("Link"));
+    let mut shown = url.as_str();
+    ui.add(egui::TextEdit::singleline(&mut shown).id_salt("failedLink.url").desired_width(f32::INFINITY)).labelled_by(label.id);
+    ui.add_space(6.0);
+    let label = ui.label(lang.tr("Details"));
+    let mut shown = details.as_str();
+    ui.add(egui::TextEdit::multiline(&mut shown).id_salt("failedLink.details").desired_width(f32::INFINITY).desired_rows(6)).labelled_by(label.id);
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if ui.button(lang.tr("Copy Details")).clicked() {
+            ui.ctx().copy_text(crate::report_issue::clipboard_text(&details));
+        }
+        if ui.button(lang.tr("Close")).clicked() {
+            *open = false;
+        }
+    });
+}
+
 /// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
@@ -1278,6 +1303,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
+        "failedLink" => 480.0,
         "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
@@ -1331,6 +1357,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                     ui.label(format!("{} engine commands are available. See docs/mcp.md and docs/control-protocol.md.", gridcraft_engine::command_specs().len()));
                 }
                 "about" => about(ui, &mut d),
+                "failedLink" => failed_link(app, ui, &d, &mut open),
                 "journal" => {
                     egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                         for (id, p) in app.session.journal.iter().rev().take(500) {
@@ -1510,7 +1537,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
             urls
         });
         for u in urls {
-            open_url(&u);
+            let _ = open_url(&u);
         }
     }
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {

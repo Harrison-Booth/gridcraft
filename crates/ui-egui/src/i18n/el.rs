@@ -983,6 +983,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "A CSV file, web page or PDF is a copy: the workbook keeps its own file." => {
             "Ένα αρχείο CSV, μια ιστοσελίδα ή ένα PDF είναι αντίγραφο: το βιβλίο εργασίας διατηρεί το δικό του αρχείο."
         }
+        "Report an Issue…" => "Αναφορά προβλήματος…",
+        "Details" => "Λεπτομέρειες",
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
+            "Αναφορά προβλήματος: ανοίγει ένα νέο ζήτημα στο GitHub με συμπληρωμένα την έκδοση και τα στοιχεία του συστήματος. Τίποτα δεν αποστέλλεται μέχρι να το υποβάλετε."
+        }
+        "Couldn't open your web browser" => "Δεν ήταν δυνατό να ανοίξει το πρόγραμμα περιήγησης",
+        "Copy Details" => "Αντιγραφή λεπτομερειών",
         _ => return None,
     })
 }

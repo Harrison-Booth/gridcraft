@@ -2648,6 +2648,12 @@ fn automate(app: &mut SheetApp, ui: &mut Ui) {
     if __k.clicked() {
         app.run_or_alert("app.checkForUpdates", json!({}));
     }
+    let report = big_button(ui, Icon::Feedback, "Report an Issue…", crate::report_issue::TIP, false);
+    let report_name = app.ui.language.tr("Report an Issue…").to_string();
+    report.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, report_name.as_str()));
+    if report.clicked() {
+        app.run_or_alert("help.reportIssue", json!({}));
+    }
     let __k = big_button(ui, Icon::Script, "About\nGridCraft", "Version, contributors and the AI models that helped", false);
     control_keytip(app, ui, &__k, "about");
     if __k.clicked() {

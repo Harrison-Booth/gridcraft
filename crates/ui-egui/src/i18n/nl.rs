@@ -527,6 +527,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom In" => "Inzoomen",
         "Zoom Out" => "Uitzoomen",
         "Dismiss" => "Negeren",
+        "Report an Issue…" => "Probleem melden…",
+        "Details" => "Details",
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
+            "Probleem melden: opent een nieuw GitHub-issue met de versie en systeemgegevens al ingevuld. Er wordt niets verzonden voordat u het indient."
+        }
+        "Couldn't open your web browser" => "Kan uw webbrowser niet openen",
+        "Copy Details" => "Details kopiëren",
         _ => return None,
     })
 }

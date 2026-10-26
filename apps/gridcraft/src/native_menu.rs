@@ -186,6 +186,7 @@ fn tree() -> Vec<(&'static str, Vec<Entry>)> {
                 ("Contributors…", "dialog:about:Contributors", None),
                 ("GridCraft on getartcraft.com", "url:https://getartcraft.com/apps/gridcraft", None),
                 ("Join the ArtCraft Discord…", "url:https://discord.gg/artcraft", None),
+                ("Report an Issue…", "help.reportIssue", None),
             ],
         ),
     ]
@@ -355,7 +356,7 @@ impl NativeMenu {
             }
             if let Some(url) = id.strip_prefix("url:") {
                 if let Some(open) = &app.services.open_url {
-                    open(url);
+                    let _ = open(url);
                 }
             } else if let Some(rest) = id.strip_prefix("dialog:") {
                 let (name, arg) = rest.split_once(':').unwrap_or((rest, ""));
@@ -409,6 +410,19 @@ mod tests {
         assert_eq!(item.1, "app.checkForUpdates");
         let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
         assert!(app.run(item.1, serde_json::json!({})).is_ok());
+    }
+
+    #[test]
+    fn help_menu_reports_an_issue_through_the_command() {
+        let tree = tree();
+        let (_, help) = tree.iter().find(|(title, _)| *title == "Help").expect("Help menu");
+        let position = help.iter().position(|e| e.0 == "Report an Issue…").expect("Report an Issue… in the Help menu");
+        assert_eq!(help[position].1, "help.reportIssue");
+        assert_eq!(help[position - 1].0, "Join the ArtCraft Discord…", "it follows the Discord item");
+        let mut app = SheetApp::new(gridcraft_engine::Session::new(), Default::default());
+        let result = app.run(help[position].1, serde_json::json!({"open": false})).expect("the command runs");
+        assert!(result["url"].as_str().is_some_and(|url| url.starts_with("https://github.com/storytold/gridcraft/issues/new?")));
+        assert_eq!(result["opened"], false);
     }
 
     #[test]

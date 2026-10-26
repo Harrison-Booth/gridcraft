@@ -446,6 +446,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Сви листови",
         "New sheet (⇧F11)" => "Нови лист (⇧F11)",
         "Text Box" => "Текстуално поље",
+        "Report an Issue…" => "Prijavi problem…",
+        "Details" => "Detalji",
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
+            "Prijavi problem: otvara novu prijavu na GitHub-u sa unetom verzijom i podacima o sistemu. Ništa se ne šalje dok je sami ne pošaljete."
+        }
+        "Couldn't open your web browser" => "Nije moguće otvoriti veb pregledač",
+        "Copy Details" => "Kopiraj detalje",
         _ => return None,
     })
 }

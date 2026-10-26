@@ -32,6 +32,7 @@ pub mod panes;
 pub mod paper_view;
 pub mod pivot_pane;
 pub mod printing;
+mod report_issue;
 pub mod ribbon;
 pub mod selection_glide;
 pub mod tabs;
@@ -225,7 +226,11 @@ pub struct Services {
     /// Browser picture picker. Each dialog owns its inbox, so canceled picks cannot
     /// insert into a subsequent dialog or open the image as a workbook.
     pub pick_picture_async: Option<Box<dyn Fn(Inbox)>>,
-    pub open_url: Option<Box<dyn Fn(&str)>>,
+    /// Opens an http, https or mailto address in the user's browser; `Err` says why none opened.
+    pub open_url: Option<Box<dyn Fn(&str) -> Result<(), String>>>,
+    /// The graphics adapter the renderer runs on, e.g. "GeForce RTX 3060 (Vulkan, DiscreteGpu)", for
+    /// Report an Issue… (`None` reads "unknown").
+    pub graphics: Option<String>,
     /// Publish HTML and its plain-text alternative together. `Ok` means the host owns the
     /// write (including any asynchronous fallback); an immediate error uses egui's text path.
     pub copy_html: Option<Box<dyn FnMut(&str, &str) -> Result<(), String>>>,
@@ -296,6 +301,8 @@ pub struct SheetApp {
     /// Dismissible info bar under the ribbon (open-time notices).
     pub notice: Option<Notice>,
     pub services: Services,
+    /// The window's scale factor as of the last frame (native scale times the interface zoom).
+    pub(crate) pixels_per_point: f32,
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     /// Synthetic input from agents, one batch per step (drags need several steps).
@@ -397,6 +404,7 @@ impl SheetApp {
             toast: None,
             notice: None,
             services,
+            pixels_per_point: 1.0,
             printing: Default::default(),
             print_feedback_seen: None,
             synthetic: Default::default(),
@@ -664,6 +672,10 @@ impl SheetApp {
     }
 
     pub fn run_or_alert(&mut self, id: &str, params: Json) {
+        // Menu-style Report an Issue…: when no browser opens, show the address and details to copy.
+        if id == "help.reportIssue" {
+            return report_issue::run_menu(self, params);
+        }
         // A menu/shortcut opens the settings first; the Print page's button submits explicitly.
         if id == "file.print" {
             if self.services.print_native.is_some() {
@@ -767,6 +779,7 @@ impl SheetApp {
                 self.check_for_updates();
                 Ok(Json::Null)
             }
+            "help.reportIssue" => report_issue::run(self, p),
             "ui.printSettings" => printing::settings(&mut self.printing, p, self.services.printers.as_ref()),
             "ui.printSubmit" => self.submit_print(p.clone()),
             "ui.ribbonTab" => {
@@ -902,7 +915,7 @@ impl SheetApp {
                 UiRequest::InsertName(name) => dialogs::insert_name(self, &name),
                 UiRequest::OpenUrl(u) => {
                     if let Some(f) = &self.services.open_url {
-                        f(&u);
+                        let _ = f(&u);
                     }
                 }
             }
@@ -1438,6 +1451,7 @@ impl SheetApp {
     /// Per-frame logic (control channel, screenshots). Call before `ui`.
     pub fn logic(&mut self, ctx: &egui::Context) {
         self.ensure_text_width(ctx);
+        self.pixels_per_point = ctx.pixels_per_point();
         // A keytip control request lives one frame: the ribbon consumes it during `ui`, and
         // anything that never reached a control (collapsed ribbon, tab switch) is dropped.
         self.ui.keytip_invoke = None;

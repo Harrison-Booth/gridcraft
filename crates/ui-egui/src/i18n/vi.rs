@@ -418,6 +418,13 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable iterative calculation" => "Bật tính toán lặp",
         "Calculation settings are saved with the workbook." => "Thiết lập tính toán được lưu cùng sổ làm việc.",
         "Text Box" => "Hộp văn bản",
+        "Report an Issue…" => "Báo cáo vấn đề…",
+        "Details" => "Chi tiết",
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
+            "Báo cáo vấn đề: mở một vấn đề mới trên GitHub với phiên bản và thông tin hệ thống đã điền sẵn. Không có gì được gửi cho đến khi bạn gửi."
+        }
+        "Couldn't open your web browser" => "Không thể mở trình duyệt web của bạn",
+        "Copy Details" => "Sao chép chi tiết",
         _ => return None,
     })
 }

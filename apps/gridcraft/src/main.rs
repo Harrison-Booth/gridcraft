@@ -203,13 +203,13 @@ fn services() -> Services {
     }
 }
 
-/// Opens a URL or file with the system's default application.
-fn open_with_system(target: &str) {
+/// Opens a URL or file with the system's default application; `Err` says why nothing opened.
+fn open_with_system(target: &str) -> Result<(), String> {
     // Last line of defence behind `link.open` and the click prompt: the system only ever gets
     // http, https and mailto addresses.
     let gridcraft_engine::links::LinkKind::External(target) = gridcraft_engine::links::classify(target) else {
         log::warn!("refused to open {target:?}: only http, https and mailto links are opened");
-        return;
+        return Err("only http, https and mailto links are opened".into());
     };
     let target = target.as_str();
     let cmd = if cfg!(target_os = "macos") {
@@ -219,9 +219,10 @@ fn open_with_system(target: &str) {
     } else {
         "xdg-open"
     };
-    if let Err(e) = std::process::Command::new(cmd).arg(target).spawn() {
+    std::process::Command::new(cmd).arg(target).spawn().map(|_| ()).map_err(|e| {
         log::warn!("{cmd} {target}: {e}");
-    }
+        e.to_string()
+    })
 }
 
 fn icon() -> Option<egui::IconData> {
@@ -381,6 +382,10 @@ fn main() -> eframe::Result<()> {
                 let Some(mut app) = pending.take() else {
                     return Err("the app was already created".into());
                 };
+                app.services.graphics = cc.wgpu_render_state.as_ref().map(|state| {
+                    let info = state.adapter.get_info();
+                    format!("{} ({:?}, {:?})", info.name, info.backend, info.device_type)
+                });
                 SheetApp::setup_context_for_language(&cc.egui_ctx, app.ui.dark, app.ui.language);
                 if let Some(port) = control_port {
                     match control_server::start(port, control_token.clone(), cc.egui_ctx.clone()) {
