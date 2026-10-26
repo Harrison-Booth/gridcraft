@@ -22,6 +22,27 @@ fn tmpdir(name: &str) -> PathBuf {
     d
 }
 
+/// `--csv-as-text` opens a csv with every field as text, like Excel's Text column format (#1808):
+/// the leading zero and the long digit string survive, and `convert` writes them back as read.
+#[test]
+fn csv_as_text_keeps_identifiers_as_written() {
+    let dir = tmpdir("csv-as-text");
+    let (input, out) = (dir.join("feed.csv"), dir.join("copy.csv"));
+    std::fs::write(&input, "gtin,zip,flag\r\n8435392892278,01234,TRUE\r\n12345678901234567890,007,false\r\n").unwrap();
+    let i = input.to_str().unwrap();
+    let typed = ok(&["cat", i, "--csv"]);
+    assert!(typed.contains("1234,") && !typed.contains("01234"), "numbers by default: {typed}");
+    let text = ok(&["cat", i, "--csv", "--csv-as-text"]);
+    assert!(text.contains("8435392892278,01234,TRUE") && text.contains("12345678901234567890,007,false"), "{text}");
+    ok(&["convert", i, out.to_str().unwrap(), "--csv-as-text"]);
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), std::fs::read_to_string(&input).unwrap());
+    // It has no effect on a format that is not text.
+    let book = dir.join("b.xlsx");
+    ok(&["run", "--cmd", r#"cell.set={"cell":"A1","input":"1"}"#, "--out", book.to_str().unwrap(), "--quiet"]);
+    assert_eq!(ok(&["cat", book.to_str().unwrap(), "--csv-as-text"]), ok(&["cat", book.to_str().unwrap()]));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn version_and_usage() {
     assert_eq!(ok(&["--version"]).trim(), format!("gridcraft-cli {}", env!("CARGO_PKG_VERSION")));

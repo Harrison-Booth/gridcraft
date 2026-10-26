@@ -899,6 +899,30 @@ fn column_autocomplete_can_be_turned_off() {
     assert_eq!(h.state_mut().run("options.autoComplete", json!({})), Ok(json!({"on": true})), "no parameters: it toggles");
 }
 
+/// File ▸ Options ▸ Editing decides how File ▸ Open reads a csv: typed like typed input by default,
+/// every field as text (01234 stays 01234) when `options.csvAsText` is on (#1808).
+#[test]
+fn csv_as_text_option_decides_how_open_reads_a_csv() {
+    assert!(!gridcraft_ui_egui::UiState::default().csv_as_text);
+    let old: gridcraft_ui_egui::UiState = serde_json::from_str(r#"{"dark": true}"#).unwrap();
+    assert!(!old.csv_as_text, "a ui.json written before the setting existed keeps it off");
+
+    let dir = std::env::temp_dir().join(format!("gridcraft-csv-as-text-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (typed, text) = (dir.join("typed.csv"), dir.join("text.csv"));
+    for f in [&typed, &text] {
+        std::fs::write(f, "zip\n01234\n").unwrap();
+    }
+    let mut h = harness(blank());
+    h.state_mut().open_path(typed.to_str().unwrap());
+    assert_eq!(value(&h, "A2").as_f64(), Some(1234.0));
+    assert_eq!(h.state_mut().run("options.csvAsText", json!({"on": true})), Ok(json!({"on": true})));
+    h.state_mut().open_path(text.to_str().unwrap());
+    assert_eq!(value(&h, "A2"), Value::from("01234"));
+    assert_eq!(h.state_mut().run("options.csvAsText", json!({})), Ok(json!({"on": false})), "no parameters: it toggles");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// An .xlsm carrying a VBA project, saved to bytes.
 fn macro_workbook_bytes() -> Vec<u8> {
     let mut wb = gridcraft_engine::model::Workbook::new();

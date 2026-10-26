@@ -70,6 +70,10 @@ pub struct UiState {
     /// Enable AutoComplete for cell values (File ▸ Options ▸ Editing): typed text is completed
     /// from the one matching entry in the same column.
     pub autocomplete: bool,
+    /// File ▸ Options ▸ Editing: open .csv, .tsv and .txt files with every field as text, like
+    /// Excel's Text column format in the Text Import Wizard (the leading zero of 01234 and long
+    /// digit strings stay as written). Off by default: fields are typed like typed input.
+    pub csv_as_text: bool,
     /// AutoSave (the title-bar switch): save saved-to-file .xlsx workbooks shortly after every
     /// change. A preference like the rest of this struct — it stays on across restarts (#1901).
     pub autosave: bool,
@@ -116,6 +120,7 @@ impl Default for UiState {
             status_bar: true,
             animations: true,
             autocomplete: true,
+            csv_as_text: false,
             autosave: false,
             recent: vec![],
             keytip_invoke: None,
@@ -802,6 +807,10 @@ impl SheetApp {
                 self.ui.animations = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.animations);
                 Ok(json!({"on": self.ui.animations}))
             }
+            "options.csvAsText" => {
+                self.ui.csv_as_text = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.csv_as_text);
+                Ok(json!({"on": self.ui.csv_as_text}))
+            }
             "options.autoComplete" => {
                 self.ui.autocomplete = p.get("on").and_then(Json::as_bool).unwrap_or(!self.ui.autocomplete);
                 Ok(json!({"on": self.ui.autocomplete}))
@@ -986,7 +995,7 @@ impl SheetApp {
     }
 
     pub fn open_path(&mut self, path: &str) {
-        match self.run("file.open", json!({"path": path})) {
+        match self.run("file.open", json!({"path": path, "csvAsText": self.ui.csv_as_text})) {
             Ok(r) => self.after_open(Some(path), &r),
             // A password-protected workbook: ask for the password; the dialog opens it.
             Err(e) if e.contains(gridcraft_engine::io::PASSWORD_REQUIRED) => self.open_dialog("openPassword", json!({"path": path})),
@@ -1599,7 +1608,7 @@ impl SheetApp {
             .unwrap_or_default();
         for (name, bytes) in arrived {
             let b64 = gridcraft_engine::io::base64_encode(&bytes);
-            match self.run("file.open", json!({"name": &name, "base64": &b64})) {
+            match self.run("file.open", json!({"name": &name, "base64": &b64, "csvAsText": self.ui.csv_as_text})) {
                 // A file picked from File › Open (web) arrives here: show it, not the Backstage.
                 Ok(r) => {
                     self.backstage = None;

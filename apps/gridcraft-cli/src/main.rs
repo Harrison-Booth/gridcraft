@@ -1,15 +1,15 @@
 //! Headless GridCraft.
 //!
 //! ```text
-//! gridcraft-cli info <file> [--json]
-//! gridcraft-cli convert <in> <out> [--sheet NAME]
-//! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
-//! gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
+//! gridcraft-cli info <file> [--json] [--csv-as-text]
+//! gridcraft-cli convert <in> <out> [--sheet NAME] [--csv-as-text]
+//! gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json] [--csv-as-text]
+//! gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv] [--csv-as-text]
 //! gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
-//! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet]
+//! gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl] [--out FILE] [--print RANGE] [--quiet] [--csv-as-text]
 //! gridcraft-cli commands [--json] [--search X]
 //! gridcraft-cli functions [--json] [--search X] [--category C]
-//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+//! gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--csv-as-text]
 //! gridcraft-cli send <port> <method> [json]
 //! gridcraft-cli version | --version
 //! ```
@@ -35,21 +35,23 @@ use gridcraft_engine::Session;
 use serde_json::{Value, json};
 
 const USAGE: &str = "usage:
-  gridcraft-cli info <file> [--json]                      sheets, used ranges, tables, charts, names
-  gridcraft-cli convert <in> <out> [--sheet NAME]         xlsx/csv/tsv/json/html/pdf by extension
-  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json]
-  gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv]
+  gridcraft-cli info <file> [--json] [--csv-as-text]                      sheets, used ranges, tables, charts, names
+  gridcraft-cli convert <in> <out> [--sheet NAME] [--csv-as-text]         xlsx/csv/tsv/json/html/pdf by extension
+  gridcraft-cli eval <formula> [--in FILE] [--sheet S] [--cell A1] [--json] [--csv-as-text]
+  gridcraft-cli cat <file> [--range A1:D20] [--sheet S] [--formulas] [--csv] [--csv-as-text]
   gridcraft-cli check <file-or-dir>... [--json] [--tolerance 1e-9] [--max-report N]
                      cached-value calc oracle + XLSX round-trip fidelity (exit 1 on any difference)
   gridcraft-cli run [--in FILE | --sample NAME] [--cmd 'id={json}']... [--script FILE.jsonl]
-                     [--out FILE] [--print RANGE] [--quiet]
+                     [--out FILE] [--print RANGE] [--quiet] [--csv-as-text]
                      a script line is id={json} or {\"command\": \"id\", \"params\": {…}};
                      blank lines and lines starting with # or // are skipped
   gridcraft-cli commands [--json] [--search X]
   gridcraft-cli functions [--json] [--search X] [--category C]
-  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME]
+  gridcraft-cli mcp [--connect PORT] [--in FILE | --sample NAME] [--csv-as-text]
   gridcraft-cli send <port> <method> [json]
-  gridcraft-cli version";
+  gridcraft-cli version
+--csv-as-text opens a .csv, .tsv or .txt file with every field as text (Excel's Text column format: 01234, long
+digit strings, TRUE and dates stay as written); it has no effect on other formats";
 
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
 /// other write error is reported.
@@ -165,9 +167,10 @@ fn exec(s: &mut Session, id: &str, params: Value) -> Result<Value, String> {
     r
 }
 
-fn open(path: &str) -> Result<Session, String> {
+/// Opens `path`; with `csv_as_text` a csv/tsv/txt file keeps every field as text (`--csv-as-text`).
+fn open(path: &str, csv_as_text: bool) -> Result<Session, String> {
     let mut s = Session::new();
-    exec(&mut s, "file.open", json!({"path": path}))?;
+    exec(&mut s, "file.open", json!({"path": path, "csvAsText": csv_as_text}))?;
     Ok(s)
 }
 
@@ -239,10 +242,10 @@ fn csv_field(s: &str, delim: char) -> String {
 // ---------------------------------------------------------------- subcommands
 
 fn info(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &[], &["json"])?;
+    let a = Args::parse(args, &[], &["json", "csv-as-text"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, a.has("csv-as-text"))?;
     let v = exec(&mut s, "document.inspect", json!({}))?;
     if a.has("json") {
         outln!("{}", pretty(&v));
@@ -280,7 +283,7 @@ fn info(args: &[String]) -> Result<(), String> {
 }
 
 fn convert(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["sheet"], &[])?;
+    let a = Args::parse(args, &["sheet"], &["csv-as-text"])?;
     let input = a.pos(0, "<in>")?;
     let out = a.pos(1, "<out>")?;
     a.no_extra(2)?;
@@ -288,7 +291,7 @@ fn convert(args: &[String]) -> Result<(), String> {
     if !pdf && gridcraft_engine::io::FileKind::from_path(out).is_none() {
         return Err(format!("{out}: unknown output format (use .xlsx, .csv, .tsv, .json, .html or .pdf)"));
     }
-    let mut s = open(input)?;
+    let mut s = open(input, a.has("csv-as-text"))?;
     activate_sheet(&mut s, a.opt("sheet"))?;
     if pdf {
         let result = exec(&mut s, "file.exportPdf", json!({"path": out}))?;
@@ -303,11 +306,11 @@ fn convert(args: &[String]) -> Result<(), String> {
 }
 
 fn eval(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sheet", "cell"], &["json"])?;
+    let a = Args::parse(args, &["in", "sheet", "cell"], &["json", "csv-as-text"])?;
     let formula = a.pos(0, "<formula>")?;
     a.no_extra(1)?;
     let mut s = match a.opt("in") {
-        Some(p) => open(p)?,
+        Some(p) => open(p, a.has("csv-as-text"))?,
         None => blank(),
     };
     activate_sheet(&mut s, a.opt("sheet"))?;
@@ -373,10 +376,10 @@ fn print_range(s: &mut Session, range: Option<&str>, sheet: Option<&str>, formul
 }
 
 fn cat(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["range", "sheet"], &["formulas", "csv"])?;
+    let a = Args::parse(args, &["range", "sheet"], &["formulas", "csv", "csv-as-text"])?;
     let path = a.pos(0, "<file>")?;
     a.no_extra(1)?;
-    let mut s = open(path)?;
+    let mut s = open(path, a.has("csv-as-text"))?;
     print_range(&mut s, a.opt("range"), a.opt("sheet"), a.has("formulas"), a.has("csv"))
 }
 
@@ -412,11 +415,11 @@ fn parse_command(text: &str) -> Result<Option<(String, Value)>, String> {
 }
 
 fn run(args: &[String]) -> Result<(), String> {
-    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas"])?;
+    let a = Args::parse(args, &["in", "sample", "cmd", "script", "out", "print", "sheet"], &["quiet", "csv", "formulas", "csv-as-text"])?;
     a.no_extra(0)?;
     let mut s = match (a.opt("in"), a.opt("sample")) {
         (Some(_), Some(_)) => return Err("give --in or --sample, not both".into()),
-        (Some(p), None) => open(p)?,
+        (Some(p), None) => open(p, a.has("csv-as-text"))?,
         (None, Some(name)) => {
             let mut s = Session::new();
             exec(&mut s, "file.new", json!({"sample": name}))?;
@@ -526,7 +529,7 @@ fn functions(args: &[String]) -> Result<(), String> {
 /// started with `gridcraft --control PORT`). JSON-RPC on stdin/stdout; logs on stderr.
 fn mcp(args: &[String]) -> Result<(), String> {
     use gridcraft_mcp::{Backend, Headless, Remote, Server, control_addr};
-    let a = Args::parse(args, &["connect", "in", "sample"], &[])?;
+    let a = Args::parse(args, &["connect", "in", "sample"], &["csv-as-text"])?;
     a.no_extra(0)?;
     let backend: Box<dyn Backend> = match a.opt("connect") {
         Some(c) => {
@@ -538,7 +541,7 @@ fn mcp(args: &[String]) -> Result<(), String> {
         }
         None => {
             let session = match (a.opt("in"), a.opt("sample")) {
-                (Some(p), _) => open(p)?,
+                (Some(p), _) => open(p, a.has("csv-as-text"))?,
                 (None, Some(name)) => {
                     let mut s = Session::new();
                     exec(&mut s, "file.new", json!({"sample": name}))?;

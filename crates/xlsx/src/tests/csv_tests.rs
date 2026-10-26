@@ -45,6 +45,12 @@ fn values_and_formats() {
     // parse_values off keeps text.
     let wb3 = read_csv(b"1,TRUE", &CsvOptions { parse_values: false, ..Default::default() }).unwrap();
     assert_eq!(v(&wb3, 0, 0), Value::text("1"));
+    // The cells are Text-formatted, as in Excel's Text column format; a blank field stays blank and General.
+    let wb3 = read_csv(b"01234,,TRUE", &CsvOptions { parse_values: false, ..Default::default() }).unwrap();
+    let s3 = wb3.sheet(0).unwrap();
+    assert_eq!(wb3.styles.get(s3.cell(CellRef::new(0, 0)).unwrap().style).num_fmt.as_str(), "@");
+    assert_eq!(wb3.styles.get(s3.cell(CellRef::new(0, 2)).unwrap().style).num_fmt.as_str(), "@");
+    assert!(s3.cell(CellRef::new(0, 1)).is_none());
 }
 
 #[test]
