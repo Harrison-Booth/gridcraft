@@ -104,7 +104,6 @@ const FREE_FORM_PARAMS: &[&str] = &[
     "data.flashFill",
     "edit.paste",
     "edit.pasteSpecial",
-    "edit.find",
     "chart.changeType",
     "arrange.group",
     "table.removeDuplicates",
