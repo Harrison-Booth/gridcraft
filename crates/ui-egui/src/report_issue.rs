@@ -222,15 +222,15 @@ mod tests {
         assert!(facts.version.len() <= VALUE_CAP && facts.os.len() <= VALUE_CAP && facts.document_info.len() <= VALUE_CAP);
         assert!(facts.system_info.len() <= SYSTEM_CAP, "{}", facts.system_info.len());
         let url = url(&facts);
-        assert!(url.len() < 2048, "{} bytes", url.len());
+        assert!(url.len() < 4096, "{} bytes", url.len());
     }
 
     #[test]
-    fn the_longest_possible_address_stays_under_two_kib() {
-        // Every byte of every field at its cap, each encoded to three characters.
+    fn the_longest_possible_address_stays_under_four_kib() {
+        // Every byte of every field at its cap, each encoded to three characters, and again in `body`.
         let facts = Facts { version: "é".repeat(40), os: "é".repeat(40), system_info: "\n".repeat(SYSTEM_CAP), document_info: "é".repeat(40) };
         let url = url(&facts);
-        assert!(url.len() < 2048, "{} bytes", url.len());
+        assert!(url.len() < 4096, "{} bytes", url.len());
     }
 
     #[test]
