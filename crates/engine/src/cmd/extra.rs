@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select Data…",
             ["Chart Design", "Data"],
             None,
-            "{chart?, range?: \"Sheet1!A1:D7\", byRows?: bool, categories?: \"Sheet1!A2:A7\" (Horizontal (Category) Axis Labels for every series; \"\" clears), removeSeries?: [index…]}",
+            "{chart?, range?: \"Sheet1!A1:D7\", byRows?: bool, categories?: \"Sheet1!A2:A7\" (Horizontal (Category) Axis Labels for every series; \"\" clears), removeSeries?: [index…], showHiddenData?: bool (Hidden and Empty Cells ▸ Show data in hidden rows and columns; default off: visible cells only)}",
             has_doc,
             select_data
         ),
@@ -513,8 +513,9 @@ fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
         .unwrap_or_default();
     remove.sort_unstable();
     remove.dedup();
-    if rebuilt.is_none() && categories.is_none() && remove.is_empty() {
-        return Err(bad("chart.selectData", "missing `range`, `categories` or `removeSeries`"));
+    let show_hidden = bool_param(p, "showHiddenData");
+    if rebuilt.is_none() && categories.is_none() && remove.is_empty() && show_hidden.is_none() {
+        return Err(bad("chart.selectData", "missing `range`, `categories`, `removeSeries` or `showHiddenData`"));
     }
     with_chart(s, p, move |c| {
         if let Some((series, source, by_rows)) = rebuilt {
@@ -532,6 +533,9 @@ fn select_data(s: &mut Session, p: &Json) -> Result<Json> {
             for se in &mut c.series {
                 se.categories = cats.clone();
             }
+        }
+        if let Some(v) = show_hidden {
+            c.show_hidden_data = v;
         }
         Ok(())
     })

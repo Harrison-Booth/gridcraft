@@ -906,9 +906,9 @@ impl Dialog {
                     let data = gridcraft_chart::resolve(&doc.wb, si, ch);
                     let names: Vec<String> = data.series.iter().map(|x| x.name.clone()).collect();
                     let cats = ch.series.first().and_then(|x| x.categories.clone()).unwrap_or_default();
-                    Some((ch.source.clone().unwrap_or_default(), cats, names))
+                    Some((ch.source.clone().unwrap_or_default(), cats, names, ch.show_hidden_data))
                 });
-                let Some((range, cats, names)) = found else {
+                let Some((range, cats, names, hidden)) = found else {
                     app.message = Some(("Select Data".into(), "Select a chart first.".into()));
                     return None;
                 };
@@ -916,7 +916,7 @@ impl Dialog {
                 Dialog::custom(
                     "selectData",
                     "Select Data Source",
-                    json!({"chart": id, "range": eq(&range), "range0": eq(&range), "categories": eq(&cats), "categories0": eq(&cats), "names": names, "remove": []}),
+                    json!({"chart": id, "range": eq(&range), "range0": eq(&range), "categories": eq(&cats), "categories0": eq(&cats), "names": names, "remove": [], "hidden": hidden, "hidden0": hidden}),
                 )
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
@@ -2813,6 +2813,12 @@ fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &
     d.values.insert("remove".into(), json!(remove));
     ui.add_space(6.0);
     edit(ui, d, "categories", "Horizontal (Category) Axis Labels:");
+    ui.add_space(6.0);
+    let flag = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_bool).unwrap_or(false);
+    let mut hidden = flag(d, "hidden");
+    if ui.checkbox(&mut hidden, "Show data in hidden rows and columns").changed() {
+        d.values.insert("hidden".into(), json!(hidden));
+    }
     ok_cancel(ui, confirm, open);
     if *confirm {
         *confirm = false;
@@ -2827,6 +2833,9 @@ fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confirm: &
         }
         if text(d, "categories") != text(d, "categories0") || (range_changed && !text(d, "categories").is_empty()) {
             params.insert("categories".into(), json!(text(d, "categories")));
+        }
+        if flag(d, "hidden") != flag(d, "hidden0") {
+            params.insert("showHiddenData".into(), json!(flag(d, "hidden")));
         }
         if params.len() == 1 {
             *open = false;
