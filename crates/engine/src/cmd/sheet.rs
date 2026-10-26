@@ -707,7 +707,7 @@ fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let before = p.get("before").and_then(Json::as_u64).map(|v| v as usize);
     let idx = edit_doc(d, |cx| {
         // Excel inserts before the active sheet; the "+" button appends after it.
-        let at = before.unwrap_or(cx.wb.active_sheet + 1).min(cx.wb.sheets.len());
+        let at = before.unwrap_or(cx.wb.active_sheet() + 1).min(cx.wb.sheets.len());
         cx.wb.sheets.insert(at, Arc::new(Sheet::new(name.clone())));
         // Names scoped to later sheets shift.
         for n in cx.wb.names.iter_mut() {
@@ -717,7 +717,7 @@ fn insert_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 *sc += 1;
             }
         }
-        cx.wb.active_sheet = at;
+        cx.wb.set_active_sheet(at);
         *cx.sel = crate::Selection::default();
         cx.structural = true;
         Ok(at)
@@ -805,8 +805,8 @@ fn delete_sheet(s: &mut Session, p: &Json) -> Result<Json> {
                 }
             }
         }
-        if cx.wb.active_sheet >= cx.wb.sheets.len() || cx.wb.active_sheet > i {
-            cx.wb.active_sheet = cx.wb.active_sheet.saturating_sub(1).min(cx.wb.sheets.len().saturating_sub(1));
+        if cx.wb.active_sheet() >= cx.wb.sheets.len() || cx.wb.active_sheet() > i {
+            cx.wb.set_active_sheet(cx.wb.active_sheet().saturating_sub(1).min(cx.wb.sheets.len().saturating_sub(1)));
         }
         *cx.sel = crate::Selection::default();
         cx.structural = true;
@@ -920,12 +920,12 @@ fn move_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             }
             cx.wb.names.extend(copies);
             cx.wb.sheets.insert(at, Arc::new(sh));
-            cx.wb.active_sheet = at;
+            cx.wb.set_active_sheet(at);
         } else {
             let sh = cx.wb.sheets.remove(i);
             let at = to.min(n - 1);
             cx.wb.sheets.insert(at, sh);
-            cx.wb.active_sheet = at;
+            cx.wb.set_active_sheet(at);
             // Sheet-level names follow their sheet.
             for nm in cx.wb.names.iter_mut() {
                 if let Some(sc) = nm.scope.as_mut() {
@@ -962,8 +962,8 @@ fn hide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     }
     edit(s, |cx| {
         cx.sheet_mut(i)?.visibility = Visibility::Hidden;
-        if cx.wb.active_sheet == i {
-            cx.wb.active_sheet = cx.wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0);
+        if cx.wb.active_sheet() == i {
+            cx.wb.set_active_sheet(cx.wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0));
         }
         Ok(Json::Null)
     })
@@ -984,7 +984,7 @@ fn unhide_sheet(s: &mut Session, p: &Json) -> Result<Json> {
     let i = target_sheet(s, p)?;
     edit(s, |cx| {
         cx.sheet_mut(i)?.visibility = Visibility::Visible;
-        cx.wb.active_sheet = i;
+        cx.wb.set_active_sheet(i);
         Ok(Json::Null)
     })
 }
@@ -998,7 +998,7 @@ fn activate(s: &mut Session, p: &Json) -> Result<Json> {
 
 fn step_sheet(s: &mut Session, dir: isize) -> Result<Json> {
     let d = s.doc()?;
-    let mut i = d.wb.active_sheet;
+    let mut i = d.wb.active_sheet();
     while let Some(next) = i.checked_add_signed(dir) {
         let Some(sheet) = d.wb.sheet(next) else { break };
         if sheet.visibility == Visibility::Visible {
