@@ -276,7 +276,7 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
             }
             let pos = CellRef::new(row, col as u32);
             let cell = if opts.parse_values {
-                let p = parse_input(&gridcraft_core::cap_text(f), opts.date_system);
+                let p = parse_input(&f, opts.date_system);
                 let style = match p.format {
                     Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
                         Some((_, id)) => *id,
@@ -288,7 +288,7 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
                     },
                     None => StyleId::DEFAULT,
                 };
-                Cell { value: p.value, formula: None, style }
+                Cell { value: gridcraft_core::cap_value(p.value), formula: None, style }
             } else {
                 Cell::value(Value::Text(Arc::from(gridcraft_core::cap_text(f))))
             };

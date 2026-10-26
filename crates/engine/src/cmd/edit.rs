@@ -123,20 +123,13 @@ pub fn specs() -> Vec<CommandSpec> {
 /// format, before parsing. Errors when the formula can't be parsed.
 pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
-    let capped;
-    let mut input = input;
-    if input.len() > gridcraft_core::MAX_TEXT_CHARS && !input.starts_with('=') {
-        // Excel cuts typed text to 32,767 characters.
-        capped = gridcraft_core::cap_text(input.to_string());
-        input = &capped;
-    }
     if input.is_empty() {
         let c = Cell { value: Value::Empty, formula: None, style };
         return Ok(if c.is_blank() { None } else { Some(c) });
     }
     let fmt_is_text = wb.styles.get(style).num_fmt.as_str() == "@";
     if fmt_is_text {
-        return Ok(Some(Cell { value: Value::text(input), formula: None, style }));
+        return Ok(Some(Cell { value: gridcraft_core::cap_value(Value::text(input)), formula: None, style }));
     }
     let is_formula = input.starts_with('=')
         || (input.len() > 1
@@ -173,6 +166,8 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
         return Ok(Some(cell));
     }
     let mut parsed = gridcraft_core::parse::parse_input(input, wb.date_system);
+    // Excel cuts typed text to 32,767 characters (after any leading apostrophe is dropped).
+    parsed.value = gridcraft_core::cap_value(parsed.value);
     // Like Excel's automatic percent entry: a bare number of 1 or more typed into a cell already
     // formatted as a percentage is a percent (3 -> 3%); smaller numbers are taken as fractions.
     if parsed.format.is_none()
@@ -2053,7 +2048,14 @@ mod tests {
         s.new_workbook();
         s.execute("cell.set", json!({"cell": "A1", "input": "é".repeat(40_000)})).unwrap();
         s.execute("cell.set", json!({"cell": "A2", "input": "=LEN(A1)"})).unwrap();
+        // An apostrophe prefix isn't text, and a text-formatted cell takes `=` as text.
+        s.execute("cell.set", json!({"cell": "B1", "input": format!("'{}", "x".repeat(40_000))})).unwrap();
+        s.execute("home.numberFormat", json!({"range": "C1", "code": "@"})).unwrap();
+        s.execute("cell.set", json!({"cell": "C1", "input": format!("={}", "x".repeat(40_000))})).unwrap();
         let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
+        for at in ["B1", "C1"] {
+            assert_eq!(get(&mut s, at).as_str().map(|t| t.chars().count()), Some(32_767), "{at}");
+        }
         assert_eq!(get(&mut s, "A1").as_str().map(|t| t.chars().count()), Some(32_767));
         assert_eq!(get(&mut s, "A2"), json!(32767.0));
     }

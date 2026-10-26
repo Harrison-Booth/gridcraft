@@ -39,9 +39,10 @@ fn push_capped(out: &mut String, piece: &str, over: CellError) -> R<()> {
 fn concatenate(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let mut out = String::new();
     for x in a {
-        out.push_str(&scalar(x).to_text()?);
-        if out.len() > MAX_TEXT * 4 {
-            break;
+        // Past the budget, later arguments are still converted so their errors propagate.
+        let piece = scalar(x).to_text()?;
+        if out.len() <= MAX_TEXT * 4 {
+            out.push_str(&piece);
         }
     }
     text_val(gridcraft_core::cap_text(out))
@@ -1112,6 +1113,9 @@ mod tests {
         is_err(ev("TEXTJOIN", vec![t(","), b(false), x(), x()]), CellError::Calc);
         assert_eq!(ev("CONCATENATE", vec![x(), x()]), Value::text("x".repeat(32_767)));
         assert_eq!(ev("CONCAT", vec![x()]), Value::text("x".repeat(20_000)));
+        // An error after the cut still propagates.
+        let big = || t(&"x".repeat(32_767));
+        is_err(ev("CONCATENATE", vec![big(), big(), big(), big(), big(), e(CellError::NA)]), CellError::NA);
         // Lifting: CONCATENATE over an array.
         assert_eq!(rows_of(&ev("CONCATENATE", vec![av(row_t(&["a", "b"])), t("x")])), vec![vec![tv("ax"), tv("bx")]]);
     }

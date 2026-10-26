@@ -402,6 +402,14 @@ pub fn cap_text(mut s: String) -> String {
     s
 }
 
+/// `v` with text cut to [`MAX_TEXT_CHARS`] characters; other values pass through.
+pub fn cap_value(v: Value) -> Value {
+    match v {
+        Value::Text(t) if t.len() > MAX_TEXT_CHARS => Value::text(cap_text(t.to_string())),
+        v => v,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
