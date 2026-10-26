@@ -903,7 +903,8 @@ impl Dialog {
                     let si = doc.wb.active_sheet();
                     let sh = doc.wb.sheet(si)?;
                     let ch = sh.charts.iter().find(|c| Some(u64::from(c.id)) == id)?;
-                    let data = gridcraft_chart::resolve(&doc.wb, si, ch);
+                    // Hidden series included, so the names line up with `Chart.series` (`removeSeries` indices).
+                    let data = gridcraft_chart::resolve(&doc.wb, si, &gridcraft_engine::model::Chart { show_hidden_data: true, ..ch.clone() });
                     let names: Vec<String> = data.series.iter().map(|x| x.name.clone()).collect();
                     let cats = ch.series.first().and_then(|x| x.categories.clone()).unwrap_or_default();
                     Some((ch.source.clone().unwrap_or_default(), cats, names, ch.show_hidden_data))

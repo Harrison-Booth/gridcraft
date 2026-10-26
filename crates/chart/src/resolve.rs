@@ -199,11 +199,15 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str, hide
     let column = |c: usize| (0..h).filter(|&row| visible_row(row)).map(|row| at(row, c)).collect::<Vec<String>>();
     let row = |rr: usize| (0..w).filter(|&c| visible_col(c)).map(|c| at(rr, c)).collect::<Vec<String>>();
     let outer = levels.outer as usize;
-    if levels.by_columns {
-        (column(w - 1), (1..=outer).filter_map(|k| (w - 1).checked_sub(k)).map(column).collect())
+    // The innermost level is the last visible column (row), the outer levels the ones before it.
+    let (lines, list): (Vec<usize>, &dyn Fn(usize) -> Vec<String>) = if levels.by_columns {
+        ((0..w).filter(|&c| visible_col(c)).collect(), &column)
     } else {
-        (row(h - 1), (1..=outer).filter_map(|k| (h - 1).checked_sub(k)).map(row).collect())
-    }
+        ((0..h).filter(|&r| visible_row(r)).collect(), &row)
+    };
+    let Some(&inner) = lines.last() else { return (vec![], vec![]) };
+    let outers = (1..=outer).filter_map(|k| lines.len().checked_sub(k + 1)).filter_map(|i| lines.get(i)).map(|&l| list(l)).collect();
+    (list(inner), outers)
 }
 
 /// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on

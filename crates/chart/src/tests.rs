@@ -988,6 +988,33 @@ fn hidden_rows_and_columns_are_left_out_unless_shown() {
 }
 
 #[test]
+fn hidden_cells_leave_multi_level_categories() {
+    use gridcraft_model::LineInfo;
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (r, (y, m)) in [("2023", "jan"), ("", "feb"), ("2024", "jan"), ("", "feb")].iter().enumerate() {
+            if !y.is_empty() {
+                s.set_value(CellRef::new(r as u32, 0), Value::from(*y));
+            }
+            s.set_value(CellRef::new(r as u32, 1), Value::from(*m));
+            s.set_value(CellRef::new(r as u32, 2), Value::Number(r as f64));
+        }
+        s.rows.insert(1, LineInfo { hidden: true, ..Default::default() });
+    }
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { categories: Some("Sheet1!$A$1:$B$4".into()), values: "Sheet1!$C$1:$C$4".into(), ..Series::default() }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["jan", "jan", "feb"]);
+    assert_eq!(d.category_levels, vec![vec!["2023".to_string(), "2024".into(), String::new()]]);
+    // The innermost level is the last visible column.
+    wb.sheet_mut(0).unwrap().cols.insert(1, LineInfo { hidden: true, ..Default::default() });
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["2023", "2024", ""]);
+    assert!(d.category_levels.is_empty());
+}
+
+#[test]
 fn union_series_references() {
     let mut wb = Workbook::new();
     {
