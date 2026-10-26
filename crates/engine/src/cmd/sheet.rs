@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
-use gridcraft_model::{Anchor, AnchorMode, Sheet, Visibility};
+use gridcraft_model::{Anchor, AnchorMode, Sheet, Visibility, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -95,8 +95,14 @@ fn shift_anchor(sh: &Sheet, a: Anchor, corner: (u32, u32, f32, f32), axis: Axis,
         return a;
     }
     let main = if axis == Axis::Rows { a.cell.row } else { a.cell.col };
-    // A deleted anchor line collapses onto the line that takes its place.
+    // A deleted anchor line collapses onto the line that takes its place, and Excel drops the
+    // offset into it: the object's edge then sits on that line.
     let nmain = map_line(main).unwrap_or(at);
+    let a = match (map_line(main), axis) {
+        (None, Axis::Rows) => Anchor { dy: 0.0, ..a },
+        (None, Axis::Cols) => Anchor { dx: 0.0, ..a },
+        _ => a,
+    };
     let (nr, nc) = if axis == Axis::Rows { (nmain, a.cell.col) } else { (a.cell.row, nmain) };
     if a.mode == AnchorMode::MoveOnly {
         return Anchor { cell: CellRef::new(nr, nc), ..a };
@@ -112,6 +118,90 @@ fn shift_anchor(sh: &Sheet, a: Anchor, corner: (u32, u32, f32, f32), axis: Axis,
     let xn = sh.col_left(nbc) + tdx as f64;
     let yn = sh.row_top(nbr) + tdy as f64;
     Anchor { cell: CellRef::new(nr, nc), dx: a.dx, dy: a.dy, width: (xn - x1).max(0.0) as f32, height: (yn - y1).max(0.0) as f32, mode: a.mode }
+}
+
+/// Where an object's anchor lands after a command changed row heights, column widths or hidden
+/// lines (`old` and `new` are the sheet before and after), as Excel places it: "move and size"
+/// keeps its top-left corner on its cell and follows its bottom-right corner (hiding a line shrinks
+/// it); "move but don't size" keeps its cell and size; "don't move or size" keeps its place on the
+/// sheet, so its anchor cell is found again in the new grid. An anchor the command itself changed
+/// (a move, a resize, an insert or delete that already re-fitted it) is left alone.
+fn refit_anchor(old: &Sheet, new: &Sheet, was: &Anchor, now: &Anchor) -> Anchor {
+    if was != now {
+        return *now;
+    }
+    match now.mode {
+        AnchorMode::MoveOnly => *now,
+        AnchorMode::Absolute => {
+            let x = old.col_left(was.cell.col) + was.dx as f64;
+            let y = old.row_top(was.cell.row) + was.dy as f64;
+            let (col, row) = (new.col_at(x), new.row_at(y));
+            let (dx, dy) = ((x - new.col_left(col)).max(0.0) as f32, (y - new.row_top(row)).max(0.0) as f32);
+            Anchor { cell: CellRef::new(row, col), dx, dy, ..*now }
+        }
+        AnchorMode::MoveAndSize => {
+            // A hidden first line has no room for the offset into it: Excel measures from its edge,
+            // in the old grid (where the corner is found) as in the new one.
+            let at = Anchor {
+                dx: (was.dx as f64).min(old.col_width(was.cell.col) as f64) as f32,
+                dy: (was.dy as f64).min(old.row_height(was.cell.row) as f64) as f32,
+                ..*was
+            };
+            let (tc, tr, tdx, tdy) = anchor_corner(old, &at);
+            let x1 = new.col_left(now.cell.col) + (now.dx as f64).min(new.col_width(now.cell.col) as f64);
+            let y1 = new.row_top(now.cell.row) + (now.dy as f64).min(new.row_height(now.cell.row) as f64);
+            let width = (new.col_left(tc) + tdx as f64 - x1).max(0.0) as f32;
+            let height = (new.row_top(tr) + tdy as f64 - y1).max(0.0) as f32;
+            Anchor { width, height, ..*now }
+        }
+    }
+}
+
+/// Re-fits every floating object of `after` to the grid its command left, honouring each object's
+/// [`AnchorMode`] (see [`refit_anchor`]). `before` is the workbook as the command found it; sheets
+/// are matched by position and name, and objects by id. Does nothing, and copies nothing, when no
+/// object's anchor changes.
+pub(crate) fn refit_objects(before: &Workbook, after: &mut Arc<Workbook>) {
+    let mut fixes: Vec<(usize, Vec<Anchor>, Vec<Anchor>, Vec<Anchor>)> = Vec::new();
+    for (i, (old, new)) in before.sheets.iter().zip(after.sheets.iter()).enumerate() {
+        // Most commands leave most sheets alone, and most sheets have no objects.
+        if Arc::ptr_eq(old, new) || (old.charts.is_empty() && old.images.is_empty() && old.shapes.is_empty()) {
+            continue;
+        }
+        let same_grid = old.rows == new.rows
+            && old.cols == new.cols
+            && old.default_row_height == new.default_row_height
+            && old.default_col_width == new.default_col_width;
+        if same_grid || old.name != new.name {
+            continue;
+        }
+        let fit = |was: Option<&Anchor>, now: &Anchor| was.map_or(*now, |was| refit_anchor(old, new, was, now));
+        let charts: Vec<Anchor> = new.charts.iter().map(|n| fit(old.charts.iter().find(|o| o.id == n.id).map(|o| &o.anchor), &n.anchor)).collect();
+        let images: Vec<Anchor> = new.images.iter().map(|n| fit(old.images.iter().find(|o| o.id == n.id).map(|o| &o.anchor), &n.anchor)).collect();
+        let shapes: Vec<Anchor> = new.shapes.iter().map(|n| fit(old.shapes.iter().find(|o| o.id == n.id).map(|o| &o.anchor), &n.anchor)).collect();
+        let unchanged = new.charts.iter().map(|o| &o.anchor).eq(charts.iter())
+            && new.images.iter().map(|o| &o.anchor).eq(images.iter())
+            && new.shapes.iter().map(|o| &o.anchor).eq(shapes.iter());
+        if !unchanged {
+            fixes.push((i, charts, images, shapes));
+        }
+    }
+    if fixes.is_empty() {
+        return;
+    }
+    let wb = Arc::make_mut(after);
+    for (i, charts, images, shapes) in fixes {
+        let Some(sh) = wb.sheet_mut(i) else { continue };
+        for (o, a) in sh.charts.iter_mut().zip(charts) {
+            o.anchor = a;
+        }
+        for (o, a) in sh.images.iter_mut().zip(images) {
+            o.anchor = a;
+        }
+        for (o, a) in sh.shapes.iter_mut().zip(shapes) {
+            o.anchor = a;
+        }
+    }
 }
 
 /// Shifts everything that has a position on the sheet for an insert/delete.
