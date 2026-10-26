@@ -2148,7 +2148,7 @@ mod tests {
         is_err(ev("XIRR", vec![rf(flows(tv("-"))), rf(dates.clone())]), CellError::Value);
         // XNPV is strict: a blank value is #NUM! where 0 is a number.
         close_tol(ev("XNPV", vec![n(0.09), rf(flows(nv(0.0))), rf(dates.clone())]), -382.66, 1e-2);
-        is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(dates)]), CellError::Num);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(dates.clone())]), CellError::Num);
         is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(0.0))), rf(gap.clone())]), CellError::Num);
         is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(gap.clone())]), CellError::Num);
         is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(2750.0))), rf(gap)]), CellError::Num);
