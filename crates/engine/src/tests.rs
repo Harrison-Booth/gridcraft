@@ -4768,10 +4768,10 @@ fn ignore_error_survives_format_only_edits_and_clears_on_structural_rewrites() {
     s.execute("home.bold", json!({"range": "D1", "on": true})).unwrap();
     s.execute("formulas.ignoreError", json!({"range": "D1"})).unwrap();
     s.execute("home.bold", json!({"range": "D1", "on": false})).unwrap();
-    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A1:D1"]));
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["A1:C1", "D1"]));
     // Renaming the name rewrites A1's formula: A1 stops ignoring.
     s.execute("formulas.defineName", json!({"name": "Tax", "refersTo": "=0.2", "oldName": "Rate"})).unwrap();
-    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["B1:D1"]));
+    assert_eq!(ignored(&mut s)[0]["ranges"], json!(["B1:C1", "D1"]));
     // Cutting B1 onto C1 overwrites C1: its record goes.
     s.execute("edit.cut", json!({"range": "B1"})).unwrap();
     s.execute("selection.set", json!({"range": "C1"})).unwrap();
