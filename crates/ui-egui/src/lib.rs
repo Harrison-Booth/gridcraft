@@ -1888,7 +1888,9 @@ impl SheetApp {
         if self.session.active().is_some() {
             open.push(Zone::SheetTabs);
         }
-        open.push(Zone::StatusBar);
+        if self.ui.status_bar {
+            open.push(Zone::StatusBar);
+        }
         if self.grid.pane.is_some() || self.session.comments_pane {
             open.push(Zone::TaskPane);
         }

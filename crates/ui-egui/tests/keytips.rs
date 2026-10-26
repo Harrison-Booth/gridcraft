@@ -790,6 +790,16 @@ fn f6_visits_the_sheet_tabs_status_bar_and_ribbon_then_wraps_to_the_sheet() {
 }
 
 #[test]
+fn a_hidden_status_bar_is_not_a_stop() {
+    let mut h = harness(blank());
+    h.state_mut().ui.status_bar = false;
+    for want in [Zone::SheetTabs, Zone::Ribbon, Zone::Sheet] {
+        key(&mut h, Key::F6);
+        assert_eq!(zone(&h), want);
+    }
+}
+
+#[test]
 fn shift_f6_goes_the_other_way() {
     let mut h = harness(blank());
     for want in [Zone::Ribbon, Zone::StatusBar, Zone::SheetTabs, Zone::Sheet] {
