@@ -2243,7 +2243,7 @@ fn create_names_from_selection() {
 fn names_that_look_like_references_are_refused() {
     let mut s = s();
     for bad in ["R1C1", "r2", "C3", "RC", "R", "c", "rc12", "A1", "XFD1048576", "1st"] {
-        assert!(s.execute("formulas.defineName", json!({"name": bad, "refersTo": "=1"})).is_err(), "{case}");
+        assert!(s.execute("formulas.defineName", json!({"name": bad, "refersTo": "=1"})).is_err(), "{bad}");
     }
     for good in ["R1C1X", "Rate", "RCx", "Rx", "_R1", "Cost"] {
         s.execute("formulas.defineName", json!({"name": good, "refersTo": "=1"})).unwrap();
