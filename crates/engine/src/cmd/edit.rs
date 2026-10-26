@@ -342,7 +342,7 @@ fn range_set_values(s: &mut Session, p: &Json) -> Result<Json> {
                         if text.contains('\n') && !cx.wb.styles.get(style).align.wrap {
                             style = cx.wb.styles.derive(style, |s| s.align.wrap = true);
                         }
-                        Some(Cell { value: Value::Text(text.as_str().into()), formula: None, style })
+                        Some(Cell { value: gridcraft_core::cap_value(Value::Text(text.as_str().into())), formula: None, style })
                     }
                     _ => input_to_cell(&input, sheet, at, &mut cx.wb)?,
                 };
@@ -2120,6 +2120,11 @@ mod tests {
         assert!(s.execute("range.setValues", json!({"range": "A8", "parse": 0, "values": [["x"]]})).is_err());
         // A line break still turns on Wrap Text.
         s.execute("range.setValues", json!({"range": "A9", "parse": false, "values": [["one\ntwo"]]})).unwrap();
+        // Text stored as given still stops at Excel's 32,767-character cell limit.
+        let long = "x".repeat(40_000);
+        s.execute("range.setValues", json!({"range": "A10", "parse": false, "values": [[long]]})).unwrap();
+        let len = s.doc().unwrap().wb.active().unwrap().cell(CellRef::parse("A10").unwrap()).map(|c| c.value.as_text().map(|t| t.chars().count()));
+        assert_eq!(len.flatten(), Some(32_767));
         assert_eq!(get(&mut s, "A9")["value"], json!("one\ntwo"));
         let d = s.doc().unwrap();
         let sh = d.wb.active().unwrap();
