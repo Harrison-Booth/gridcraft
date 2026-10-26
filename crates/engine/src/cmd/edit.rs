@@ -285,8 +285,16 @@ fn cell_set(s: &mut Session, p: &Json) -> Result<Json> {
             }
             sh.set_cell(range.start, cell);
             cx.touch(sheet, range.start);
-            for (c, _) in cleared {
-                cx.touch(sheet, c);
+            // The array's results land in every cell of the range, stored or not, so readers of
+            // an empty result cell need the touch too. A huge range marks only the cells it held.
+            if range.count() <= 1_000_000 {
+                for c in range.iter() {
+                    cx.touch(sheet, c);
+                }
+            } else {
+                for (c, _) in cleared {
+                    cx.touch(sheet, c);
+                }
             }
             return Ok(Json::Null);
         }
@@ -2212,6 +2220,17 @@ mod tests {
             let f = sh.cell(CellRef::parse("A1").unwrap()).and_then(|c| c.formula.clone()).unwrap();
             assert_eq!(f.array, Some(RangeRef::parse("A1:B1").unwrap()));
         }
+    }
+
+    #[test]
+    fn readers_of_an_empty_array_result_cell_see_its_result() {
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "D1", "input": "=B1+1"})).unwrap();
+        s.execute("selection.set", json!({"active": "A1", "range": "A1:B1"})).unwrap();
+        s.execute("cell.set", json!({"cell": "A1", "input": "=5", "array": true})).unwrap();
+        assert_eq!(s.doc().unwrap().wb.active().unwrap().value(CellRef::parse("D1").unwrap()), Value::number(6.0));
+        assert_eq!(fully_recalculated(&s, "D1"), Value::number(6.0));
     }
 
     #[test]
