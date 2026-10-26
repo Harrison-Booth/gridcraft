@@ -57,12 +57,13 @@ function Test-InExcel([string]$path) {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $job = Start-Job -ScriptBlock $probe -ArgumentList $path
     $done = Wait-Job $job -Timeout $TimeoutSec
-    $lines = @(Receive-Job $job -Keep)
+    $lines = @(Receive-Job $job -Keep -ErrorAction SilentlyContinue)
+    $failed = $job.State -eq 'Failed'
     if (-not $done) { Stop-Job $job }
     Remove-Job $job -Force
     $xlPid = ($lines | Where-Object { $_ -like "PID`t*" } | Select-Object -First 1) -replace '^PID\t', ''
     $out = $lines | Where-Object { $_ -notlike "PID`t*" } | Select-Object -Last 1
-    if (-not $done) { $out = "TIMEOUT`tno answer in $TimeoutSec s" } elseif (-not $out) { $out = "CRASH`tno result (Excel died)" }
+    if (-not $done) { $out = "TIMEOUT`tno answer in $TimeoutSec s" } elseif ($failed -or -not $out) { $out = "CRASH`tno result (Excel died)" }
     if ($xlPid) {
         # A clean Quit lets Excel exit by itself; give it a moment, then stop only this instance.
         Wait-Process -Id ([int]$xlPid) -Timeout 15 -ErrorAction SilentlyContinue
