@@ -407,6 +407,38 @@ fn run(app: &mut SheetApp, id: &str, params: Json) -> Result<Json, String> {
     r
 }
 
+/// [`run`] in another window (`window` or `doc` from the request), bringing back the active
+/// window afterwards unless the command itself switched windows.
+fn run_in(app: &mut SheetApp, target: gridcraft_engine::Target, id: &str, params: Json) -> Result<Json, String> {
+    let guard = app.session.enter_target(target).map_err(|e| e.to_string())?;
+    let r = run(app, id, params);
+    app.session.leave_target(guard);
+    r
+}
+
+/// A command called by its id as the method. Its params may name a `window` or `doc` to act in,
+/// except for the window commands, whose own params those are.
+fn direct(app: &mut SheetApp, id: &str, p: &Json, via_app: bool) -> Result<Json, String> {
+    let mut params = p.clone();
+    let target = if gridcraft_engine::windows::is_window_command(id) {
+        gridcraft_engine::Target::Active
+    } else {
+        let t = gridcraft_engine::Target::from_json(p).map_err(|e| e.to_string())?;
+        if let Some(o) = params.as_object_mut() {
+            o.remove("window");
+            o.remove("doc");
+        }
+        t
+    };
+    if via_app {
+        return run_in(app, target, id, params);
+    }
+    let guard = app.session.enter_target(target).map_err(|e| e.to_string())?;
+    let r = app.session.run(id, params);
+    app.session.leave_target(guard);
+    r
+}
+
 pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
     let r = ctx.content_rect();
     let v = app.view();
@@ -423,6 +455,8 @@ pub fn inspect(app: &SheetApp, ctx: &egui::Context) -> Json {
         "mode": format!("{:?}", app.session.mode),
         "documents": app.session.documents().iter().map(|d| json!({"title": d.display_title(), "dirty": d.is_dirty()})).collect::<Vec<_>>(),
         "activeDocument": app.session.active_index(),
+        "windows": app.session.window_list(),
+        "activeWindow": app.session.active_window(),
         "perf": {"frameMs": app.perf.frame_ms, "gridMs": app.perf.grid_ms, "fps": app.perf.fps},
     })
 }
@@ -588,7 +622,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
         "engine.execute" | "command" | "ui.menu.invoke" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().unwrap_or(json!({}));
-            wrap(run(app, id, if params.is_null() { json!({}) } else { params }))
+            let target = match gridcraft_engine::Target::from_json(p) {
+                Ok(t) => t,
+                Err(e) => return err(e),
+            };
+            wrap(run_in(app, target, id, if params.is_null() { json!({}) } else { params }))
         }
         "engine.commands" => {
             let mut v: Vec<Json> = app.session.commands().into_iter().map(|c| serde_json::to_value(c).unwrap_or_default()).collect();
@@ -624,7 +662,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ok(Json::Array(filter_commands(v, s("search"))))
         }
         "engine.journal" => ok(json!(app.session.journal.iter().map(|(id, p)| json!({"command": id, "params": p})).collect::<Vec<_>>())),
-        "document.inspect" | "sheet.read" | "cell.get" | "selection.stats" => wrap(app.session.run(method, p.clone())),
+        "document.inspect" | "sheet.read" | "cell.get" | "selection.stats" => wrap(direct(app, method, p, false)),
         "ui.inspect" => ok(inspect(app, ctx)),
         "ui.ribbon" => {
             app.ui.ribbon_tab = s("tab").unwrap_or("Home").to_string();
@@ -673,9 +711,10 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             Some(d) => match d.command {
                 Some(cmd) => {
                     let params = crate::dialogs::build_params(&d);
+                    let home = app.ui_window();
                     let r = app.run(cmd, params);
                     if r.is_err() {
-                        app.dialog = Some(d);
+                        app.return_dialog(home, d);
                     }
                     wrap(r)
                 }
@@ -814,7 +853,7 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             ok(Json::Null)
         }
         // Anything else that names a command runs it.
-        other if gridcraft_engine::find_command(other).is_some() => wrap(run(app, other, p.clone())),
+        other if gridcraft_engine::find_command(other).is_some() => wrap(direct(app, other, p, true)),
         other => err(format!("unknown method `{other}`")),
     };
     ctx.request_repaint();

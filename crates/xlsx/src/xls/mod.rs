@@ -220,7 +220,7 @@ pub(crate) fn read_xls_budgeted(bytes: &[u8], mut budget: Budget, functions: Fun
     // an .xlsx formula without `cm`. Ctrl+Shift+Enter arrays are read as they are.
     let legacy = wb.sheets.iter().enumerate().map(|(si, s)| (si, legacy_cells(s))).collect();
     crate::array_formula::apply_legacy(&mut wb, legacy, functions);
-    wb.active_sheet = wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0);
+    wb.set_active_sheet(wb.sheets.iter().position(|s| s.visibility == Visibility::Visible).unwrap_or(0));
     // The overview comes first.
     report.warnings.insert(
         0,
