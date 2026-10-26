@@ -104,6 +104,9 @@ pub(crate) fn chart_ref_from_file(text: &str) -> String {
     out
 }
 
+/// Most points kept of a literal list in a file (hostile `ptCount` and `idx` are cut here).
+const MAX_LITERAL: usize = 65_536;
+
 fn data_ref(e: Option<&El>) -> Option<String> {
     let e = e?;
     for k in ["numRef", "strRef", "multiLvlStrRef"] {
@@ -111,14 +114,29 @@ fn data_ref(e: Option<&El>) -> Option<String> {
             return Some(chart_ref_from_file(&f.text));
         }
     }
-    // Literal values become an array constant.
+    // Literal values become an array constant. Points keep their `idx` and the list its `ptCount`: a gap (a point the file leaves
+    // out) is written `""`, which reads back as no value and is skipped again on save, so later points stay on their own index.
     for k in ["numLit", "strLit"] {
         if let Some(l) = e.child(k) {
-            let pts: Vec<String> = l
-                .kids("pt")
-                .filter_map(|p| p.child("v"))
-                .map(|v| if k == "numLit" { v.text.trim().to_string() } else { format!("\"{}\"", v.text.replace('"', "\"\"")) })
-                .collect();
+            let mut pts: Vec<Option<String>> = Vec::new();
+            for (pos, p) in l.kids("pt").enumerate() {
+                let Some(v) = p.child("v") else { continue };
+                let idx = p.attr("idx").and_then(|i| i.trim().parse::<usize>().ok()).unwrap_or(pos);
+                if idx >= MAX_LITERAL {
+                    continue;
+                }
+                if pts.len() <= idx {
+                    pts.resize(idx + 1, None);
+                }
+                if let Some(slot) = pts.get_mut(idx) {
+                    *slot = Some(if k == "numLit" { v.text.trim().to_string() } else { format!("\"{}\"", v.text.replace('"', "\"\"")) });
+                }
+            }
+            let count = l.child("ptCount").and_then(|c| c.attr("val")).and_then(|c| c.trim().parse::<usize>().ok()).unwrap_or(0);
+            if pts.len() < count.min(MAX_LITERAL) {
+                pts.resize(count.min(MAX_LITERAL), None);
+            }
+            let pts: Vec<String> = pts.into_iter().map(|v| v.unwrap_or_else(|| "\"\"".into())).collect();
             return Some(format!("{{{}}}", pts.join(",")));
         }
     }

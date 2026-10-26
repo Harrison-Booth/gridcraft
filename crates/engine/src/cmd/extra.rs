@@ -426,12 +426,22 @@ const MAX_ERROR_REF: usize = 8192;
 /// The error bars described by `chart.addElement`'s errorBars parameters. Defaults follow
 /// Excel's menu: Standard Error; Percentage is 5%, Standard Deviation 1, Fixed Value 1.
 fn error_bars_param(p: &Json) -> Result<ErrorBars> {
-    let value = |default: f64| f64_param(p, "value").filter(|v| v.is_finite() && *v >= 0.0).unwrap_or(default);
+    // A key that is absent or null takes its default; one that is present but unusable is an error.
+    let given = |k: &str| p.get(k).filter(|v| !v.is_null());
+    let value = |default: f64| -> Result<f64> {
+        match given("value") {
+            None => Ok(default),
+            Some(v) => v
+                .as_f64()
+                .filter(|v| v.is_finite() && *v >= 0.0)
+                .ok_or_else(|| bad("chart.addElement", "`value` must be a finite number that is not negative")),
+        }
+    };
     let amount = match str_param(p, "type").unwrap_or("standardError") {
         "standardError" => ErrorAmount::StdErr,
-        "percentage" => ErrorAmount::Percentage(value(5.0)),
-        "standardDeviation" => ErrorAmount::StdDev(value(1.0)),
-        "fixed" => ErrorAmount::Fixed(value(1.0)),
+        "percentage" => ErrorAmount::Percentage(value(5.0)?),
+        "standardDeviation" => ErrorAmount::StdDev(value(1.0)?),
+        "fixed" => ErrorAmount::Fixed(value(1.0)?),
         "custom" => {
             let r = |k: &str| -> Result<Option<String>> {
                 match str_param(p, k).map(str::trim) {
@@ -472,15 +482,18 @@ fn error_bars_param(p: &Json) -> Result<ErrorBars> {
         "noCap" => true,
         other => return Err(bad("chart.addElement", format!("unknown error bar end style `{other}`"))),
     };
-    Ok(ErrorBars {
-        direction,
-        sides,
-        amount,
-        no_end_cap,
-        color: super::format::color_param(p.get("color")).filter(|c| *c != Color::Auto),
-        width: f64_param(p, "width").filter(|w| w.is_finite() && *w > 0.0).map(|w| w.min(100.0) as f32),
-        dash: None,
-    })
+    let color = match given("color") {
+        None => None,
+        Some(v) => Some(super::format::color_param(Some(v)).ok_or_else(|| bad("chart.addElement", "`color` is not a colour"))?),
+    };
+    let width = match given("width") {
+        None => None,
+        Some(v) => Some(
+            v.as_f64().filter(|w| w.is_finite() && *w > 0.0).ok_or_else(|| bad("chart.addElement", "`width` must be a positive number"))?.min(100.0)
+                as f32,
+        ),
+    };
+    Ok(ErrorBars { direction, sides, amount, no_end_cap, color: color.filter(|c| *c != Color::Auto), width, dash: None })
 }
 
 /// The trendline described by `chart.addElement`'s trendline parameters (Excel's Add Chart

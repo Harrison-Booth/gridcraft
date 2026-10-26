@@ -241,3 +241,22 @@ fn hostile_error_bar_values_do_not_break_the_file() {
     let (back, _) = read_xlsx(&bytes).unwrap();
     assert_eq!(back.sheets[0].charts.len(), 2);
 }
+
+#[test]
+fn sparse_literal_points_keep_their_index_through_read_and_save() {
+    // Custom amounts for points 0 and 2 of 4 (1 and 3 left out), and categories with a hole at 1.
+    let xml = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:lineChart><c:ser><c:idx val="0"/><c:order val="0"/>
+<c:errBars><c:errDir val="y"/><c:errBarType val="plus"/><c:errValType val="cust"/><c:plus><c:numLit><c:formatCode>General</c:formatCode><c:ptCount val="4"/><c:pt idx="0"><c:v>5</c:v></c:pt><c:pt idx="2"><c:v>7</c:v></c:pt></c:numLit></c:plus></c:errBars>
+<c:cat><c:strLit><c:ptCount val="3"/><c:pt idx="0"><c:v>a</c:v></c:pt><c:pt idx="2"><c:v>c</c:v></c:pt></c:strLit></c:cat>
+<c:val><c:numRef><c:f>Data!$B$2:$B$6</c:f></c:numRef></c:val></c:ser><c:axId val="1"/><c:axId val="2"/></c:lineChart></c:plotArea></c:chart></c:chartSpace>"#;
+    let c = crate::chart::read_chart(&crate::xml::parse(xml.as_bytes()).unwrap()).unwrap();
+    let s = &c.series[0];
+    assert_eq!(s.error_bars[0].amount, ErrorAmount::Custom { plus: Some(r#"{5,"",7,""}"#.into()), minus: None });
+    assert_eq!(s.categories.as_deref(), Some(r#"{"a","","c"}"#));
+    // Saving writes the points back at their own indices under the same ptCount.
+    let wb = workbook(vec![Chart { series: vec![s.clone()], ..chart(1, ChartKind::Line, vec![]) }]);
+    let part = chart_parts(&write_xlsx(&wb).unwrap()).remove(0);
+    assert!(part.contains(r#"<c:ptCount val="4"/><c:pt idx="0"><c:v>5</c:v></c:pt><c:pt idx="2"><c:v>7</c:v></c:pt></c:numLit>"#), "{part}");
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].charts[0].series[0].error_bars, s.error_bars);
+}

@@ -2243,7 +2243,7 @@ fn create_names_from_selection() {
 fn names_that_look_like_references_are_refused() {
     let mut s = s();
     for bad in ["R1C1", "r2", "C3", "RC", "R", "c", "rc12", "A1", "XFD1048576", "1st"] {
-        assert!(s.execute("formulas.defineName", json!({"name": bad, "refersTo": "=1"})).is_err(), "{bad}");
+        assert!(s.execute("formulas.defineName", json!({"name": bad, "refersTo": "=1"})).is_err(), "{case}");
     }
     for good in ["R1C1X", "Rate", "RCx", "Rx", "_R1", "Cost"] {
         s.execute("formulas.defineName", json!({"name": good, "refersTo": "=1"})).unwrap();
@@ -3177,7 +3177,24 @@ fn chart_error_bars_are_added_replaced_saved_and_removed() {
     assert!(s.execute("chart.addElement", json!({"element": "errorBars", "type": "range"})).is_err());
     assert!(s.execute("chart.addElement", json!({"element": "errorBars", "display": "up"})).is_err());
     assert!(s.execute("chart.addElement", json!({"element": "errorBars", "series": 9})).is_err());
+    // A present but unusable value, colour or width is refused, not swapped for a default; null means absent.
+    for case in [
+        json!({"type": "percentage", "value": -5}),
+        json!({"type": "fixed", "value": "abc"}),
+        json!({"color": "#GGG"}),
+        json!({"color": 7}),
+        json!({"width": -1}),
+        json!({"width": "wide"}),
+    ] {
+        let mut p = json!({"element": "errorBars"});
+        p.as_object_mut().unwrap().extend(case.as_object().unwrap().clone());
+        assert!(s.execute("chart.addElement", p).is_err(), "{case}");
+    }
     assert_eq!(chart(&s), c, "refused calls change nothing");
+    s.execute("chart.addElement", json!({"element": "errorBars", "series": 3, "type": "fixed", "value": null, "color": null, "width": null}))
+        .unwrap();
+    assert_eq!(chart(&s).series[3].error_bars[0].amount, ErrorAmount::Fixed(1.0));
+    let c = chart(&s);
     reopen(&mut s);
     let after = chart(&s);
     for i in 0..c.series.len() {

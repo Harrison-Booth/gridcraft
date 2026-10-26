@@ -307,3 +307,26 @@ fn pies_and_hostile_bars_draw_nothing_odd() {
         }
     }
 }
+
+#[test]
+fn bubbles_that_are_not_drawn_have_no_error_bars() {
+    let mut s = series(&[1.0, 2.0, 3.0, 4.0], [9, 9, 9, 255], ChartKind::Bubble, vec![bars(ErrorAmount::Fixed(0.5))]);
+    s.x = Some(vals(&[1.0, 2.0, 3.0, 4.0]));
+    // Sizes: drawn, missing, zero, drawn.
+    s.sizes = Some(vec![Some(1.0), None, Some(0.0), Some(2.0)]);
+    let eb = lines(&draw(ChartKind::Bubble, &data(vec![s.clone()])), EB);
+    // One vertical stem per drawn bubble (the caps are horizontal).
+    assert_eq!(eb.iter().filter(|l| vertical(l)).count(), 2);
+    // Without sizes every bubble is drawn.
+    s.sizes = None;
+    assert_eq!(lines(&draw(ChartKind::Bubble, &data(vec![s])), EB).iter().filter(|l| vertical(l)).count(), 4);
+}
+
+#[test]
+fn a_chart_draws_a_bounded_number_of_error_bars() {
+    let vals: Vec<f64> = (0..10_000).map(|i| (i % 50) as f64).collect();
+    let d = data((0..3).map(|_| series(&vals, [9, 9, 9, 255], ChartKind::Line, vec![bars(ErrorAmount::Fixed(1.0))])).collect());
+    // Uncapped this is 30 000 bars of three lines; the budget is 20 000 bars for the whole chart.
+    let n = lines(&draw(ChartKind::Line, &d), EB).len();
+    assert!(n > 0 && n <= 60_000, "{n}");
+}
