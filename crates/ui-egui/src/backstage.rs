@@ -1004,6 +1004,10 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
     if ui.checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
         app.run_or_alert("options.autoComplete", json!({"on": autocomplete}));
     }
+    let mut csv_as_text = app.ui.csv_as_text;
+    if ui.checkbox(&mut csv_as_text, lang.tr("Open .csv, .tsv and .txt files with every column as text")).changed() {
+        app.run_or_alert("options.csvAsText", json!({"on": csv_as_text}));
+    }
     ui.add_space(18.0);
     section(ui, lang, "Options|Save");
     let mut autosave = app.ui.autosave;

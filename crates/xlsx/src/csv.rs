@@ -275,23 +275,25 @@ pub fn read_csv(bytes: &[u8], opts: &CsvOptions) -> Result<Workbook, IoError> {
                 continue;
             }
             let pos = CellRef::new(row, col as u32);
-            let cell = if opts.parse_values {
+            // As text, Excel's Text column format: the field stays the text the file holds, in a Text-formatted cell.
+            let (value, format) = if opts.parse_values {
                 let p = parse_input(&f, opts.date_system);
-                let style = match p.format {
-                    Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
-                        Some((_, id)) => *id,
-                        None => {
-                            let id = styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
-                            fmt_cache.push((code, id));
-                            id
-                        }
-                    },
-                    None => StyleId::DEFAULT,
-                };
-                Cell { value: p.value, formula: None, style }
+                (p.value, p.format)
             } else {
-                Cell::value(Value::Text(Arc::from(f)))
+                (Value::Text(Arc::from(f)), Some("@"))
             };
+            let style = match format {
+                Some(code) => match fmt_cache.iter().find(|(c, _)| *c == code) {
+                    Some((_, id)) => *id,
+                    None => {
+                        let id = styles.derive(StyleId::DEFAULT, |s| s.num_fmt = NumFmt::new(code));
+                        fmt_cache.push((code, id));
+                        id
+                    }
+                },
+                None => StyleId::DEFAULT,
+            };
+            let cell = Cell { value, formula: None, style };
             sheet.cells.set(pos, cell);
         }
         row += 1;

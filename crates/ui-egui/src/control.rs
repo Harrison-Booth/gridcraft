@@ -14,7 +14,7 @@
 //! - `ui.edit.begin {text?}`, `ui.edit.commit {move?}`, `ui.edit.cancel`
 //! - `ui.screenshot {path?}` — PNG of the window (base64 when no path); animations are settled
 //! - `ui.resize {width, height}`, `ui.set {dark?, formulaBar?, ribbonCollapsed?, animations?}`
-//! - `app.open {path, password?}`, `app.save {path?}`, `app.quit`
+//! - `app.open {path, password?, csvAsText?}`, `app.save {path?}`, `app.quit`
 
 use std::sync::mpsc::Sender;
 
@@ -640,6 +640,11 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
                 ("view.theme", "Display Theme", ""),
                 ("view.animations", "Animations", "{on?: bool} (toggles without it) → {on}"),
                 ("options.autoComplete", "Enable AutoComplete for cell values", "{on?: bool} (toggles without it) → {on}"),
+                (
+                    "options.csvAsText",
+                    "Open .csv, .tsv and .txt files with every column as text",
+                    "{on?: bool} (toggles without it) → {on}; the setting File › Open uses (file.open takes its own csvAsText)",
+                ),
                 ("view.interfaceScale", "Interface Size", "{percent: 75–200 | \"auto\"} (100 = auto; clamped)"),
                 ("ui.dialog", "Open Dialog", ""),
                 ("ui.backstage", "File (Backstage view)", "{page?: home|new|open|info|saveAs|print|export|options|account|close}"),
@@ -834,7 +839,10 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             let Some(path) = s("path") else { return err("missing `path`") };
             // Not `open_path`: that asks for a missing password in a dialog, and programmatic
             // calls never open one. A password-protected workbook takes `password` instead.
-            let r = app.run("file.open", json!({"path": path, "password": s("password")}));
+            let r = app.run(
+                "file.open",
+                json!({"path": path, "password": s("password"), "csvAsText": p.get("csvAsText").and_then(Json::as_bool).unwrap_or(false)}),
+            );
             if let Ok(r) = &r {
                 app.after_open(Some(path), r);
             }
