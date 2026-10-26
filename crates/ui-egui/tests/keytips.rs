@@ -830,13 +830,13 @@ fn left_and_right_on_the_focused_sheet_tabs_switch_sheets() {
     s.execute("home.insertSheet", json!({})).unwrap();
     s.execute("sheet.previous", json!({})).unwrap();
     let mut h = harness(s);
-    let active = |h: &Harness| h.state().session.active().unwrap().wb.active_sheet;
-    assert_eq!(active(&h), 0);
+    let active = |h: &Harness| h.state().session.active().unwrap().wb.active_sheet.to_string();
+    assert_eq!(active(&h), "0");
     key(&mut h, Key::F6);
     key(&mut h, Key::ArrowRight);
-    assert_eq!((active(&h), zone(&h)), (1, Zone::SheetTabs), "the focus follows the active tab");
+    assert_eq!((active(&h), zone(&h)), ("1".to_string(), Zone::SheetTabs), "the focus follows the active tab");
     key(&mut h, Key::ArrowLeft);
-    assert_eq!((active(&h), zone(&h)), (0, Zone::SheetTabs));
+    assert_eq!((active(&h), zone(&h)), ("0".to_string(), Zone::SheetTabs));
 }
 
 #[test]
