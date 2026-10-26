@@ -399,16 +399,16 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         // Ctrl+PageDown / Ctrl+PageUp while a formula waits for a reference: on to the next / previous sheet.
         if ed.can_point() {
             let step = ui.input_mut(|i| {
-                if i.consume_key(egui::Modifiers::COMMAND, Key::PageDown) {
+                if i.consume_key(egui::Modifiers::CTRL, Key::PageDown) {
                     Some("sheet.next")
-                } else if i.consume_key(egui::Modifiers::COMMAND, Key::PageUp) {
+                } else if i.consume_key(egui::Modifiers::CTRL, Key::PageUp) {
                     Some("sheet.previous")
                 } else {
                     None
                 }
             });
             if let Some(command) = step {
-                crate::grid::point_sheet(app, &mut ed, command);
+                crate::grid::point_sheet(app, &mut ed, command, json!({}));
             }
         }
         // F4 cycles $ anchors of the reference before the caret.
@@ -581,7 +581,7 @@ pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: 
         let below = resp.rect.left_bottom() + vec2(0.0, 4.0);
         let language = app.ui.language;
         // Areas have their own clip rect: keep cell helpers inside the worksheet.
-        let bounds = if ed.from_formula_bar { ui.ctx().content_rect() } else { ui.clip_rect() };
+        let bounds = if ed.from_formula_bar || is_bar { ui.ctx().content_rect() } else { ui.clip_rect() };
         egui::Area::new(id.with("ac")).fixed_pos(below).constrain_to(bounds).order(egui::Order::Tooltip).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).inner_margin(4.0).show(ui, |ui| {
                 if !ed.autocomplete.is_empty() {

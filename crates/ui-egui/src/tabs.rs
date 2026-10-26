@@ -25,10 +25,11 @@ fn navigator_items(sheets: &[Arc<Sheet>]) -> Vec<(String, String)> {
 /// Switch to sheet `i` from the tab strip or the navigator. In point mode the formula being typed keeps going on the
 /// other sheet; otherwise the edit is committed first.
 fn activate_sheet(app: &mut SheetApp, i: usize) {
-    if let Some(ed) = app.editor.as_mut().filter(|e| e.can_point()) {
-        // The editor that takes the keys on the other sheet is not the one that has them now.
-        ed.request_focus = true;
-        let _ = app.session.run("sheet.activate", json!({"sheet": i}));
+    if app.editor.as_ref().is_some_and(|e| e.can_point())
+        && let Some(mut ed) = app.editor.take()
+    {
+        crate::grid::point_sheet(app, &mut ed, "sheet.activate", json!({"sheet": i}));
+        app.editor = Some(ed);
     } else {
         if app.editor.is_some() && !app.commit_edit(0, 0, false, false) {
             return;

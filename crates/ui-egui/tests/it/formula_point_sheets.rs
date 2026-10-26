@@ -82,3 +82,29 @@ fn text_that_is_not_a_formula_leaves_ctrl_page_down_alone() {
     press(&mut h, Key::PageDown, CTRL);
     assert_eq!(shown(&h), 0, "only a formula waiting for a reference switches sheets");
 }
+
+#[test]
+fn on_the_last_sheet_ctrl_page_down_keeps_the_pointing_where_it_was() {
+    let mut h = pointing("=");
+    press(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(text(&h), "=B3");
+    press(&mut h, Key::PageDown, CTRL);
+    press(&mut h, Key::PageDown, CTRL);
+    assert_eq!(shown(&h), 1, "the last sheet is as far as it goes");
+    press(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(text(&h), format!("={}!A2", second_name(&h)));
+    press(&mut h, Key::PageDown, CTRL);
+    press(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(text(&h), format!("={}!A3", second_name(&h)), "no sheet change, so the pointing goes on from A2");
+}
+
+#[test]
+fn shift_arrow_after_a_sheet_switch_starts_the_range_at_the_selected_cell() {
+    let mut h = pointing("=");
+    press(&mut h, Key::ArrowRight, Modifiers::NONE);
+    press(&mut h, Key::ArrowRight, Modifiers::SHIFT);
+    assert_eq!(text(&h), "=C2:D2");
+    press(&mut h, Key::PageDown, CTRL);
+    press(&mut h, Key::ArrowDown, Modifiers::SHIFT);
+    assert_eq!(text(&h), format!("={}!A1:A2", second_name(&h)));
+}

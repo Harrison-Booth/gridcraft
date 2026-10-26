@@ -3785,15 +3785,19 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
     app.grid.ensure_visible = true;
 }
 
-/// Ctrl+PageDown / Ctrl+PageUp while a formula waits for a reference (`command` is `sheet.next` or
-/// `sheet.previous`): the formula carries on on that sheet and the arrows point from the cell
-/// selected there. The edit stays on the sheet it started on, which Enter returns to.
-pub fn point_sheet(app: &mut SheetApp, ed: &mut EditState, command: &str) {
-    if app.session.run(command, json!({})).is_err() {
+/// Switches to another sheet (`command` with `params`: `sheet.next`, `sheet.previous` or
+/// `sheet.activate`) while a formula waits for a reference. The formula carries on there: the
+/// arrows point from the cell selected on that sheet, and a range starts at it. The edit stays on
+/// the sheet it started on, which Enter returns to. Nothing changes when the sheet does not (the
+/// first or last sheet, a failed command).
+pub fn point_sheet(app: &mut SheetApp, ed: &mut EditState, command: &str, params: serde_json::Value) {
+    let before = app.session.active().map(|d| d.wb.active_sheet());
+    if app.session.run(command, params).is_err() {
         return;
     }
-    ed.point_cell = app.session.active().map(|d| d.selection.active);
-    ed.point_anchor = None;
+    let Some(d) = app.session.active().filter(|d| Some(d.wb.active_sheet()) != before) else { return };
+    ed.point_cell = Some(d.selection.active);
+    ed.point_anchor = Some((d.wb.active_sheet(), d.selection.active));
     // The new sheet's grid took the focus: the editor needs it back for the next key.
     ed.request_focus = true;
     app.grid.ensure_visible = true;
