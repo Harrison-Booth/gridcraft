@@ -131,7 +131,7 @@ pub struct Trace {
 impl Trace {
     /// A trace of the active cell, just run.
     pub fn new(app: &SheetApp, items: serde_json::Value) -> Option<Trace> {
-        app.session.active().map(|d| Trace { uid: d.uid, revision: d.revision, sheet: d.wb.active_sheet, cell: d.selection.active, items })
+        app.session.active().map(|d| Trace { uid: d.uid, revision: d.revision, sheet: d.wb.active_sheet(), cell: d.selection.active, items })
     }
 }
 
@@ -614,7 +614,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     app.grid.rect = Some(rect);
     let Some(d) = app.session.active() else { return };
     let wb: Arc<Workbook> = d.wb.clone();
-    let si = wb.active_sheet;
+    let si = wb.active_sheet();
     let Some(sh) = wb.sheet(si) else { return };
     let sel = d.selection.clone();
     let place = (d.uid, si);
@@ -1828,6 +1828,7 @@ pub(crate) fn paint_selection(
     // Editing a formula: outline its references instead of the selection.
     if let Some(ed) = &app.editor
         && ed.is_formula()
+        && app.session.active().is_some_and(|d| d.uid == ed.doc)
     {
         let origin = app.session.active().and_then(|d| d.wb.sheet(ed.sheet)).map_or(sh.name.as_str(), |o| o.name.as_str());
         for (_, _, r, sheet, idx) in crate::editor::formula_refs(&ed.text) {
@@ -1886,7 +1887,7 @@ pub(crate) fn paint_selection(
     }
     // Marching ants around the copied range.
     if let Some(clip) = &app.session.clipboard
-        && app.session.active().is_some_and(|d| d.uid == clip.doc_uid && d.wb.active_sheet == clip.sheet)
+        && app.session.active().is_some_and(|d| d.uid == clip.doc_uid && d.wb.active_sheet() == clip.sheet)
         && range_in_pane(clip.range, rows, cols)
     {
         // A multi-area copy marks each area as selected.
@@ -2046,38 +2047,46 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
     }
     // A held drag owns the cursor even outside the grid; a press below egui's threshold still
     // has Drag::None and uses hover. A click can briefly leave a drag state after release.
-    if resp.dragged() && pointer.primary_down() {
-        let cursor = match app.grid.drag {
-            Drag::None => None,
-            Drag::Select => Some(CursorIcon::Cell),
-            Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
-            Drag::Fill { .. } => Some(CursorIcon::Crosshair),
-            Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
-            Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
-            Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
-            Drag::Freeze { cols, .. } => Some(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
-            Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
-        };
-        if let Some(cursor) = cursor {
-            ctx.set_cursor_icon(cursor);
-            return;
-        }
+    if resp.dragged()
+        && pointer.primary_down()
+        && let Some(cursor) = drag_cursor(&app.grid.drag)
+    {
+        ctx.set_cursor_icon(cursor);
+        return;
     }
     if !resp.hovered() {
         return;
     }
     let Some(p) = pos else { return };
+    hover_cursor(app, ctx, resp, &pointer, geo, sh, p);
+}
+
+/// The cursor a held drag shows, or `None` when the drag leaves it to hover.
+fn drag_cursor(drag: &Drag) -> Option<CursorIcon> {
+    match drag {
+        Drag::None => None,
+        Drag::Select => Some(CursorIcon::Cell),
+        Drag::Rows(_) | Drag::Cols(_) => Some(CursorIcon::Default),
+        Drag::Fill { .. } => Some(CursorIcon::Crosshair),
+        Drag::Move { .. } | Drag::MoveCols { .. } | Drag::Object { resize: false, .. } => Some(CursorIcon::Move),
+        Drag::ResizeCol { .. } => Some(CursorIcon::ResizeColumn),
+        Drag::ResizeRow { .. } => Some(CursorIcon::ResizeRow),
+        Drag::Freeze { cols, .. } => Some(if *cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical }),
+        Drag::Object { resize: true, .. } => Some(CursorIcon::ResizeNwSe),
+    }
+}
+
+/// The cursor over the grid when no drag owns it: freeze bars, header edges, the fill handle, cells.
+fn hover_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, pointer: &egui::PointerState, geo: &Geo, sh: &Sheet, p: Pos2) {
+    let (freeze_cols, freeze_rows) = freeze_handles(geo);
     if freeze_cols.contains(p) || freeze_rows.contains(p) {
-        let cols = freeze_cols.contains(p);
-        ctx.set_cursor_icon(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
-        if app.grid.drag == Drag::None && !pointer.any_down() {
-            let tip = if cols { "Drag to freeze columns" } else { "Drag to freeze rows" };
-            resp.clone().on_hover_text_at_pointer(crate::i18n::current(ctx).tr(tip));
-        }
+        freeze_cursor(app, ctx, resp, pointer, freeze_cols.contains(p));
         return;
     }
+    let in_cells = geo.in_cells(p);
     let in_col_header = p.y < geo.cells.top() && p.y >= geo.head_top() && p.x >= geo.cells.left();
     let in_row_header = p.x < geo.cells.left() && p.x >= geo.head_left() && p.y >= geo.cells.top();
+    let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
     let sel = app.session.active().map(|d| d.selection.clone()).unwrap_or_default();
     let cur_rect = geo.range_rect(sh, sel.current());
     let handle = Rect::from_center_size(cur_rect.right_bottom(), vec2(9.0, 9.0));
@@ -2089,16 +2098,8 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
     let near_corner = selected_object.is_some_and(|(_, _, rect)| (p - rect.right_bottom()).length() < OBJECT_RESIZE_RADIUS);
     if app.grid.drag == Drag::None && near_corner {
         ctx.set_cursor_icon(CursorIcon::ResizeNwSe);
-    } else if (in_col_header && col_edge(geo, sh, p.x).is_some()) || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
-        let near_col_edge = in_col_header && col_edge(geo, sh, p.x).is_some();
-        // Just past a hidden column or row, Excel shows a split cursor: dragging or
-        // double-clicking there unhides it.
-        let hidden = app.grid.drag == Drag::None
-            && if near_col_edge { hidden_col_edge(geo, sh, p.x).is_some() } else { hidden_row_edge(geo, sh, p.y).is_some() };
-        match pointer.hover_pos() {
-            Some(at) if hidden => paint_split_cursor(ctx, at, near_col_edge),
-            _ => ctx.set_cursor_icon(if near_col_edge { CursorIcon::ResizeColumn } else { CursorIcon::ResizeRow }),
-        }
+    } else if near_col_edge || (in_row_header && row_edge(geo, sh, p.y).is_some()) {
+        header_edge_cursor(app, ctx, pointer, geo, sh, p, near_col_edge);
     } else if on_handle && app.editor.is_none() {
         ctx.set_cursor_icon(CursorIcon::Crosshair);
         if app.grid.drag == Drag::None && !pointer.any_down() {
@@ -2112,6 +2113,26 @@ fn update_cursor(app: &mut SheetApp, ui: &egui::Ui, resp: &egui::Response, geo: 
         let col = geo.col_at(sh, p.x);
         let selected = sel.ranges.len() == 1 && sel.current().is_full_cols() && sel.current().contains(CellRef::new(0, col));
         ctx.set_cursor_icon(if selected { CursorIcon::Move } else { CursorIcon::Default });
+    }
+}
+
+/// The resize cursor for dragging a freeze bar.
+fn freeze_cursor(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response, pointer: &egui::PointerState, cols: bool) {
+    ctx.set_cursor_icon(if cols { CursorIcon::ResizeHorizontal } else { CursorIcon::ResizeVertical });
+    if app.grid.drag == Drag::None && !pointer.any_down() {
+        let tip = if cols { "Drag to freeze columns" } else { "Drag to freeze rows" };
+        resp.clone().on_hover_text_at_pointer(crate::i18n::current(ctx).tr(tip));
+    }
+}
+
+/// The resize cursor over a column or row header edge. Just past a hidden column or row, Excel
+/// shows a split cursor: dragging or double-clicking there unhides it.
+fn header_edge_cursor(app: &SheetApp, ctx: &egui::Context, pointer: &egui::PointerState, geo: &Geo, sh: &Sheet, p: Pos2, near_col_edge: bool) {
+    let hidden =
+        app.grid.drag == Drag::None && if near_col_edge { hidden_col_edge(geo, sh, p.x).is_some() } else { hidden_row_edge(geo, sh, p.y).is_some() };
+    match pointer.hover_pos() {
+        Some(at) if hidden => paint_split_cursor(ctx, at, near_col_edge),
+        _ => ctx.set_cursor_icon(if near_col_edge { CursorIcon::ResizeColumn } else { CursorIcon::ResizeRow }),
     }
 }
 
@@ -2192,7 +2213,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
     if primary_clicked
         && !resp.drag_started()
         && let Some(p) = pos
-        && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet, p)
+        && let Some((id, act)) = crate::chartview::slicer_click(geo, sh, wb, wb.active_sheet(), p)
     {
         app.selected_chart = Some(id);
         match act {
@@ -2402,13 +2423,13 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             && ed.can_point()
         {
             let anchor = if mods.shift && ed.point_at_caret() {
-                ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet).map(|(_, cell)| cell).unwrap_or(c)
+                ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet()).map(|(_, cell)| cell).unwrap_or(c)
             } else {
                 c
             };
             let range = RangeRef::new(anchor, c);
             let text = if range.is_single() { c.a1() } else { range.a1() };
-            let sheet_name = (ed.sheet != wb.active_sheet).then(|| sh.name.clone());
+            let sheet_name = (ed.sheet != wb.active_sheet()).then(|| sh.name.clone());
             let r = match sheet_name {
                 Some(n) => format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&n)),
                 None => text,
@@ -2420,7 +2441,7 @@ fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &
             }
             ed.request_focus = true;
             ed.point_cell = Some(c);
-            ed.point_anchor = Some((wb.active_sheet, anchor));
+            ed.point_anchor = Some((wb.active_sheet(), anchor));
             app.grid.drag = Drag::Select;
             app.grid.drag_select = true;
             if resp.drag_started()
@@ -2736,7 +2757,7 @@ fn format_painter_apply(app: &mut SheetApp) {
 fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, extend: bool, add: bool) -> bool {
     let Some(ed) = app.editor.as_mut().filter(|ed| ed.can_point()) else { return false };
     let edit_sheet = ed.sheet;
-    let active_sheet = wb.active_sheet;
+    let active_sheet = wb.active_sheet();
     let range = if extend {
         ed.point
             .and_then(|point| crate::editor::formula_refs(&ed.text).into_iter().find(|(start, end, ..)| (*start, *end) == point))
@@ -2758,7 +2779,8 @@ fn point_header(app: &mut SheetApp, wb: &Workbook, sh: &Sheet, range: RangeRef, 
         range
     };
     let reference = range.a1();
-    let reference = if ed.sheet != wb.active_sheet { format!("{}!{reference}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { reference };
+    let reference =
+        if ed.sheet != wb.active_sheet() { format!("{}!{reference}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { reference };
     if add {
         ed.append_ref(&reference);
     } else {
@@ -2780,13 +2802,13 @@ fn select_to_pointer(app: &mut SheetApp, geo: &Geo, sh: &Sheet, wb: &Workbook, p
     } else if let Some(ed) = app.editor.as_mut()
         && ed.point.is_some()
     {
-        if let Some(start) = ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet).map(|(_, cell)| cell).or(ed.point_cell) {
+        if let Some(start) = ed.point_anchor.filter(|(sheet, _)| *sheet == wb.active_sheet()).map(|(_, cell)| cell).or(ed.point_cell) {
             let range = RangeRef::new(start, cell);
             let text = if range.is_single() { range.start.a1() } else { range.a1() };
-            let text = if ed.sheet != wb.active_sheet { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { text };
+            let text = if ed.sheet != wb.active_sheet() { format!("{}!{text}", gridcraft_engine::formula::quote_sheet(&sh.name)) } else { text };
             ed.insert_ref(&text);
             ed.point_cell = Some(cell);
-            ed.point_anchor = Some((wb.active_sheet, start));
+            ed.point_anchor = Some((wb.active_sheet(), start));
         }
     } else if let Some(d) = app.session.active() {
         // Read the current anchor: starting a drag may have just replaced the selection.
@@ -3194,7 +3216,7 @@ fn editor_width(text_w: f32, cell_w: f32, size: f32) -> f32 {
 /// Draws the in-cell editor, growing and wrapping with its text, mirroring for right-to-left sheets, choosing contrasting caret ink and clipping cells hidden under frozen panes.
 fn in_cell_editor(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     let Some(ed) = app.editor.as_ref() else { return };
-    if ed.sheet != wb.active_sheet {
+    if app.view_key() != Some((ed.doc, ed.sheet)) {
         return;
     }
     let cell = ed.cell;
@@ -3281,7 +3303,7 @@ fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     let Some((col, row, at)) = app.grid.filter_menu else { return };
     let Some(d) = app.session.active() else { return };
     let wb = d.wb.clone();
-    let si = wb.active_sheet;
+    let si = wb.active_sheet();
     let Some(sh) = wb.sheet(si) else { return };
     let _ = geo;
     // Tables get an autofilter on demand.
@@ -3495,7 +3517,7 @@ fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
 /// and no cell does while the PivotTable's Enable show details option is off.
 fn show_details_offered(app: &mut SheetApp) -> bool {
     let Some(d) = app.session.active() else { return false };
-    let (si, at) = (d.wb.active_sheet, d.selection.active);
+    let (si, at) = (d.wb.active_sheet(), d.selection.active);
     let Some((pi, pt)) = d.wb.active().and_then(|sh| sh.pivots.iter().enumerate().find(|(_, pt)| pt.last_range.is_some_and(|r| r.contains(at))))
     else {
         return false;
@@ -3527,14 +3549,14 @@ const DATE_FILL_MODES: [(&str, &str); 4] = [("Fill Days", "days"), ("Fill Weekda
 
 /// The fill modes the menus list for a fill from `src` on the active sheet.
 fn fill_modes(app: &SheetApp, src: RangeRef) -> Vec<(&'static str, &'static str)> {
-    let dates = app.session.active().is_some_and(|d| gridcraft_engine::fill::starts_with_date(&d.wb, d.wb.active_sheet, src));
+    let dates = app.session.active().is_some_and(|d| gridcraft_engine::fill::starts_with_date(&d.wb, d.wb.active_sheet(), src));
     FILL_MODES.into_iter().chain(DATE_FILL_MODES.into_iter().filter(|_| dates)).collect()
 }
 
 /// Remembers the fill just made so the Auto Fill Options button can offer the other ways.
 fn set_fill_tag(app: &mut SheetApp, src: RangeRef, target: RangeRef) {
     app.grid.fill_tag =
-        app.session.active().map(|d| FillTag { src, target, uid: d.uid, sheet: d.wb.active_sheet, revision: d.revision, undo_len: d.undo.len() });
+        app.session.active().map(|d| FillTag { src, target, uid: d.uid, sheet: d.wb.active_sheet(), revision: d.revision, undo_len: d.undo.len() });
 }
 
 /// The Auto Fill Options button below the bottom-right corner of cells a left-drag of the fill
@@ -3546,7 +3568,7 @@ fn fill_options_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet
     let Some(tag) = app.grid.fill_tag.clone() else { return };
     let current = app.session.active().is_some_and(|d| {
         d.uid == tag.uid
-            && d.wb.active_sheet == tag.sheet
+            && d.wb.active_sheet() == tag.sheet
             && d.revision == tag.revision
             && d.undo.len() == tag.undo_len
             && d.selection.ranges.len() == 1
@@ -3745,12 +3767,12 @@ pub fn point_move(app: &mut SheetApp, ed: &mut EditState, dr: i64, dc: i64, exte
                 )
             })
             .unwrap_or(from);
-        ed.point_anchor.filter(|(sheet, _)| *sheet == d.wb.active_sheet).map(|(_, cell)| cell).unwrap_or(inferred_anchor)
+        ed.point_anchor.filter(|(sheet, _)| *sheet == d.wb.active_sheet()).map(|(_, cell)| cell).unwrap_or(inferred_anchor)
     } else {
         to
     };
     let text = if extend { RangeRef::new(anchor, to).a1() } else { to.a1() };
-    let sheet = d.wb.active_sheet;
+    let sheet = d.wb.active_sheet();
     ed.insert_ref(&text);
     ed.point_cell = Some(to);
     ed.point_anchor = Some((sheet, anchor));
@@ -3899,7 +3921,7 @@ fn list_picker(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool)
     let Some(c) = app.grid.list_picker else { return };
     let Some(d) = app.session.active() else { return };
     let wb = d.wb.clone();
-    let si = wb.active_sheet;
+    let si = wb.active_sheet();
     let Some(sh) = wb.sheet(si) else { return };
     let Some(dv) = sh.validations.iter().find(|x| x.ranges.iter().any(|r| r.contains(c))).cloned() else {
         app.grid.list_picker = None;
@@ -4037,7 +4059,7 @@ fn is_checkbox(sh: &Sheet, app: &SheetApp) -> bool {
 
 fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
     let Some(d) = app.session.active() else { return };
-    let key = (d.uid, d.revision, d.wb.active_sheet);
+    let key = (d.uid, d.revision, d.wb.active_sheet());
     if app.grid.pages.as_ref().is_none_or(|(k, _)| *k != key) {
         let pages: Vec<(RangeRef, u32)> = app
             .session
@@ -4670,7 +4692,7 @@ mod trace_arrow_tests {
     /// The arrows `paint_overlays` draws on the active sheet, as (tail, head) points.
     fn arrows(app: &mut SheetApp) -> (Geo, Vec<(Pos2, Pos2)>) {
         let d = app.session.active().unwrap();
-        let (wb, si, sel) = (d.wb.clone(), d.wb.active_sheet, d.selection.clone());
+        let (wb, si, sel) = (d.wb.clone(), d.wb.active_sheet(), d.selection.clone());
         let sh = wb.sheet(si).unwrap();
         let geo = Geo::new(sh, Rect::from_min_size(pos2(0.0, 0.0), vec2(1200.0, 800.0)), vec2(0.0, 0.0));
         let ctx = egui::Context::default();
@@ -4694,7 +4716,7 @@ mod trace_arrow_tests {
 
     fn center(app: &SheetApp, geo: &Geo, cell: &str) -> Pos2 {
         let d = app.session.active().unwrap();
-        let sh = d.wb.sheet(d.wb.active_sheet).unwrap();
+        let sh = d.wb.sheet(d.wb.active_sheet()).unwrap();
         geo.cell_rect(sh, CellRef::parse(cell).unwrap()).center()
     }
 

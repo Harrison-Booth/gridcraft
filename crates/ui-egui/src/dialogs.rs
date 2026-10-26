@@ -113,7 +113,7 @@ impl Dialog {
     pub fn pick_reference(&mut self, cell: CellRef, active_sheet: &str, extend: bool) {
         let Some(pick) = self.pick.as_mut() else { return };
         let text = self.values.get(pick.key).and_then(Json::as_str).unwrap_or("").to_string();
-        let mut ed = crate::editor::EditState::new(0, cell, text, true, false);
+        let mut ed = crate::editor::EditState::new(0, 0, cell, text, true, false);
         ed.caret = pick.caret.min(ed.text.chars().count());
         ed.point = pick.point;
         if ed.text.trim().is_empty() {
@@ -198,6 +198,20 @@ impl Dialog {
                     options: vec![("right", "Shift cells right"), ("down", "Shift cells down"), ("row", "Entire row"), ("column", "Entire column")],
                 }],
                 json!({"shift": "down"}),
+            ),
+            "arrangeAll" => Dialog::form(
+                "arrangeAll",
+                "Arrange Windows",
+                "view.arrangeAll",
+                vec![
+                    Choice {
+                        key: "arrange",
+                        label: "Arrange",
+                        options: vec![("tiled", "Tiled"), ("horizontal", "Horizontal"), ("vertical", "Vertical"), ("cascade", "Cascade")],
+                    },
+                    Check { key: "activeWorkbook", label: "Windows of active workbook" },
+                ],
+                json!({"arrange": "tiled", "activeWorkbook": false}),
             ),
             "insertPaste" => Dialog::form(
                 "insertPaste",
@@ -605,7 +619,7 @@ impl Dialog {
             }
             "solver" => {
                 // Starts from the sheet's saved model, else the active cell as objective.
-                let saved = app.session.active().and_then(|doc| gridcraft_engine::cmd::solver::saved_model(&doc.wb, doc.wb.active_sheet));
+                let saved = app.session.active().and_then(|doc| gridcraft_engine::cmd::solver::saved_model(&doc.wb, doc.wb.active_sheet()));
                 let mut values = json!({"objective": active, "goal": "max", "value": "0", "variables": "", "constraints": [], "nonNegative": true, "method": "grg"});
                 if let (Some(m), Some(v)) = (saved.as_ref().and_then(Json::as_object), values.as_object_mut()) {
                     for (k, x) in m {
@@ -886,7 +900,7 @@ impl Dialog {
                 // Chart Design › Select Data: data range, series to keep, category axis labels.
                 let id = p("chart").as_u64();
                 let found = app.session.active().and_then(|doc| {
-                    let si = doc.wb.active_sheet;
+                    let si = doc.wb.active_sheet();
                     let sh = doc.wb.sheet(si)?;
                     let ch = sh.charts.iter().find(|c| Some(u64::from(c.id)) == id)?;
                     let data = gridcraft_chart::resolve(&doc.wb, si, ch);
@@ -1254,6 +1268,7 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
 /// Takes and draws the active dialog, dispatches its body by name, consumes picture-inbox results, runs OK/confirm commands, handles Esc/close and restores the back-dialog stack.
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
+    let home = app.ui_window();
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);
     }
@@ -1439,29 +1454,14 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 "saveChanges" => {
                     ui.label(format!("Do you want to save the changes you made to {}?", d.values.get("title").and_then(Json::as_str).unwrap_or("this workbook")));
-                    // Asked while quitting: once answered, the next unsaved workbook is asked about.
                     let quitting = d.values.get("quit").and_then(Json::as_bool) == Some(true);
                     ui.horizontal(|ui| {
-                        if ui.button("Don't Save").clicked() {
-                            app.run_or_alert("file.close", json!({"force": true}));
-                            if quitting {
-                                app.continue_quit(ui.ctx());
+                        for (label, answer) in
+                            [("Don't Save", crate::SaveAnswer::DontSave), ("Cancel", crate::SaveAnswer::Cancel), ("Save", crate::SaveAnswer::Save)]
+                        {
+                            if ui.button(label).clicked() && app.answer_save_changes(answer, quitting, ui.ctx()) {
+                                open = false;
                             }
-                            open = false;
-                        }
-                        if ui.button("Cancel").clicked() {
-                            open = false;
-                        }
-                        // File operations must include the cell the user is still editing (as the File > Save menu item already does).
-                        if ui.button("Save").clicked() && app.commit_edit(0, 0, false, false) {
-                            app.run_or_alert("file.save", json!({}));
-                            if app.session.active().is_some_and(|x| !x.is_dirty()) {
-                                app.run_or_alert("file.close", json!({"force": true}));
-                                if quitting {
-                                    app.continue_quit(ui.ctx());
-                                }
-                            }
-                            open = false;
                         }
                     });
                 }
@@ -1545,6 +1545,15 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         }
     } else if confirm {
         open = false;
+    }
+    if app.ui_window() != home {
+        // A command run from the dialog switched windows: whatever it opened shows in the new
+        // window, and this dialog (or the one it returns to) stays in its own.
+        let keep = if open { Some(d) } else { d.back.take().map(|b| *b) };
+        if let Some(keep) = keep {
+            app.return_dialog(home, keep);
+        }
+        return;
     }
     if let Some(child) = app.dialog.as_mut() {
         // The body opened another dialog (Name Manager › New…). It takes over; this one waits
@@ -2201,7 +2210,7 @@ fn insert_function(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
     let mut open = true;
     ok_cancel(ui, confirm, &mut open);
     if *confirm && let Some(n) = hits.get(d.list_index).and_then(|f| f["name"].as_str()) {
-        let n = app.session.active().map(|doc| crate::formula_locale::completion_name(n, locale, &doc.wb, doc.wb.active_sheet)).unwrap_or(n);
+        let n = app.session.active().map(|doc| crate::formula_locale::completion_name(n, locale, &doc.wb, doc.wb.active_sheet())).unwrap_or(n);
         let cur = app.editor.as_ref().map(|e| e.text.clone());
         let text = match cur {
             Some(t) if t.starts_with('=') => format!("{t}{n}("),
@@ -2365,7 +2374,7 @@ fn go_to_entries(app: &SheetApp) -> Vec<String> {
     app.session
         .active()
         .map(|doc| {
-            let mut v = gridcraft_engine::cmd::edit::go_to_names(&doc.wb, doc.wb.active_sheet);
+            let mut v = gridcraft_engine::cmd::edit::go_to_names(&doc.wb, doc.wb.active_sheet());
             v.extend(doc.go_to_recent.iter().cloned());
             v
         })
