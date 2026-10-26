@@ -499,7 +499,9 @@ fn irr_solve(v: &[f64], guess: f64) -> R<f64> {
             s = s * x + c;
         }
         if ds == 0.0 {
-            return Err(CellError::Num);
+            // An exact root with a zero slope (a repeated root such as {1,-2,1} at guess 0) is
+            // still the answer: Excel returns 0 there.
+            return if s == 0.0 && x > 0.0 { Ok(1.0 / x - 1.0) } else { Err(CellError::Num) };
         }
         let next = x - s / ds;
         if !next.is_finite() {
@@ -2094,6 +2096,10 @@ mod tests {
         close_tol(irr_of(&[-100.0, 300.0, -210.0], Some(0.9)), 0.887_298_334_620_741_5, 1e-12);
         is_err(irr_of(&[-100.0, 60.0, 60.0], Some(-1.0)), CellError::Value);
         close_tol(irr_of(&[-100.0, 60.0, 60.0], Some(-0.999_999)), 0.130_662_386_291_807_5, 1e-12);
+        // An exact repeated root at the starting guess (zero slope) is the answer, as in Excel.
+        assert_eq!(irr_of(&[1.0, -2.0, 1.0], Some(0.0)), Value::Number(0.0));
+        assert_eq!(irr_of(&[-1.0, 3.0, -3.0, 1.0], Some(0.0)), Value::Number(0.0));
+        close_tol(irr_of(&[1.0, -2.0, 1.0], None), 1.09e-7, 1e-7);
     }
 
     /// PMT within about 4 ULPs of Excel's (Value2 of synthetic probes; libm differs by an ULP across
