@@ -271,20 +271,27 @@ fn dated_flows(values: &Value, dates: &Value, lenient: bool) -> R<(Vec<f64>, Vec
     }
     let mut v = Vec::with_capacity(va.data.len());
     let mut d = Vec::with_capacity(da.data.len());
-    for (x, y) in va.data.iter().zip(da.data.iter()) {
+    for (i, (x, y)) in va.data.iter().zip(da.data.iter()).enumerate() {
+        // Excel (XNPV): a blank or text value or a blank date is #NUM!, except in the first row,
+        // where it is #VALUE!.
+        let strict_err = if i == 0 { CellError::Value } else { CellError::Num };
         let value = match x {
             Value::Number(n) => *n,
             Value::Empty if lenient => 0.0,
-            Value::Empty => return Err(CellError::Num),
+            Value::Empty => return Err(strict_err),
             Value::Error(e) => return Err(*e),
-            _ => return Err(CellError::Value),
+            _ if lenient => return Err(CellError::Value),
+            _ => return Err(strict_err),
         };
         match y {
             Value::Number(n) => d.push(n.trunc()),
             Value::Error(e) => return Err(*e),
             Value::Text(_) => d.push(y.to_number()?.trunc()),
-            Value::Empty if lenient && value == 0.0 => continue,
-            Value::Empty if lenient || value == 0.0 => return Err(CellError::Num),
+            Value::Empty if !lenient => return Err(strict_err),
+            // XIRR skips a blank date next to a 0 flow and reads one in the first row as day 0.
+            Value::Empty if value == 0.0 => continue,
+            Value::Empty if i == 0 => d.push(0.0),
+            Value::Empty => return Err(CellError::Num),
             _ => return Err(CellError::Value),
         }
         v.push(value);
@@ -454,6 +461,22 @@ fn xirr(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let guess = opt_num(a, 2, 0.1)?;
     if guess <= -1.0 || !v.iter().any(|x| *x > 0.0) || !v.iter().any(|x| *x < 0.0) {
         return Err(CellError::Num);
+    }
+    if v.first() == Some(&0.0) {
+        // Excel with a 0 (or blank) first flow: the residual scale is 0, so the search just
+        // halves the guess towards 0 until the step is under the tolerance; a negative guess is #NUM!.
+        if guess < 0.0 {
+            return Err(CellError::Num);
+        }
+        let mut x = if guess == 0.0 { 1e-5 } else { guess };
+        // Bounded: a huge guess halves to the tolerance within about 1100 steps.
+        for _ in 0..1100 {
+            if x / 2.0 < XirrSolver::tol(x / 2.0) {
+                break;
+            }
+            x /= 2.0;
+        }
+        return num_val(x / 2.0);
     }
     let d0 = d.first().copied().unwrap_or(0.0);
     let first = v.iter().copied().find(|x| *x != 0.0).unwrap_or(0.0);
@@ -2031,9 +2054,16 @@ mod tests {
         xirr_is(&[-100.0, 100.01], &[b, b + 1.0], None, 0.037_172_409_892_082_23);
         xirr_is(&[-100.0, 99.99], &[b, b + 1.0], None, -0.035_843_667_387_962_34);
         xirr_is(&[-100.0, 110.0], &[b, b + 1.0], None, 1_283_305_579_426_611.5);
-        // A leading zero cash flow adds nothing, so the root is the one without it (10%). The
-        // exact Excel answer for this input is unobserved, so only the root is checked.
-        assert!(matches!(xirr_of(&[0.0, -100.0, 110.0], &[b, y1, y2], None), Value::Number(r) if (r - 0.1).abs() < 1e-7));
+        // A leading zero cash flow scales the residual to 0: Excel halves the guess to a tiny
+        // number whatever the flows (observed), and a negative guess is #NUM!.
+        let z = [0.0, -100.0, 110.0];
+        let zd = [b, y1, y2];
+        xirr_is(&z, &zd, None, 2.980_232_238_769_531_4e-9);
+        xirr_is(&z, &zd, Some(0.2), 2.980_232_238_769_531_4e-9);
+        xirr_is(&z, &zd, Some(0.0), 4.882_812_5e-9);
+        xirr_is(&z, &zd, Some(5.0), 4.656_612_873_077_392_6e-9);
+        xirr_is(&[0.0, -100.0, 50.0], &zd, None, 2.980_232_238_769_531_4e-9);
+        is_err(xirr_of(&z, &zd, Some(-0.5)), CellError::Num);
         // Dates before the first are allowed (time runs from the first date); in the second
         // case the search finds no sign change.
         xirr_is(&[-2416.93, 447.77, 1743.6], &[44331.0, 44498.0, 43849.0], None, -0.974_587_937_071_919_6);
@@ -2121,7 +2151,20 @@ mod tests {
         is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(dates)]), CellError::Num);
         is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(0.0))), rf(gap.clone())]), CellError::Num);
         is_err(ev("XNPV", vec![n(0.09), rf(flows(Value::Empty)), rf(gap.clone())]), CellError::Num);
-        is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(2750.0))), rf(gap)]), CellError::Value);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(nv(2750.0))), rf(gap)]), CellError::Num);
+        is_err(ev("XNPV", vec![n(0.09), rf(flows(tv("-"))), rf(dates.clone())]), CellError::Num);
+        // In the first row a blank value or date is #VALUE! for XNPV; XIRR reads a blank date there as day 0.
+        let first_row = |value: Value, date: Value| {
+            let cells = |x: Value, rest: [f64; 4]| arr(std::iter::once(vec![x]).chain(rest.iter().map(|y| vec![nv(*y)])).collect());
+            (rf(cells(value, [2750.0, 4250.0, 3250.0, 500.0])), rf(cells(date, [39508.0, 39751.0, 39859.0, 39904.0])))
+        };
+        let (v0, d0) = first_row(Value::Empty, nv(39448.0));
+        is_err(ev("XNPV", vec![n(0.09), v0, d0]), CellError::Value);
+        let (v0, d0) = first_row(nv(0.0), Value::Empty);
+        is_err(ev("XNPV", vec![n(0.09), v0, d0]), CellError::Value);
+        let (v0, d0) = first_row(nv(-10000.0), Value::Empty);
+        is_err(ev("XNPV", vec![n(0.09), v0.clone(), d0.clone()]), CellError::Value);
+        close_tol(ev("XIRR", vec![v0, d0]), 0.000_664_654_374_122_619_6, 1e-7);
     }
 
     #[test]
