@@ -748,7 +748,7 @@ fn complex_part_text(x: f64) -> String {
     let digits = n.to_string();
     let digits = digits.trim_end_matches('0');
     let sign = if x < 0.0 { "-" } else { "" };
-    if exp >= 21 || (exp < 0 && digits.len() as i32 - exp - 1 >= 20) {
+    if exp >= 21 || (exp < 0 && digits.len() as i32 - exp > 20) {
         let (head, tail) = digits.split_at(1);
         let point = if tail.is_empty() { "" } else { "." };
         return format!("{sign}{head}{point}{tail}E{}{:02}", if exp < 0 { '-' } else { '+' }, exp.abs());
