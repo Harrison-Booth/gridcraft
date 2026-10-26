@@ -12,7 +12,9 @@ Files saved:
   - every *.jsonl scenario next to this script (one feature each), run on the Sales sample.
 
 Each file is opened read-only with CorruptLoad = xlNormalLoad (0), so a part Excel would repair is a
-failure instead of a silent fix, with DisplayAlerts off and macros disabled so nothing waits on a prompt.
+failure instead of a silent fix, with DisplayAlerts off and VBA macros disabled so nothing waits on a prompt.
+AutomationSecurity does not cover Excel 4.0 (XLM) macros, which would still prompt, so a workbook that
+holds XLM macro sheets is never opened: it is reported as SKIP-XLM and the run does not pass.
 Excel is a fresh instance per file; a file that hangs or kills Excel is recorded as TIMEOUT or CRASH and
 that instance (found by its window's process id) is stopped. Nothing is written next to the inputs; any other
 Excel, such as one the person starts meanwhile, is never touched. Exit code 1 when any saved file is not PASS.
@@ -39,7 +41,7 @@ $probe = {
         [void][Win.U]::GetWindowThreadProcessId([IntPtr]$x.Hwnd, [ref]$xlPid)
         "PID`t$xlPid"
         $x.DisplayAlerts = $false
-        $x.AutomationSecurity = 3 # msoAutomationSecurityForceDisable: never run macros
+        $x.AutomationSecurity = 3 # msoAutomationSecurityForceDisable: no VBA macros (XLM is screened by Test-HasXlm)
         # Named arguments: PowerShell can't skip the optional ones in between positionally.
         $wb = [System.__ComObject].InvokeMember('Open', [Reflection.BindingFlags]::InvokeMethod, $null, $x.Workbooks,
             @($path, 0, $true, 0), $null, $null, @('Filename', 'UpdateLinks', 'ReadOnly', 'CorruptLoad'))
@@ -53,7 +55,16 @@ $probe = {
     }
 }
 
+# True when the package holds Excel 4.0 macro sheets, which ForceDisable does not stop and Excel would prompt for.
+function Test-HasXlm([string]$path) {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    # Not a zip at all: nothing to screen, Excel gets to report it.
+    try { $zip = [IO.Compression.ZipFile]::OpenRead($path) } catch { return $false }
+    try { return [bool]($zip.Entries | Where-Object { $_.FullName -like 'xl/macrosheets/*' }) } finally { $zip.Dispose() }
+}
+
 function Test-InExcel([string]$path) {
+    if (Test-HasXlm $path) { return [pscustomobject]@{ State = 'SKIP-XLM'; Seconds = 0; Detail = 'Excel 4.0 macro sheets; not opened' } }
     $clock = [Diagnostics.Stopwatch]::StartNew()
     $job = Start-Job -ScriptBlock $probe -ArgumentList $path
     $done = Wait-Job $job -Timeout $TimeoutSec
@@ -92,11 +103,13 @@ $rows = @()
 foreach ($w in $work) {
     $name, $orig, $dest, $cliArgs = $w
     # The CLI reports on stderr, which Stop would turn into an exception.
+    Remove-Item $dest -Force -ErrorAction SilentlyContinue
     $ErrorActionPreference = 'Continue'
     & $Cli @cliArgs --out $dest *> $null
+    $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
     $base = if ($orig) { (Test-InExcel $orig) } else { $null }
-    $r = if (Test-Path $dest) { Test-InExcel $dest } else { [pscustomobject]@{ State = 'SAVE-FAIL'; Seconds = 0; Detail = "gridcraft-cli exit code $LASTEXITCODE" } }
+    $r = if ($code -eq 0 -and (Test-Path $dest)) { Test-InExcel $dest } else { [pscustomobject]@{ State = 'SAVE-FAIL'; Seconds = 0; Detail = "gridcraft-cli exit code $code" } }
     $rows += [pscustomobject]@{
         File = $name; Original = if ($base) { $base.State } else { '-' }; Saved = $r.State
         Seconds = $r.Seconds; Detail = $r.Detail
@@ -104,6 +117,6 @@ foreach ($w in $work) {
 }
 $rows | Format-Table -AutoSize -Wrap | Out-String -Width 220 | Write-Output
 if ($Csv) { $rows | Export-Csv -NoTypeInformation -Path $Csv }
-$bad = @($rows | Where-Object Saved -ne 'PASS').Count
+$bad = @($rows | Where-Object { $_.Saved -ne 'PASS' -or $_.Original -eq 'SKIP-XLM' }).Count
 "{0} of {1} saved files pass" -f ($rows.Count - $bad), $rows.Count
 if ($bad) { exit 1 }
