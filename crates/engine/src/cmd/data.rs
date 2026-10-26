@@ -1454,6 +1454,34 @@ fn show_levels(s: &mut Session, p: &Json) -> Result<Json> {
 
 /// Data ▸ Outline ▸ Settings: whether summary rows sit below their detail and summary columns
 /// right of it. A changed direction moves each collapsed group's mark (+) to its new summary line.
+/// Moves the collapsed marks of a line axis to the summary line on its new side (`on` is the new
+/// setting, `was_before` the old one). A line that nested groups share keeps its mark on the outermost
+/// group whose detail is all hidden, or the outermost when none is.
+fn move_marks(map: &mut std::collections::BTreeMap<u32, LineInfo>, was_before: bool, on: bool) {
+    let mut marked: Vec<outline::OutlineGroup> =
+        outline::groups_with(map, was_before).into_iter().filter(|g| g.has_summary() && map.get(&g.summary()).is_some_and(|e| e.collapsed)).collect();
+    // A mark on a line that nested groups share moves with the outermost of them whose
+    // detail is all hidden, or with the outermost when none is.
+    let mut owner: std::collections::BTreeMap<u32, (bool, u8)> = std::collections::BTreeMap::new();
+    for g in &marked {
+        let key = (!g.collapsed, g.level);
+        let best = owner.entry(g.summary()).or_insert(key);
+        *best = (*best).min(key);
+    }
+    marked.retain(|g| owner.get(&g.summary()) == Some(&(!g.collapsed, g.level)));
+    for g in &marked {
+        if let Some(e) = map.get_mut(&g.summary()) {
+            e.collapsed = false;
+        }
+    }
+    for g in marked {
+        let g = outline::OutlineGroup { summary_before: !on, ..g };
+        if g.has_summary() {
+            map.entry(g.summary()).or_default().collapsed = true;
+        }
+    }
+}
+
 fn outline_settings(s: &mut Session, p: &Json) -> Result<Json> {
     let si = target_sheet(s, p)?;
     edit(s, |cx| {
@@ -1469,31 +1497,7 @@ fn outline_settings(s: &mut Session, p: &Json) -> Result<Json> {
             if was_before != on {
                 continue;
             }
-            let map = if rows { &mut sh.rows } else { &mut sh.cols };
-            let mut marked: Vec<outline::OutlineGroup> = outline::groups_with(map, was_before)
-                .into_iter()
-                .filter(|g| g.has_summary() && map.get(&g.summary()).is_some_and(|e| e.collapsed))
-                .collect();
-            // A mark on a line that nested groups share moves with the outermost of them whose
-            // detail is all hidden, or with the outermost when none is.
-            let mut owner: std::collections::BTreeMap<u32, (bool, u8)> = std::collections::BTreeMap::new();
-            for g in &marked {
-                let key = (!g.collapsed, g.level);
-                let best = owner.entry(g.summary()).or_insert(key);
-                *best = (*best).min(key);
-            }
-            marked.retain(|g| owner.get(&g.summary()) == Some(&(!g.collapsed, g.level)));
-            for g in &marked {
-                if let Some(e) = map.get_mut(&g.summary()) {
-                    e.collapsed = false;
-                }
-            }
-            for g in marked {
-                let g = outline::OutlineGroup { summary_before: !on, ..g };
-                if g.has_summary() {
-                    map.entry(g.summary()).or_default().collapsed = true;
-                }
-            }
+            move_marks(if rows { &mut sh.rows } else { &mut sh.cols }, was_before, on);
         }
         Ok(json!({"summaryBelow": sh.summary_below, "summaryRight": sh.summary_right}))
     })
