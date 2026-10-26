@@ -1,6 +1,6 @@
 # Chart parity
 
-> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-24 · **Change:** minor (100% stacked area charts) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-18 · **Last updated:** 2026-10-26 · **Change:** minor (chart caches and number formats through defined names) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Excel's chart types and chart elements against GridCraft. Part of
 [target-app-parity.md](target-app-parity.md). **Breadth ~50%, ready ~30%, 40–60 h** (estimated).
@@ -93,6 +93,7 @@ from a calculation (`OFFSET(…,COUNTA(…))`) is saved without a cache; Excel r
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Series through defined names (static and `OFFSET` with literal arguments) are saved with `numCache`/`strCache` and the first cell's `formatCode`; the chart reads number formats and date categories through names; all-number categories are written as `numRef` (#1689, #1690) |
 | 2026-10-24 | minor | 100% Stacked Area: inserted from the ribbon and All Charts, drawn as shares of each category's total, read and written as `percentStacked` |
 | 2026-10-18 | trivial | Stale notes: stock/combo, treemap/sunburst, box and waterfall kinds survive XLSX round-trip (PRs #158, #161) |
 | 2026-10-16 | trivial | Series that refer to defined names (`[0]!Name`, `Sheet!Name`) resolve instead of showing `#NAME?`, and are saved qualified, as Excel needs (#1686) |
