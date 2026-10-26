@@ -3794,6 +3794,8 @@ pub fn point_sheet(app: &mut SheetApp, ed: &mut EditState, command: &str) {
     }
     ed.point_cell = app.session.active().map(|d| d.selection.active);
     ed.point_anchor = None;
+    // The new sheet's grid took the focus: the editor needs it back for the next key.
+    ed.request_focus = true;
     app.grid.ensure_visible = true;
 }
 
