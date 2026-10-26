@@ -4033,7 +4033,7 @@ fn sort_moves_identical_merged_blocks_and_refuses_anything_else() {
     }
 
     // Merges outside the range don't matter.
-    let mut s = s();
+    let mut s = self::s();
     s.execute("cell.set", json!({"cell": "A1", "input": "b"})).unwrap();
     s.execute("cell.set", json!({"cell": "A2", "input": "a"})).unwrap();
     s.execute("home.mergeCells", json!({"range": "E1:F2"})).unwrap();
