@@ -123,6 +123,13 @@ pub fn specs() -> Vec<CommandSpec> {
 /// format, before parsing. Errors when the formula can't be parsed.
 pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gridcraft_model::Workbook) -> Result<Option<Cell>> {
     let style = wb.sheet(sheet).map(|sh| sh.style_id(at)).unwrap_or_default();
+    let capped;
+    let mut input = input;
+    if input.len() > gridcraft_core::MAX_TEXT_CHARS && !input.starts_with('=') {
+        // Excel cuts typed text to 32,767 characters.
+        capped = gridcraft_core::cap_text(input.to_string());
+        input = &capped;
+    }
     if input.is_empty() {
         let c = Cell { value: Value::Empty, formula: None, style };
         return Ok(if c.is_blank() { None } else { Some(c) });
@@ -2037,6 +2044,18 @@ mod tests {
         let list = s.execute("edit.goTo", json!({"list": true})).unwrap();
         assert_eq!(list["recent"].as_array().map(Vec::len), Some(GO_TO_RECENT), "{list}");
         assert_eq!(list["recent"][0], format!("Sheet1!A{}", GO_TO_RECENT + 2), "{list}");
+    }
+
+    #[test]
+    fn cell_set_cuts_text_to_32767_characters() {
+        // Excel cuts a 40,000-character entry to 32,767; a formula is left alone.
+        let mut s = Session::new();
+        s.new_workbook();
+        s.execute("cell.set", json!({"cell": "A1", "input": "é".repeat(40_000)})).unwrap();
+        s.execute("cell.set", json!({"cell": "A2", "input": "=LEN(A1)"})).unwrap();
+        let get = |s: &mut Session, a: &str| s.execute("cell.get", json!({"cell": a})).unwrap()["value"].clone();
+        assert_eq!(get(&mut s, "A1").as_str().map(|t| t.chars().count()), Some(32_767));
+        assert_eq!(get(&mut s, "A2"), json!(32767.0));
     }
 
     #[test]

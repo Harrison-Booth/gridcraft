@@ -326,3 +326,13 @@ fn parser_stops_collecting_fields_at_max_cols() {
     });
     assert_eq!(lens, vec![MAX_COLS as usize]);
 }
+
+#[test]
+fn a_field_over_32767_characters_is_cut() {
+    let src = format!("{},{}", "x".repeat(40_000), "y".repeat(32_768));
+    for parse_values in [true, false] {
+        let wb = read_csv(src.as_bytes(), &CsvOptions { parse_values, ..Default::default() }).unwrap();
+        assert_eq!(v(&wb, 0, 0), Value::text("x".repeat(32_767)));
+        assert_eq!(v(&wb, 0, 1), Value::text("y".repeat(32_767)));
+    }
+}
