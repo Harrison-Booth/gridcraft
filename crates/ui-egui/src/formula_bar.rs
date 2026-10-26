@@ -292,7 +292,11 @@ fn show_edit<'t>(
 /// `max_height` of text and scrolls beyond that, keeping the caret in view.
 pub fn editor_widget(app: &mut SheetApp, ui: &mut egui::Ui, id: egui::Id, font: FontId, multiline: bool, width: f32, max_height: f32) -> EditorInfo {
     let Some(mut ed) = app.editor.take() else { return EditorInfo::default() };
-    let mine = ed.from_formula_bar == (id == egui::Id::unique("gridcraft.formula_bar"));
+    let is_bar = id == egui::Id::unique("gridcraft.formula_bar");
+    // The in-cell editor is only drawn on the sheet the edit started on: while a formula points at
+    // another sheet, the formula bar's field takes the keys (Enter, arrows, Ctrl+Page Down).
+    let cell_editor_hidden = !ed.from_formula_bar && app.view_key() != Some((ed.doc, ed.sheet));
+    let mine = ed.from_formula_bar == is_bar || (is_bar && cell_editor_hidden);
     // Keys the editor handles itself (before the TextEdit sees them), only where it has focus.
     let focused = ui.ctx().memory(|m| m.focused());
     let has_focus = focused == Some(id) || (mine && (ed.request_focus || focused.is_none()));
