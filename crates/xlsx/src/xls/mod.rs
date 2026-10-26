@@ -6,13 +6,14 @@
 //! shared and array formulas), cell formatting (number formats, fonts, fills, borders,
 //! alignment, protection, the colour palette and user-defined cell styles), the 1904 date
 //! system, merged cells, column widths, row heights, defined names, print areas, print titles,
-//! the calculation settings (mode, iteration, precision as displayed), conditional formats and
-//! data validation. Everything else (charts, pictures, comments, macros) is skipped with a
-//! warning.
+//! the calculation settings (mode, iteration, precision as displayed), conditional formats,
+//! data validation, cell notes, hyperlinks, frozen panes and the sheet display options (see
+//! `objects`). Everything else (charts, pictures, macros) is skipped with a warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
 
 mod formula;
 mod ftab;
+mod objects;
 mod records;
 mod rules;
 mod styles;
@@ -208,7 +209,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, conditional formats, data validation, merged cells, column widths, row heights and defined names were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, conditional formats, data validation, merged cells, column widths, row heights, defined names, notes, hyperlinks and frozen panes were read. Charts, pictures and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
@@ -424,6 +425,7 @@ struct SheetState<'g> {
     unsupported: Vec<&'static str>,
     calc: CalcSettings,
     rules: rules::SheetRules,
+    objects: objects::Objects,
 }
 
 impl SheetState<'_> {
@@ -566,6 +568,7 @@ fn worksheet(
         unsupported: vec![],
         calc: CalcSettings::default(),
         rules: rules::SheetRules::default(),
+        objects: objects::Objects::default(),
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -595,6 +598,7 @@ fn worksheet(
     resolve_pending(&mut st, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
     std::mem::take(&mut st.rules).finish(&g.links, &mut st.sheet, report);
+    std::mem::take(&mut st.objects).finish(&mut st.sheet, report);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
     }
@@ -785,23 +789,11 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
                 st.sheet.default_row_height = pt_to_px(f64::from(height) / 20.0);
             }
         }
-        0x023E => {
-            let flags = if c.remaining() >= WINDOW2_MIN_LEN { c.u16().ok() } else { None };
-            let Some(flags) = flags else { return Ok(()) };
-            let on = |bit: u16| flags & bit != 0;
-            st.sheet.show_formulas = on(0x0001);
-            st.sheet.show_gridlines = on(0x0002);
-            st.sheet.show_headings = on(0x0004);
-            st.sheet.show_zeros = on(0x0010);
-            st.sheet.right_to_left = on(0x0040);
-        }
-        0x001C => report.warn("Cell comments in .xls files are not imported yet."),
-        0x00EC => report.warn("Pictures, charts and shapes in .xls files are not imported yet."),
+        id if objects::handles(id) => st.objects.record(rec, budget)?,
         rules::CONDFMT | rules::CF | rules::CONDFMT12 | rules::CF12 | rules::CFEX | rules::DV => {
             let formats = rules::Formats { dxf: &st.g.dxf_formats, cells: &st.g.formats };
             st.rules.record(rec.id, &mut c, &st.g.styles.color_table(), &formats, budget)?;
         }
-        0x01B8 => report.warn("Hyperlinks in .xls files are not imported yet."),
         0x00B0 => report.warn("PivotTables in .xls files are not imported yet; their values were kept."),
         _ => {}
     }
