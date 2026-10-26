@@ -26,7 +26,7 @@ pub fn next_zone(open: &[Zone], from: Zone, back: bool) -> Zone {
 }
 
 fn zone_key(zone: Zone) -> egui::Id {
-    egui::Id::new(("gridcraft.pane_zone", zone as u8))
+    egui::Id::unique(("gridcraft.pane_zone", zone as u8))
 }
 
 /// Marks `resp` as the widget that stands for `zone`: it takes focus when F6 asks for the zone, and focus on it
