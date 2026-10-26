@@ -1,7 +1,7 @@
 //! Help ▸ Report an Issue…: opens a new GitHub issue with the version and system details filled in.
 //!
-//! Nothing is sent. The app only opens an address; GitHub shows the issue form and the user edits
-//! and submits it. The address carries the field ids of `.github/ISSUE_TEMPLATE/bug_report.yml`
+//! The app only opens an address, which carries the details to GitHub as form defaults; no issue
+//! is created until the user edits and submits the form. The address carries the field ids of `.github/ISSUE_TEMPLATE/bug_report.yml`
 //! (`version`, `os`, `system-info`, `document-info`) and never a file name, path, sheet name or
 //! cell content: the document is described by its file extension alone.
 
@@ -14,7 +14,7 @@ use crate::SheetApp;
 
 /// The hover text of every Report an Issue… entry: one line, and the catalogs' translation key.
 pub(crate) const TIP: &str =
-    "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it.";
+    "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it.";
 pub(crate) const NEW_ISSUE: &str = "https://github.com/storytold/gridcraft/issues/new";
 const TEMPLATE: &str = "bug_report.yml";
 /// The longest `version`, `os` and `document-info` value, in UTF-8 bytes.

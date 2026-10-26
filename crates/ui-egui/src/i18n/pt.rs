@@ -984,8 +984,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Todas as planilhas",
         "Report an Issue…" => "Relatar um problema…",
         "Details" => "Detalhes",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
-            "Relatar um problema: abre uma nova issue no GitHub com a versão e os dados do sistema já preenchidos. Nada é enviado até que você a envie."
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
+            "Relatar um problema: abre uma nova issue no GitHub com a versão e os dados do sistema já preenchidos. Nenhuma issue é criada até que você a envie."
         }
         "Couldn't open your web browser" => "Não foi possível abrir o navegador da web",
         "Copy Details" => "Copiar detalhes",

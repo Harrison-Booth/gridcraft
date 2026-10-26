@@ -559,8 +559,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Všechny listy",
         "Report an Issue…" => "Nahlásit problém…",
         "Details" => "Podrobnosti",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
-            "Nahlásit problém: otevře nový problém na GitHubu s vyplněnou verzí a údaji o systému. Nic se neodešle, dokud jej sami neodešlete."
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
+            "Nahlásit problém: otevře nový problém na GitHubu s vyplněnou verzí a údaji o systému. Žádný problém se nevytvoří, dokud jej neodešlete."
         }
         "Couldn't open your web browser" => "Nepodařilo se otevřít webový prohlížeč",
         "Copy Details" => "Kopírovat podrobnosti",

@@ -464,8 +464,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text Box" => "Textfeld",
         "Report an Issue…" => "Problem melden…",
         "Details" => "Details",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
-            "Problem melden: Öffnet ein neues GitHub-Issue mit ausgefüllter Version und Systemangaben. Es wird nichts gesendet, bis Sie es abschicken."
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
+            "Problem melden: Öffnet ein neues GitHub-Issue mit ausgefüllter Version und Systemangaben. Es wird kein Issue erstellt, bis Sie es abschicken."
         }
         "Couldn't open your web browser" => "Der Webbrowser konnte nicht geöffnet werden",
         "Copy Details" => "Details kopieren",

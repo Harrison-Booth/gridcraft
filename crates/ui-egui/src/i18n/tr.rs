@@ -418,8 +418,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Text Box" => "Metin Kutusu",
         "Report an Issue…" => "Bir Sorun Bildirin…",
         "Details" => "Ayrıntılar",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
-            "Bir Sorun Bildirin: Sürüm ve sistem bilgileri önceden doldurulmuş yeni bir GitHub sorunu açar. Siz göndermeden hiçbir şey gönderilmez."
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
+            "Bir Sorun Bildirin: Sürüm ve sistem bilgileri önceden doldurulmuş yeni bir GitHub sorunu açar. Siz göndermeden hiçbir sorun oluşturulmaz."
         }
         "Couldn't open your web browser" => "Web tarayıcınız açılamadı",
         "Copy Details" => "Ayrıntıları Kopyala",

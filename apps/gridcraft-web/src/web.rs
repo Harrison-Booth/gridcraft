@@ -231,11 +231,16 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
             let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url) else {
                 return Err("only http, https and mailto links are opened".to_string());
             };
-            // With `noopener` the new browsing context can't hold a reference back to the
-            // editor window and navigate it while the user reads the linked page. `noopener` makes
-            // the call return `None` even when the tab opened, so a blocked pop-up can't be told
-            // apart from success: only an error counts as a failure.
-            w.open_with_url_and_target(&url, "_blank,noopener").map(|_| ()).map_err(|e| format!("{e:?}"))
+            // `window.open` gives `None` when a pop-up blocker stops it, which is a failure. The
+            // opener is cut at once so the new browsing context can't navigate the editor window
+            // while the user reads the linked page (`noopener` would also hide the result).
+            match w.open_with_url_and_target(&url, "_blank").map_err(|e| format!("{e:?}"))? {
+                Some(opened) => {
+                    let _ = opened.set_opener(&JsValue::NULL);
+                    Ok(())
+                }
+                None => Err("the browser blocked the new tab".to_string()),
+            }
         })),
         inbox: Some(inbox),
         ..Default::default()

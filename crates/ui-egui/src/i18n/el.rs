@@ -985,8 +985,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Report an Issue…" => "Αναφορά προβλήματος…",
         "Details" => "Λεπτομέρειες",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
-            "Αναφορά προβλήματος: ανοίγει ένα νέο ζήτημα στο GitHub με συμπληρωμένα την έκδοση και τα στοιχεία του συστήματος. Τίποτα δεν αποστέλλεται μέχρι να το υποβάλετε."
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
+            "Αναφορά προβλήματος: ανοίγει ένα νέο ζήτημα στο GitHub με συμπληρωμένα την έκδοση και τα στοιχεία του συστήματος. Κανένα ζήτημα δεν δημιουργείται μέχρι να το υποβάλετε."
         }
         "Couldn't open your web browser" => "Δεν ήταν δυνατό να ανοίξει το πρόγραμμα περιήγησης",
         "Copy Details" => "Αντιγραφή λεπτομερειών",

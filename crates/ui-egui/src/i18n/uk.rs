@@ -983,8 +983,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Tabular" => "Tabular",
         "Report an Issue…" => "Повідомити про проблему…",
         "Details" => "Подробиці",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it." => {
-            "Повідомити про проблему: відкриває нове звернення на GitHub із заповненими версією та відомостями про систему. Нічого не надсилається, доки ви самі його не надішлете."
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
+            "Повідомити про проблему: відкриває нове звернення на GitHub із заповненими версією та відомостями про систему. Звернення не створюється, доки ви самі його не надішлете."
         }
         "Couldn't open your web browser" => "Не вдалося відкрити веб-браузер",
         "Copy Details" => "Копіювати подробиці",

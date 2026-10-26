@@ -1146,8 +1146,8 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
     ("Report an Issue…", "問題を報告…"),
     ("Details", "詳細"),
     (
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. Nothing is sent until you submit it.",
-        "問題を報告: バージョンとシステム情報を入力済みの新しい GitHub の Issue を開きます。送信するまで何も送られません。",
+        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it.",
+        "問題を報告: バージョンとシステム情報を入力済みの新しい GitHub の Issue を開きます。送信するまで Issue は作成されません。",
     ),
     ("Couldn't open your web browser", "Web ブラウザーを開けませんでした"),
     ("Copy Details", "詳細をコピー"),

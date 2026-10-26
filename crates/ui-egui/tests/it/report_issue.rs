@@ -1,5 +1,5 @@
 //! Help ▸ Report an Issue…: opens GitHub's issue form with the version and system details filled
-//! in, sends nothing itself, and when no browser opens keeps the details on screen.
+//! in, creates no issue itself, and when no browser opens keeps the details on screen.
 
 use std::sync::{Arc, Mutex};
 

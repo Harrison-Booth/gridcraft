@@ -113,8 +113,8 @@ the View ▸ Animations checkbox, saved with the other UI preferences and on by 
 with the version, platform, graphics adapter, interface language and the active workbook's file
 type filled in (never its name, path or contents), and returns `{url, details, opened, error}`.
 `{open: false}` only returns them. `error` says why no browser opened (the address is still
-returned); like every programmatic call it never opens a dialog. Nothing is sent: the user reviews
-and submits the form on GitHub.
+returned); like every programmatic call it never opens a dialog. Opening the form sends the
+prefilled details to GitHub; no issue is created until the user reviews and submits the form.
 
 `{command: "app.language.set", params: {language: "ja"}}` switches the interface language
 (`code` is accepted as an alias for `language`); `app.language.english` and
