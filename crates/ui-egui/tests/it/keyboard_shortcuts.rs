@@ -336,6 +336,16 @@ fn modified_shortcut_ends_end_mode_before_the_arrow() {
 }
 
 #[test]
+fn end_mode_ends_when_the_grid_loses_the_keyboard() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    assert!(h.state().grid.end_mode);
+    h.state_mut().message = Some(("GridCraft".into(), "x".into()));
+    h.run_steps(2);
+    assert!(!h.state().grid.end_mode);
+}
+
+#[test]
 fn end_mode_leaves_shift_arrow_extending_one_cell() {
     let mut h = harness(book("A1"));
     key(&mut h, Key::End, Modifiers::NONE);

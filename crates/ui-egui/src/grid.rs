@@ -3071,6 +3071,8 @@ fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo:
         || app.grid.fill_menu.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
     {
+        // Keys typed elsewhere count as "another key": End mode does not wait for the grid's return.
+        app.grid.end_mode = false;
         return;
     }
     if ctx.memory(|m| m.focused()).is_none() {
