@@ -31,7 +31,7 @@ fn whole_column_outside_borders_apply_to_the_column_and_its_ends() {
     let sh = s.doc().unwrap().wb.clone();
     let sh = sh.active().unwrap();
     let styles = &s.doc().unwrap().wb.styles;
-    let border = |id| styles.get(id).borders.clone();
+    let border = |id| styles.get(id).borders;
     let col = |c: u32| border(sh.cols.get(&c).and_then(|i| i.style).unwrap());
     assert!(col(1).left.style != Default::default() && col(1).right.style == Default::default() && col(1).top.style == Default::default());
     assert!(col(2).right.style != Default::default() && col(2).left.style == Default::default());
