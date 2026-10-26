@@ -591,18 +591,16 @@ fn halign(s: &mut Session, p: &Json, a: HAlign) -> Result<Json> {
     // Clicking the active alignment again returns to General; `on: false` does so only while it is the active one.
     let cur = active_style(s)?.align.h;
     let toggled = if cur == a { HAlign::General } else { a };
-    let a = match p.get("on").map(Json::as_bool) {
-        None => toggled,
-        Some(Some(false)) => {
-            if cur == a {
-                HAlign::General
-            } else {
-                cur
+    match p.get("on").map(Json::as_bool) {
+        None => apply_style(s, p, |st| st.align.h = toggled),
+        // Clear only the cells that already have `a`, and only while the active cell has it too.
+        Some(Some(false)) => apply_style(s, p, |st| {
+            if cur == a && st.align.h == a {
+                st.align.h = HAlign::General;
             }
-        }
-        Some(_) => a,
-    };
-    apply_style(s, p, |st| st.align.h = a)
+        }),
+        Some(_) => apply_style(s, p, |st| st.align.h = a),
+    }
 }
 
 fn valign(s: &mut Session, p: &Json, a: VAlign) -> Result<Json> {
