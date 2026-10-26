@@ -9,7 +9,7 @@ use gridcraft_formula::Expr;
 use gridcraft_model::{
     AutoFilter, Cell, CfOperator, CfRule, CfValueKind, Comment, CondFormat, EditRange, ErrorStyle, FilterCriterion, Formula, Hyperlink, LineInfo,
     NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
-    ValidationKind, XmlColumnPr,
+    ValidationKind, XmlColumnPr, error_rule, ignore_errors,
 };
 
 use crate::IoError;
@@ -155,6 +155,18 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 }
             }
             "conditionalFormatting" => read_cf(cx, e, &mut sheet),
+            "ignoredErrors" => {
+                for ie in e.kids("ignoredError") {
+                    let kinds = error_rule::NAMES.iter().filter(|(n, _)| ie.flag(n, false)).fold(0, |m, (_, bit)| m | bit);
+                    let ranges = parse_sqref(ie.attr("sqref"));
+                    // An element with no rule on (Excel leaves one behind after Ignore is turned off) ignores nothing.
+                    if kinds != 0 {
+                        for r in ranges {
+                            ignore_errors(&mut sheet.ignored_errors, r, kinds);
+                        }
+                    }
+                }
+            }
             "dataValidations" => {
                 for v in e.kids("dataValidation") {
                     if let Some(v) = read_validation(v) {

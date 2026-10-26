@@ -1491,7 +1491,7 @@ pub(crate) fn paint_quadrant(
             ));
         }
         // Background error checking: a number stored as text gets Excel's green corner (#1994).
-        if !sh.show_formulas && sh.cell(*c).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_some() {
+        if !sh.show_formulas && is_number_stored_as_text(sh, *c) {
             let s = 6.0 * z.max(0.7);
             p.add(egui::Shape::convex_polygon(
                 vec![rect.left_top(), pos2(rect.left() + s, rect.top()), pos2(rect.left(), rect.top() + s)],
@@ -3706,6 +3706,13 @@ fn object_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
     }
 }
 
+/// Whether background error checking flags the cell: a number stored as text the user has not
+/// chosen to ignore.
+fn is_number_stored_as_text(sh: &Sheet, c: CellRef) -> bool {
+    sh.cell(c).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_some()
+        && !gridcraft_engine::model::is_error_ignored(&sh.ignored_errors, c, gridcraft_engine::model::error_rule::NUMBER_STORED_AS_TEXT)
+}
+
 /// The warning button beside an active cell holding a number stored as text, as in Excel: its
 /// menu names the problem and offers Convert to Number for the selection (#1994).
 fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet) {
@@ -3713,7 +3720,7 @@ fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet)
         return;
     }
     let Some(active) = app.session.active().map(|d| d.selection.active) else { return };
-    if sh.cell(active).and_then(gridcraft_engine::cmd::formulas::number_stored_as_text).is_none() {
+    if !is_number_stored_as_text(sh, active) {
         return;
     }
     let cell = geo.cell_rect(sh, active);
@@ -3745,6 +3752,10 @@ fn error_check_tag(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, sh: &Sheet)
         ui.separator();
         if ui.button(lang.tr("Convert to Number")).clicked() {
             app.run_or_alert("formulas.convertToNumber", json!({}));
+            ui.close();
+        }
+        if ui.button(lang.tr("Ignore Error")).clicked() {
+            app.run_or_alert("formulas.ignoreError", json!({}));
             ui.close();
         }
     });
