@@ -1,12 +1,13 @@
 //! AutoRecover: a copy of every workbook with unsaved changes, kept in a recovery folder, so a
-//! crash, a kill or a power cut loses minutes of work instead of all of it. This covers what
+//! crash or a kill loses minutes of work instead of all of it. This covers what
 //! AutoSave ([`crate::autosave`]) can't: workbooks never saved to a file, and saved ones while
 //! AutoSave is off. The user's own files are never touched.
 //!
 //! Each document gets `<process id>-<document uid>.xlsx` plus a `.json` note with its title and
 //! original path. A clean exit, a save or closing the document deletes them; whatever is left
 //! belongs to a process that died (each live one holds a lock file), and [`scan`] finds it for the
-//! next start to reopen.
+//! next start to reopen. The file is synced before it is renamed into place; the folder is not,
+//! so a power cut may still lose the newest copy (the previous one survives).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
