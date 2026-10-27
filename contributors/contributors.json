@@ -2,9 +2,9 @@
   "schema": 1,
   "repo": "storytold/gridcraft",
   "branch": "main",
-  "head": "37d569bee8d356d734319fd2f17423da45255dd6",
-  "head_date": "2026-10-27T22:34:07Z",
-  "commits": 1101,
+  "head": "8c8fe417ad619689461e11137d7f4efe4c28f0a6",
+  "head_date": "2026-10-27T22:47:04Z",
+  "commits": 1102,
   "unattributed_commits": 9,
   "contributors": [
     {
@@ -477,8 +477,8 @@
     },
     {
       "login": "jsymes21-byte",
-      "people_entry": false,
-      "github_name": null,
+      "people_entry": true,
+      "github_name": "James",
       "prs": 2,
       "commits": 15,
       "lines_added": 11470,
@@ -870,13 +870,13 @@
       "people_entry": true,
       "github_name": null,
       "prs": 14,
-      "commits": 26,
-      "lines_added": 3949,
-      "lines_deleted": 704,
+      "commits": 27,
+      "lines_added": 4158,
+      "lines_deleted": 798,
       "binary_added": 0,
       "binary_deleted": 0,
       "first_commit": "2026-10-14T12:47:42Z",
-      "last_commit": "2026-10-27T22:34:07Z"
+      "last_commit": "2026-10-27T22:47:04Z"
     },
     {
       "login": "Prachannagven",
