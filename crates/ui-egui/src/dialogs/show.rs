@@ -170,11 +170,13 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 }
                 "about" => about(ui, &mut d),
                 "failedLink" => {
-                    let mut url = d.values.get("url").and_then(Json::as_str).unwrap_or_default().to_string();
+                    let url = d.values.get("url").and_then(Json::as_str).unwrap_or_default();
                     ui.label("Open this address in a browser to report the issue:");
-                    ui.add(egui::TextEdit::multiline(&mut url).desired_width(f32::INFINITY).desired_rows(4));
+                    // Read-only: a `&str` can be selected but not edited, so Copy always copies the address shown.
+                    let mut shown = url;
+                    ui.add(egui::TextEdit::multiline(&mut shown).desired_width(f32::INFINITY).desired_rows(4));
                     if ui.button("Copy").clicked() {
-                        ctx.copy_text(url);
+                        ctx.copy_text(url.to_string());
                     }
                 }
                 "journal" => {

@@ -22,8 +22,9 @@ pub(crate) fn issue_url(version: &str, os: &str, document_ext: Option<&str>) -> 
     format!("https://github.com/storytold/gridcraft/issues/new?template=bug_report.yml&version={v}&environment={e}&os={e}&body={b}")
 }
 
-/// `help.reportIssue`: opens the issue form, or shows the address to copy when no browser opened.
-pub(crate) fn run(app: &mut SheetApp) {
+/// `help.reportIssue`: opens the issue form. Returns `{url, opened}` and never opens a dialog;
+/// [`run_menu`] shows the address when no browser opened.
+pub(crate) fn run(app: &mut SheetApp) -> serde_json::Value {
     // Only a format GridCraft opens is named: an odd extension could be private text.
     let ext = app
         .session
@@ -32,8 +33,15 @@ pub(crate) fn run(app: &mut SheetApp) {
         .filter(|p| FileKind::from_path(p).is_some())
         .and_then(|p| std::path::Path::new(p).extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase));
     let url = issue_url(env!("CARGO_PKG_VERSION"), &crate::backstage::platform(), ext.as_deref());
-    if !app.services.open_url.as_ref().is_some_and(|open| open(&url)) {
-        app.open_dialog("failedLink", json!({"url": url}));
+    let opened = app.services.open_url.as_ref().is_some_and(|open| open(&url));
+    json!({"url": url, "opened": opened})
+}
+
+/// The menu, ribbon and Account entries: like [`run`], plus the address to copy when no browser opened.
+pub(crate) fn run_menu(app: &mut SheetApp) {
+    let result = run(app);
+    if result["opened"] != true {
+        app.open_dialog("failedLink", json!({"url": result["url"]}));
     }
 }
 
