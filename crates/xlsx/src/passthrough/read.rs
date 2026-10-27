@@ -510,16 +510,18 @@ type StyleRefs = (Vec<(u32, gridcraft_model::Style)>, Vec<(u32, String)>);
 fn style_refs(cx: &Ctx<'_>, data: &[u8]) -> Option<StyleRefs> {
     let mut dxfs: Vec<(u32, gridcraft_model::Style)> = vec![];
     let mut fmts: Vec<(u32, String)> = vec![];
+    // Membership sets: a crafted part can name many distinct ids, so scanning the vectors would be quadratic.
+    let (mut seen_dxfs, mut seen_fmts) = (HashSet::new(), HashSet::new());
     attr_values(data, &[b"dxfId", b"numFmtId"], |name, v| {
         let Ok(id) = v.trim().parse::<u32>() else { return };
         if name == b"dxfId" {
-            if !dxfs.iter().any(|(i, _)| *i == id)
-                && let Some(s) = cx.dxfs.get(id as usize)
+            if let Some(s) = cx.dxfs.get(id as usize)
+                && seen_dxfs.insert(id)
             {
                 dxfs.push((id, s.clone()));
             }
-        } else if !fmts.iter().any(|(i, _)| *i == id)
-            && let Some(code) = cx.num_fmts.get(&id)
+        } else if let Some(code) = cx.num_fmts.get(&id)
+            && seen_fmts.insert(id)
         {
             fmts.push((id, code.clone()));
         }
