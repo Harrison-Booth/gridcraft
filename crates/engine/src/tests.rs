@@ -5152,13 +5152,19 @@ fn check_params_names_the_keys_a_command_does_not_take() {
 #[test]
 fn documented_keys_reads_the_words_in_braces() {
     use crate::cmd::documented_keys;
-    assert_eq!(documented_keys(r#"{a?: "skip me", b_2?: bool} → {c} then prose"#), ["a", "b_2", "c"]);
+    assert_eq!(documented_keys(r#"{a?: "skip me", b_2?: bool} → {c} then prose"#), ["a", "b_2"]);
+    // `|` between names gives alternatives; after a colon it separates the words of a value.
+    assert_eq!(documented_keys("{input | value: \"text\", mode?: a|b, path? | base64?: \"..\"}"), ["input", "value", "mode", "path", "base64"]);
     assert_eq!(documented_keys("{name?, before?: index}"), ["name", "before"]);
     assert_eq!(documented_keys("{v: [[1, two], [3]], w?}"), ["v", "w"]);
     assert_eq!(documented_keys("{} no params"), Vec::<&str>::new());
     assert_eq!(documented_keys("{x?: `not this`}"), ["x"]);
     // An escaped quote does not end the quoted text: the keys after it still count.
     assert_eq!(documented_keys(r#"{q?: "\"", after?}"#), ["q", "after"]);
+    for id in ["cell.set", "insert.picture"] {
+        let key = if id == "cell.set" { "value" } else { "base64" };
+        assert!(documented_keys(crate::cmd::find_command(id).map_or("", |c| c.params)).contains(&key), "{id}");
+    }
     // Every key a command's doc lists passes, whatever the doc's shape.
     for spec in crate::cmd::command_specs() {
         let params: serde_json::Map<String, serde_json::Value> =

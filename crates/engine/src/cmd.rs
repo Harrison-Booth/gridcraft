@@ -134,11 +134,12 @@ const FREE_FORM_PARAMS: &[&str] = &[
 ];
 
 /// The names of the params a params doc lists: the words that start a `{…}` group or follow a comma
-/// directly inside one (outside quotes, brackets and parentheses). The words of a value, such as
-/// `index` in `before?: index`, are not names.
+/// directly inside one (outside quotes, brackets and parentheses), and the alternative names of
+/// `input | value`. The words of a value, such as `index` in `before?: index` or `a | b` after a
+/// colon, are not names. The doc's response after `→` is not input and is not read.
 pub(crate) fn documented_keys(doc: &str) -> Vec<&str> {
     let (mut keys, mut depth, mut nest, mut quote, mut start, mut escaped) = (Vec::new(), 0usize, 0usize, None, None, false);
-    let (mut expect, mut is_key) = (false, false);
+    let (mut expect, mut is_key, mut in_value) = (false, false, false);
     for (i, c) in doc.char_indices().chain(std::iter::once((doc.len(), ' '))) {
         if let Some(from) = start {
             if c.is_alphanumeric() || c == '_' {
@@ -157,12 +158,15 @@ pub(crate) fn documented_keys(doc: &str) -> Vec<&str> {
             (None, '"' | '`') => quote = Some(c),
             (None, '{') => {
                 depth += 1;
-                expect = true;
+                (expect, in_value) = (true, false);
             }
+            (None, '→') => break,
             (None, '}') => depth = depth.saturating_sub(1),
             (None, '[' | '(') => nest += 1,
             (None, ']' | ')') => nest = nest.saturating_sub(1),
-            (None, ',') if depth > 0 && nest == 0 => expect = true,
+            (None, ',') if depth > 0 && nest == 0 => (expect, in_value) = (true, false),
+            (None, ':') if depth > 0 && nest == 0 => in_value = true,
+            (None, '|') if depth > 0 && nest == 0 && !in_value => expect = true,
             (None, c) if depth > 0 && (c.is_alphabetic() || c == '_') => {
                 (start, is_key, expect) = (Some(i), expect && nest == 0, false);
             }
