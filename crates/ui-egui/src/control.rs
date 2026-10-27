@@ -634,7 +634,6 @@ pub fn handle(app: &mut SheetApp, ctx: &egui::Context, method: &str, p: &Json) -
             for (id, label, params) in [
                 ("ui.ribbonTab", "Ribbon Tab", ""),
                 ("app.checkForUpdates", "Check for Updates…", ""),
-                ("help.reportIssue", "Report an Issue…", "{open?: bool} (false only returns the details) → {url, details, opened, error}"),
                 ("view.collapseRibbon", "Collapse Ribbon", ""),
                 ("view.expandFormulaBar", "Expand Formula Bar", "{on?: bool} (toggles without it) → {on}"),
                 ("view.darkMode", "Dark Mode", ""),

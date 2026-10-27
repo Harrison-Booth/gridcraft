@@ -977,13 +977,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Report Layout" => "Układ raportu",
         "Compact" => "Kompaktowy",
         "Tabular" => "Tabelaryczny",
-        "Report an Issue…" => "Zgłoś problem…",
-        "Details" => "Szczegóły",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
-            "Zgłoś problem: otwiera nowe zgłoszenie w serwisie GitHub z wypełnioną wersją i informacjami o systemie. Zgłoszenie nie powstaje, dopóki go nie prześlesz."
-        }
-        "Couldn't open your web browser" => "Nie można otworzyć przeglądarki internetowej",
-        "Copy Details" => "Kopiuj szczegóły",
         _ => return None,
     })
 }

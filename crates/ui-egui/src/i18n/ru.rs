@@ -448,13 +448,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Все листы",
         "New sheet (⇧F11)" => "Новый лист (⇧F11)",
         "Text Box" => "Надпись",
-        "Report an Issue…" => "Сообщить о проблеме…",
-        "Details" => "Подробности",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
-            "Сообщить о проблеме: открывает новое обращение на GitHub с уже заполненными версией и сведениями о системе. Обращение не создаётся, пока вы сами не отправите его."
-        }
-        "Couldn't open your web browser" => "Не удалось открыть веб-браузер",
-        "Copy Details" => "Копировать подробности",
         _ => return None,
     })
 }

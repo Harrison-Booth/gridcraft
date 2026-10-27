@@ -446,13 +446,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "모든 시트",
         "New sheet (⇧F11)" => "새 시트 (⇧F11)",
         "Text Box" => "텍스트 상자",
-        "Report an Issue…" => "문제 신고…",
-        "Details" => "세부 정보",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
-            "문제 신고: 버전과 시스템 정보가 미리 채워진 새 GitHub 이슈를 엽니다. 직접 제출하기 전에는 이슈가 생성되지 않습니다."
-        }
-        "Couldn't open your web browser" => "웹 브라우저를 열 수 없습니다",
-        "Copy Details" => "세부 정보 복사",
         _ => return None,
     })
 }

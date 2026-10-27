@@ -1039,13 +1039,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format Chart Area…" => "Formatare zonă diagramă…",
         "Error checking options" => "Opțiuni de verificare a erorilor",
         "Paste formulas that refer to the copied cells" => "Lipire formule care fac referire la celulele copiate",
-        "Report an Issue…" => "Raportați o problemă…",
-        "Details" => "Detalii",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
-            "Raportați o problemă: deschide o nouă problemă GitHub cu versiunea și detaliile sistemului completate. Nicio problemă nu este creată până nu o trimiteți."
-        }
-        "Couldn't open your web browser" => "Nu s-a putut deschide browserul web",
-        "Copy Details" => "Copiere detalii",
         _ => return None,
     })
 }

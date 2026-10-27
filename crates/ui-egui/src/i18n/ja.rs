@@ -1143,14 +1143,6 @@ pub(super) const EXTRA: &[(&str, &str)] = &[
         "Drag to fill cells. Drag from inside a cell to select a range.",
         "ドラッグしてセルをオートフィルします。セルの内側からドラッグすると範囲を選択します。",
     ),
-    ("Report an Issue…", "問題を報告…"),
-    ("Details", "詳細"),
-    (
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it.",
-        "問題を報告: バージョンとシステム情報を入力済みの新しい GitHub の Issue を開きます。送信するまで Issue は作成されません。",
-    ),
-    ("Couldn't open your web browser", "Web ブラウザーを開けませんでした"),
-    ("Copy Details", "詳細をコピー"),
 ];
 
 /// Translates an interface label; `None` for a label the catalog does not know, so `i18n.rs` can

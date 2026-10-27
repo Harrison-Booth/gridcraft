@@ -56,7 +56,6 @@ pub fn start() {
                         let _ = session.execute("file.new", serde_json::json!({"sample": "sales"}));
                     }
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone());
-                    services.graphics = cc.wgpu_render_state.as_ref().map(|state| format!("{:?} (web)", state.adapter.get_info().backend));
                     if let Some(bridge) = &app_bridge {
                         bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
                     }
@@ -226,21 +225,16 @@ fn services(inbox: Inbox, ctx: egui::Context) -> Services {
                 log::error!("print failed: {e}");
             }
         })),
-        open_url: Some(Box::new(|url: &str| -> Result<(), String> {
-            let w = web_sys::window().ok_or("no window")?;
-            let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url) else {
-                return Err("only http, https and mailto links are opened".to_string());
-            };
-            // `window.open` gives `None` when a pop-up blocker stops it, which is a failure. The
-            // opener is cut at once so the new browsing context can't navigate the editor window
-            // while the user reads the linked page (`noopener` would also hide the result).
-            match w.open_with_url_and_target(&url, "_blank").map_err(|e| format!("{e:?}"))? {
-                Some(opened) => {
-                    let _ = opened.set_opener(&JsValue::NULL);
-                    Ok(())
-                }
-                None => Err("the browser blocked the new tab".to_string()),
+        open_url: Some(Box::new(|url: &str| {
+            if let Some(w) = web_sys::window()
+                && let gridcraft_engine::links::LinkKind::External(url) = gridcraft_engine::links::classify(url)
+            {
+                // With `noopener` the new browsing context can't hold a reference back to the
+                // editor window and navigate it while the user reads the linked page. It also
+                // makes `open` answer `None`, so a blocked pop-up can't be told from success.
+                return w.open_with_url_and_target(&url, "_blank,noopener").is_ok();
             }
+            false
         })),
         inbox: Some(inbox),
         ..Default::default()

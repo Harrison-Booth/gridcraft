@@ -58,7 +58,7 @@ pub(crate) fn show(app: &mut SheetApp, ctx: &egui::Context) {
     match app.updates_rt.updater.show_if(ctx, clean) {
         Action::OpenUrl(url) => {
             if let Some(open) = &app.services.open_url {
-                let _ = open(&url);
+                open(&url);
             }
         }
         // The guarded close path asks about unsaved work; the restart helper relaunches once the

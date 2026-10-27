@@ -438,13 +438,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "所有工作表",
         "New sheet (⇧F11)" => "新建工作表 (⇧F11)",
         "Text Box" => "文本框",
-        "Report an Issue…" => "报告问题…",
-        "Details" => "详细信息",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
-            "报告问题：打开新的 GitHub 议题，并已填入版本和系统信息。在您提交之前不会创建任何议题。"
-        }
-        "Couldn't open your web browser" => "无法打开您的网络浏览器",
-        "Copy Details" => "复制详细信息",
         _ => return None,
     })
 }

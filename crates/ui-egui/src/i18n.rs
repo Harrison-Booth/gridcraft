@@ -389,23 +389,6 @@ mod tests {
         }
     }
 
-    /// Report an Issue… ships in every catalog: no language falls back to English for it.
-    #[test]
-    fn report_an_issue_is_translated_in_every_catalog() {
-        let keys = ["Report an Issue…", crate::report_issue::TIP, "Couldn't open your web browser", "Copy Details", "Details"];
-        for language in Language::ALL.into_iter().filter(|language| *language != Language::En) {
-            for key in keys {
-                let shown = language.tr(key);
-                // "Details" is spelled the same in German and Dutch.
-                if key != "Details" {
-                    assert_ne!(shown, key, "{} falls back to English for {key:?}", language.code());
-                }
-                assert!(!shown.is_empty() && !shown.contains('\n'), "{}: {key:?} => {shown:?}", language.code());
-            }
-            assert!(language.tr("Report an Issue…").ends_with('…'), "{}: the ellipsis character ends the label", language.code());
-        }
-    }
-
     #[test]
     fn translations_never_show_the_context_prefix() {
         // `tr` returns a found translation as it is, so a catalog that keeps `context|` in its

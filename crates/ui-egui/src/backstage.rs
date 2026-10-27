@@ -1111,6 +1111,21 @@ fn parse_max_change(text: &str, locale: gridcraft_engine::formula::FormulaLocale
     (d.is_finite() && d >= 0.0).then_some(d)
 }
 
+/// The platform the app was built for, e.g. "macOS (aarch64)"; the web build reports "Web".
+pub(crate) fn platform() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "macOS",
+        "windows" => "Windows",
+        "linux" => "Linux",
+        "freebsd" => "FreeBSD",
+        "openbsd" => "OpenBSD",
+        "netbsd" => "NetBSD",
+        _ if cfg!(target_arch = "wasm32") => return "Web".into(),
+        other => other,
+    };
+    format!("{os} ({})", std::env::consts::ARCH)
+}
+
 /// Excel's File › Account: product information and the About window.
 fn account(app: &mut SheetApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
@@ -1119,11 +1134,9 @@ fn account(app: &mut SheetApp, ui: &mut Ui) {
     ui.label(RichText::new("GridCraft").font(theme::ui_bold(16.0)).color(t.text));
     ui.add_space(8.0);
     egui::Grid::new("backstage_account").num_columns(2).spacing(vec2(18.0, 8.0)).show(ui, |ui| {
-        for (label, value) in [
-            ("Version", env!("CARGO_PKG_VERSION").to_string()),
-            ("Platform", crate::report_issue::platform()),
-            ("Licence", env!("CARGO_PKG_LICENSE").to_string()),
-        ] {
+        for (label, value) in
+            [("Version", env!("CARGO_PKG_VERSION").to_string()), ("Platform", platform()), ("Licence", env!("CARGO_PKG_LICENSE").to_string())]
+        {
             ui.label(RichText::new(lang.tr(label)).color(t.text_dim));
             ui.label(value);
             ui.end_row();
@@ -1143,14 +1156,14 @@ fn account(app: &mut SheetApp, ui: &mut Ui) {
     });
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        if square_button(ui, Icon::Feedback, lang.tr("Report an Issue…")).clicked() {
+        if square_button(ui, Icon::Info, lang.tr("Report an Issue…")).clicked() {
             app.run_or_alert("help.reportIssue", json!({}));
         }
         ui.add_space(12.0);
         ui.vertical(|ui| {
             ui.add_space(14.0);
             ui.label(RichText::new(lang.tr("Report an Issue…")).font(theme::ui_bold(13.5)).color(t.text));
-            dim(ui, lang.tr(crate::report_issue::TIP));
+            dim(ui, lang.tr("Opens a new GitHub issue with the version and system filled in"));
         });
     });
 }

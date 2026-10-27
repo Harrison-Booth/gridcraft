@@ -478,13 +478,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Todas las hojas",
         "New sheet (⇧F11)" => "Nueva hoja (⇧F11)",
         "Text Box" => "Cuadro de texto",
-        "Report an Issue…" => "Informar de un problema…",
-        "Details" => "Detalles",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
-            "Informar de un problema: abre una nueva incidencia en GitHub con la versión y los datos del sistema ya rellenados. No se crea ninguna incidencia hasta que se confirme el envío en GitHub."
-        }
-        "Couldn't open your web browser" => "No se pudo abrir el navegador web",
-        "Copy Details" => "Copiar detalles",
         _ => return None,
     })
 }

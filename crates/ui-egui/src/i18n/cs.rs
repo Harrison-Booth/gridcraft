@@ -557,13 +557,6 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "AutoSave" => "Automatické ukládání",
         "AutoSave: save after every change (workbooks saved to a file)" => "Automatické ukládání: ukládat po každé změně (sešity uložené do souboru)",
         "All sheets" => "Všechny listy",
-        "Report an Issue…" => "Nahlásit problém…",
-        "Details" => "Podrobnosti",
-        "Report an Issue: opens a new GitHub issue with the version and system details filled in. No issue is created until you submit it." => {
-            "Nahlásit problém: otevře nový problém na GitHubu s vyplněnou verzí a údaji o systému. Žádný problém se nevytvoří, dokud jej neodešlete."
-        }
-        "Couldn't open your web browser" => "Nepodařilo se otevřít webový prohlížeč",
-        "Copy Details" => "Kopírovat podrobnosti",
         _ => return None,
     })
 }

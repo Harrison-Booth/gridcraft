@@ -81,8 +81,6 @@ pub enum Icon {
     Link,
     Comment,
     Note,
-    /// Report an Issue…: a speech bubble holding an exclamation mark.
-    Feedback,
     TextBox,
     Symbol,
     Sparkline,
@@ -563,12 +561,6 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, c: Color32, pal: &Palette) {
         Icon::Comment | Icon::Note => {
             g.poly(&[(2.0, 3.0), (14.0, 3.0), (14.0, 11.0), (2.0, 11.0)], if icon == Icon::Note { pal.wash(Cat::Amber) } else { paper });
             g.line(&[(2.0, 3.0), (14.0, 3.0), (14.0, 11.0), (7.0, 11.0), (4.0, 14.0), (4.0, 11.0), (2.0, 11.0), (2.0, 3.0)], c, 1.1);
-        }
-        Icon::Feedback => {
-            g.poly(&[(2.0, 3.0), (14.0, 3.0), (14.0, 11.0), (2.0, 11.0)], paper);
-            g.line(&[(2.0, 3.0), (14.0, 3.0), (14.0, 11.0), (7.0, 11.0), (4.0, 14.0), (4.0, 11.0), (2.0, 11.0), (2.0, 3.0)], c, 1.1);
-            g.line(&[(8.0, 4.8), (8.0, 7.4)], c, 1.3);
-            g.circle(8.0, 9.2, 0.7, Some(c), None);
         }
         Icon::TextBox => {
             g.rect(2.0, 3.0, 12.0, 10.0, None, Some(c));
