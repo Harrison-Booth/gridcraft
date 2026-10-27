@@ -20,8 +20,14 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
     let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
     let trim = |range: RangeRef| {
         if range.is_full_cols() || range.is_full_rows() || range.count() > CLIP_WALK_CAP {
-            let used = sh.used_range().unwrap_or(RangeRef::cell(range.start));
-            range.intersection(&used.union(&RangeRef::cell(range.start))).unwrap_or(range)
+            // Bounded by the cells inside this range: a distant used cell must not stretch the block over it.
+            let used = sh
+                .cells
+                .iter()
+                .map(|(c, _)| c)
+                .filter(|c| range.contains(*c))
+                .fold(RangeRef::cell(range.start), |acc, c| acc.union(&RangeRef::cell(c)));
+            range.intersection(&used).unwrap_or(range)
         } else {
             range
         }

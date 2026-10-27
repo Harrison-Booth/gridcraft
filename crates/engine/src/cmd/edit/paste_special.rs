@@ -232,6 +232,8 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                                 sh.validations.push(dv);
                             }
                         }
+                        // Only a changed cell needs recalculating or refitting; a blank paste onto blanks records nothing.
+                        let changed = new != old || old_picture.is_some() || new_picture.is_some();
                         match what {
                             What::Comments => {
                                 if let Some(cm) = src_sheet.comments.get(&sc).cloned() {
@@ -257,7 +259,9 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         if let Some(picture) = new_picture {
                             cx.sheet_mut(dest_sheet)?.cell_pictures.insert(dest, picture);
                         }
-                        cx.touch(dest_sheet, dest);
+                        if changed {
+                            cx.touch(dest_sheet, dest);
+                        }
                     }
                 }
             }
