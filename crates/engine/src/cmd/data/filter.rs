@@ -20,6 +20,8 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
                 && t.range.start.row == r.start.row
                 && t.range.contains(r.start)
                 && t.range.contains(r.end)
+                && r.start.col == t.range.start.col
+                && r.end.col == t.range.end.col
                 && t.data_range().is_none_or(|data| r.end.row >= data.end.row))
         {
             return Err(bad("data.filter", "a filter range can't overlap a table; filter inside the table instead"));
