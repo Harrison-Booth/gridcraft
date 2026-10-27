@@ -533,3 +533,28 @@ fn number_literals_keep_15_significant_digits() {
         assert_eq!(parse(src), Ok(Expr::Number(want)), "{src}");
     }
 }
+
+/// References print the same through the appending printer for every reference shape.
+#[test]
+fn reference_shapes_print_unchanged() {
+    for text in [
+        "A1",
+        "XFD1048576",
+        "$AA$10:AB$11",
+        "$A:XFD",
+        "B:$C",
+        "1:$1048576",
+        "$3:4",
+        "'My Sheet'!A1",
+        "'It''s'!$B$2:C3",
+        "Sheet1:Sheet3!B2",
+        "'Sheet 1:Sheet3'!B2",
+        "SUM(A1:.B3)+SUM(A.:.B)",
+    ] {
+        let e = parse(text).unwrap();
+        assert_eq!(print(&e), text);
+        if let Expr::Ref(r) = &e {
+            assert_eq!(printer::reference_a1(r), text);
+        }
+    }
+}
