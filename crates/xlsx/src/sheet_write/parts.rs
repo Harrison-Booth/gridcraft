@@ -107,8 +107,12 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
 /// as rows hidden by hand, which SUBTOTAL 1-11 counts.
 pub(super) fn table_filter(sheet: &Sheet, t: &Table) -> Vec<(u32, FilterCriterion)> {
     let mut criteria = t.filter.clone();
-    let Some(af) = sheet.autofilter.as_ref().filter(|af| t.header_row && af.range.start.row == t.range.start.row && af.range.intersects(&t.range))
-    else {
+    let Some(af) = sheet.autofilter.as_ref().filter(|af| {
+        t.header_row
+            && af.range.start.row == t.range.start.row
+            && af.range.intersects(&t.range)
+            && t.data_range().is_some_and(|d| af.range.end.row >= d.end.row)
+    }) else {
         return criteria;
     };
     for (off, c) in &af.criteria {

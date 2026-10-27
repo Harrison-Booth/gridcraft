@@ -75,6 +75,9 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
     }
     // A narrower range would leave out the table's criteria on the columns it doesn't cover, and saving would drop them.
     if let Some(t) = host.and_then(|i| sh.tables.get(i)) {
+        if t.data_range().is_some_and(|data| r.end.row < data.end.row) {
+            return Err(bad("data.filter", "filter the table's full data range"));
+        }
         let shift = r.start.col.saturating_sub(t.range.start.col);
         if t.filter.iter().any(|(o, _)| o.checked_sub(shift).is_none_or(|c| c >= r.width())) {
             return Err(bad("data.filter", "the table is filtered on a column this range leaves out; filter the table's full width"));
