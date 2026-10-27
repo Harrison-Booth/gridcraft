@@ -1177,6 +1177,22 @@ fn a_pivot_cache_naming_no_linked_workbook_is_not_kept() {
 }
 
 #[test]
+fn a_pivot_table_naming_its_cache_by_id_goes_with_a_dropped_cache() {
+    // The cache's records part is missing, so the cache isn't kept: the table that names it only by
+    // `cacheId` must not stay behind with an id the workbook no longer lists.
+    let mut parts = Unpacked::new(&ext_pivot_package(false, false, "externalLinkPath")).parts;
+    parts.remove("xl/pivotTables/_rels/pivotTable1.xml.rels");
+    parts.remove("xl/pivotCache/pivotCacheRecords1.xml");
+    let list: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    let (wb, rep) = read_xlsx(&make_zip(&list)).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep.warnings);
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    assert!(written_pivot_caches(&u).is_empty());
+    assert!(written_pivot_tables(&u, "Report").is_empty());
+}
+
+#[test]
 fn a_kept_pivot_table_whose_cache_is_not_listed_is_dropped() {
     // The workbook doesn't list the cache: the table can't be written back without it.
     let src = ext_pivot_package(false, false, "externalLinkPath");
