@@ -331,4 +331,3 @@ fn draw_error_bar(ctx: &mut Ctx, plot: Bx, a: [f32; 2], b: [f32; 2], caps: (bool
         ctx.out.push(Prim::Line { pts: vec![p0, p1], color: eb.color, width, dash: false });
     }
 }
-
