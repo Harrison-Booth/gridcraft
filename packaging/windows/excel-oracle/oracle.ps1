@@ -16,7 +16,7 @@ expectation. Calls that were only context lines in the diff, and tests that buil
 not read: give those as -CaseFile.
 
 Writes into -Out:
-  cases.tsv     id, Excel formula, expected (kind:value), tab separated with \\ \t \n escapes - input for a rerun,
+  cases.tsv     id, Excel formula, expected (kind:value), tab separated with \\ \t \r \n escapes - input for a rerun,
                 and the key to oracle.xlsx
   results.tsv   id, formula, expected, excel, verdict (MATCH / DIFF / NOEXPECT / SKIP)
   results.md    the same as a table for a PR comment
@@ -95,10 +95,10 @@ function Get-DeniedReason([string]$formula) {
     $null
 }
 
-# A tab or newline inside a case would break the TSV, so fields are escaped (\\ \t \n) and decoded when a cases file is read.
-function ConvertTo-Cell([string]$s) { ($s -replace '\\', '\\' -replace "`t", '\t' -replace "`r?`n", '\n') }
+# A tab or newline inside a case would break the TSV, so fields are escaped (\\ \t \r \n) and decoded when a cases file is read.
+function ConvertTo-Cell([string]$s) { ($s -replace '\\', '\\' -replace "`t", '\t' -replace "`r", '\r' -replace "`n", '\n') }
 function ConvertFrom-Cell([string]$s) {
-    [regex]::Replace($s, '\\(.)', { switch ($args[0].Groups[1].Value) { 't' { "`t" } 'n' { "`n" } default { $args[0].Groups[1].Value } } })
+    [regex]::Replace($s, '\\(.)', { switch ($args[0].Groups[1].Value) { 't' { "`t" } 'r' { "`r" } 'n' { "`n" } default { $args[0].Groups[1].Value } } })
 }
 
 function ConvertTo-ExcelText([string]$s) { '"' + $s.Replace('"', '""') + '"' }
@@ -228,7 +228,10 @@ else {
         if ($f.Count -gt 2 -and (ConvertFrom-Cell $f[2]) -match '(?s)^(num|text|err|bool):(.*)$') { $kind, $val = $Matches[1], $Matches[2] }
         # A numeric expectation is evaluated by Excel, so it must be plain arithmetic, like the ones read from a diff.
         $denial = Get-DeniedReason $formula
-        if (-not $denial -and $kind -eq 'num' -and $null -eq (ConvertTo-ExcelNumber $val)) { $denial = "expected not arithmetic: $val" }
+        if (-not $denial -and $kind -eq 'num') {
+            $norm = ConvertTo-ExcelNumber $val
+            if ($null -eq $norm) { $denial = "expected not arithmetic: $val" } else { $val = $norm }
+        }
         [pscustomobject]@{ Id = $f[0]; Formula = $(if ($denial) { $null } else { $formula }); Kind = $kind; Expected = $val; Tol = 1e-9; Skip = $denial; Raw = '' }
     })
 }
