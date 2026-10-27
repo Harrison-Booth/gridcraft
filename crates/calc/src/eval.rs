@@ -797,7 +797,11 @@ impl<'h> Evaluator<'h> {
                     return err(CellError::Value);
                 }
                 let Some(Value::Text(field)) = self.arg_val(args, 1) else { return err(CellError::Value) };
-                let Ev::R(areas) = self.eval(&args[0]) else { return err(CellError::Value) };
+                let areas = match self.eval(&args[0]) {
+                    Ev::R(areas) => areas,
+                    Ev::V(Value::Error(e)) => return err(e),
+                    _ => return err(CellError::Value),
+                };
                 let Some(a) = areas.first() else { return err(CellError::Ref) };
                 let record = self.host.workbook().sheet(a.sheet).and_then(|s| s.linked_records.get(&a.range.start));
                 // Excel's #FIELD! has no error value here yet; a missing record or field is #VALUE!.

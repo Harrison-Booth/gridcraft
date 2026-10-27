@@ -2298,6 +2298,9 @@ fn fieldvalue_reads_a_linked_record_and_the_dot_syntax_means_the_same() {
         t.set(at, input);
         assert!(matches!(t.get(at), Value::Error(_)), "{input}");
     }
+    // An error in the first argument (a deleted record cell) comes through as itself.
+    t.set("C5", "=FIELDVALUE(#REF!,\"Price\")");
+    assert_eq!(t.get("C5"), Value::Error(CellError::Ref));
     // Overwriting the cell drops the record.
     t.wb.sheet_mut(0).unwrap().set_value(c("A1"), Value::text("x"));
     t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
