@@ -19,6 +19,13 @@ fn snapshot_head(json: &str) -> Result<String, String> {
     }
 }
 
+/// The snapshot's `head_date` (ISO 8601), used when `head` is not in HEAD's history.
+fn snapshot_date(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    let d = v.get("head_date")?.as_str()?;
+    (!d.is_empty() && d.bytes().all(|b| b.is_ascii_digit() || b"-:TZ+. ".contains(&b))).then(|| d.to_string())
+}
+
 /// `Some(message)` when `behind` exceeds `max`.
 fn stale(behind: usize, max: usize, head: &str) -> Option<String> {
     (behind > max).then(|| {
@@ -32,22 +39,29 @@ fn stale(behind: usize, max: usize, head: &str) -> Option<String> {
 /// Commits (merges excluded) between the snapshot and HEAD.
 fn behind(root: &Path) -> Result<(usize, String), String> {
     let path = root.join("contributors/contributors.json");
-    let head = snapshot_head(&std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?)?;
+    let json = std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    let head = snapshot_head(&json)?;
     let ancestor = Command::new("git")
         .current_dir(root)
         .args(["merge-base", "--is-ancestor", &head, "HEAD"])
         .status()
         .map_err(|e| format!("git merge-base: {e}"))?;
-    if !ancestor.success() {
-        return Err(format!("snapshot head {head} is not an ancestor of HEAD (other branch or shallow clone?), so staleness can't be measured"));
-    }
+    // A squash or rebase merge drops the snapshot commit from main, so fall back to its date.
+    let range = if ancestor.success() {
+        vec![format!("{head}..HEAD")]
+    } else {
+        let date =
+            snapshot_date(&json).ok_or_else(|| format!("snapshot head {head} is not in HEAD's history and contributors.json has no `head_date`"))?;
+        vec![format!("--since={date}"), "HEAD".into()]
+    };
     let out = Command::new("git")
         .current_dir(root)
-        .args(["rev-list", "--count", "--no-merges", &format!("{head}..HEAD")])
+        .args(["rev-list", "--count", "--no-merges"])
+        .args(&range)
         .output()
         .map_err(|e| format!("git rev-list: {e}"))?;
     if !out.status.success() {
-        return Err(format!("git rev-list {head}..HEAD failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!("git rev-list {} failed: {}", range.join(" "), String::from_utf8_lossy(&out.stderr).trim()));
     }
     let n = String::from_utf8_lossy(&out.stdout).trim().parse().map_err(|e| format!("git rev-list output: {e}"))?;
     Ok((n, head))
@@ -84,6 +98,14 @@ mod tests {
         assert_eq!(snapshot_head(r#"{"head":"90b3c41e","contributors":[]}"#).unwrap(), "90b3c41e");
         for bad in ["{}", r#"{"head":""}"#, r#"{"head":"--all"}"#, r#"{"head":7}"#, "not json"] {
             assert!(snapshot_head(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn reads_the_snapshot_date() {
+        assert_eq!(snapshot_date(r#"{"head_date":"2026-10-27T22:47:04Z"}"#).as_deref(), Some("2026-10-27T22:47:04Z"));
+        for bad in ["{}", r#"{"head_date":""}"#, r#"{"head_date":"--all"}"#, "not json"] {
+            assert!(snapshot_date(bad).is_none(), "{bad}");
         }
     }
 
