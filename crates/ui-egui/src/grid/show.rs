@@ -739,13 +739,17 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
 fn expose_active_cell(app: &SheetApp, ui: &egui::Ui, id: egui::Id, wb: &Workbook, sh: &Sheet) {
     let at = app.session.active().map(|d| d.selection.active).unwrap_or_default();
     let at = sh.merge_at(at).map(|m| m.start).unwrap_or(at);
-    let (address, shown) = (at.to_string(), gridcraft_engine::display::cell_text(wb, sh, at));
     let input = crate::formula_bar::active_input(app);
+    let picture = sh.cell_pictures.contains_key(&at);
+    // A picture cell's text value is its error fallback; the picture's alt text is what it shows.
+    let shown = if picture { input.clone() } else { gridcraft_engine::display::cell_text(wb, sh, at) };
+    let address = at.to_string();
+    let has_formula = !picture && !input.is_empty() && sh.cell(sh.spill_anchor(at).unwrap_or(at)).is_some_and(|c| c.formula.is_some());
     ui.ctx().accesskit_node_builder(id, |node| {
         node.set_role(egui::accesskit::Role::Cell);
         node.set_label(address);
         node.set_value(shown);
-        if input.starts_with('=') {
+        if has_formula {
             node.set_description(input);
         }
     });
