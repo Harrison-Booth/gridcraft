@@ -530,8 +530,10 @@ fn number_literals_keep_15_significant_digits() {
         ("0.1", 0.1),
         ("1.7976931348623157E308", 1.79769313486231e308),
     ] {
-        assert_eq!(parse(src), Ok(Expr::Number(want)), "{src}");
+        assert_eq!(parse_typed(src), Ok(Expr::Number(want)), "{src}");
     }
+    // Formulas read from a file keep every digit.
+    assert_eq!(parse("0.30000000000000004"), Ok(Expr::Number(0.30000000000000004)));
 }
 
 /// References print the same through the appending printer for every reference shape.

@@ -74,6 +74,12 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
 
 /// Tokenizes UI syntax while retaining byte spans in the original text.
 pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<Token>, LexError> {
+    tokenize_with(src, locale, false)
+}
+
+/// Like [`tokenize_locale`]; `typed` cuts number literals to 15 significant digits, as Excel does
+/// for a formula typed into a cell (formulas read from files keep every digit).
+pub(crate) fn tokenize_with(src: &str, locale: crate::FormulaLocale, typed: bool) -> Result<Vec<Token>, LexError> {
     let chars: Vec<(usize, char)> = src.char_indices().collect();
     let n = chars.len();
     let pos_of = |i: usize| chars.get(i).map(|c| c.0).unwrap_or(src.len());
@@ -256,8 +262,8 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                     }
                 }
                 let text = src.get(start..pos_of(j)).unwrap_or("");
-                // Excel keeps only the first 15 significant digits of a literal.
-                let v: f64 = gridcraft_core::parse::keep_15_digits(&text.replace(locale.decimal_separator(), "."))
+                let text_dot = text.replace(locale.decimal_separator(), ".");
+                let v: f64 = (if typed { gridcraft_core::parse::keep_15_digits(&text_dot) } else { text_dot })
                     .parse()
                     .map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
                 if !v.is_finite() {
