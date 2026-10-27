@@ -518,3 +518,18 @@ fn three_d_span_and_cell_start_still_lex_as_span() {
     assert_eq!(rt("SUM(Sheet1:Sheet3!A1)"), "SUM(Sheet1:Sheet3!A1)");
     assert_eq!(rt("SUM(Q1:Sheet3!A1)"), "SUM('Q1:Sheet3'!A1)");
 }
+
+/// Excel keeps 15 significant digits of a number literal (measured: `=12345678901234567890` reads back
+/// as `=12345678901234500000`, `=0.12345678901234567` as `=0.123456789012345`).
+#[test]
+fn number_literals_keep_15_significant_digits() {
+    for (src, want) in [
+        ("12345678901234567890", 12345678901234500000.0),
+        ("0.12345678901234567", 0.123456789012345),
+        ("1234567890123456", 1234567890123450.0),
+        ("0.1", 0.1),
+        ("1.7976931348623157E308", 1.79769313486231e308),
+    ] {
+        assert_eq!(parse(src), Ok(Expr::Number(want)), "{src}");
+    }
+}

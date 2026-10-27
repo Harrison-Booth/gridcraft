@@ -256,8 +256,8 @@ pub fn tokenize_locale(src: &str, locale: crate::FormulaLocale) -> Result<Vec<To
                     }
                 }
                 let text = src.get(start..pos_of(j)).unwrap_or("");
-                let v: f64 = text
-                    .replace(locale.decimal_separator(), ".")
+                // Excel keeps only the first 15 significant digits of a literal.
+                let v: f64 = gridcraft_core::parse::keep_15_digits(&text.replace(locale.decimal_separator(), "."))
                     .parse()
                     .map_err(|_| LexError { msg: format!("bad number `{text}`"), pos: start })?;
                 if !v.is_finite() {
