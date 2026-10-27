@@ -867,10 +867,7 @@ fn column_autocomplete_folds_case_beyond_ascii() {
         eprintln!("skipping the \"ẞ\" case: CRAFT_FONTS_DIR is not set, so no installed font has the glyph");
     }
     let mut s = blank();
-    s.execute("range.setValues", json!({"range": "A1", "values": [["Ébène"], ["Ébano"], ["ébano"]]})).unwrap();
-    if fonts {
-        s.execute("range.setValues", json!({"range": "A4", "values": [["STRAẞENBAHN"]]})).unwrap();
-    }
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Ébène"], ["Ébano"], ["ébano"], [if fonts { "STRAẞENBAHN" } else { "STRASSENBAHN" }]]})).unwrap();
     s.execute("selection.set", json!({"cell": "A5"})).unwrap();
     let mut h = harness(s);
     text(&mut h, "éba");
