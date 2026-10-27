@@ -33,13 +33,21 @@ fn stale(behind: usize, max: usize, head: &str) -> Option<String> {
 fn behind(root: &Path) -> Result<(usize, String), String> {
     let path = root.join("contributors/contributors.json");
     let head = snapshot_head(&std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?)?;
+    let ancestor = Command::new("git")
+        .current_dir(root)
+        .args(["merge-base", "--is-ancestor", &head, "HEAD"])
+        .status()
+        .map_err(|e| format!("git merge-base: {e}"))?;
+    if !ancestor.success() {
+        return Err(format!("snapshot head {head} is not an ancestor of HEAD (other branch or shallow clone?), so staleness can't be measured"));
+    }
     let out = Command::new("git")
         .current_dir(root)
         .args(["rev-list", "--count", "--no-merges", &format!("{head}..HEAD")])
         .output()
         .map_err(|e| format!("git rev-list: {e}"))?;
     if !out.status.success() {
-        return Err(format!("git rev-list {head}..HEAD failed (shallow clone?): {}", String::from_utf8_lossy(&out.stderr).trim()));
+        return Err(format!("git rev-list {head}..HEAD failed: {}", String::from_utf8_lossy(&out.stderr).trim()));
     }
     let n = String::from_utf8_lossy(&out.stdout).trim().parse().map_err(|e| format!("git rev-list output: {e}"))?;
     Ok((n, head))

@@ -101,8 +101,10 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
             }
             println!("version: {old} -> {new}");
             // A release credits everyone: nudge (don't block) when the About list is stale.
-            if let Ok(Some(msg)) = crate::contributors::warning(root) {
-                eprintln!("warning: {msg}");
+            match crate::contributors::warning(root) {
+                Ok(Some(msg)) => eprintln!("warning: {msg}"),
+                Ok(None) => {}
+                Err(e) => eprintln!("warning: couldn't check contributors/contributors.json freshness: {e}"),
             }
             Ok(())
         }

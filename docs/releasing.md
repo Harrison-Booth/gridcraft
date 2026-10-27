@@ -50,7 +50,8 @@ The pipeline references crates that don't exist yet; the first release run fails
    ```
 
    Refresh the About credits in the same commit, so the release lists everyone who worked on it:
-   `python3 ../../craftrules/scripts/contributors.py .` rewrites `contributors/contributors.json`
+   `python3 ../../craftrules/scripts/contributors.py .` (`storytold/craftrules`, checked out next to the
+   app repos, see AGENTS.md) rewrites `contributors/contributors.json`
    (see [contributors.md](contributors.md)). `cargo xtask version set` warns, and
    `cargo xtask contributors` fails, when the snapshot is more than 100 commits behind HEAD.
 
