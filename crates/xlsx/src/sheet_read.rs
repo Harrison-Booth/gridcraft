@@ -523,8 +523,9 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
         Some(record) if formula.is_none() && !record.display.is_empty() => Value::text(record.display.as_str()),
         _ => value,
     };
+    let has_formula = formula.is_some();
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
-    if let Some(record) = record {
+    if let Some(record) = record.filter(|_| !has_formula) {
         sheet.linked_records.insert(pos, record);
     }
 }
