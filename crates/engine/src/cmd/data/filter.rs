@@ -13,10 +13,22 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
     if let Some(name) = in_table {
         return edit(s, |cx| {
             let sh = cx.sheet_mut(sheet)?;
+            let filtered: Vec<u32> = sh.rows.keys().copied().filter(|r| sh.is_row_filtered(*r)).collect();
+            let mut cleared = false;
             if let Some(t) = sh.tables.iter_mut().find(|t| t.name == name) {
                 t.filter_button = !t.filter_button;
                 if !t.filter_button {
                     t.filter.clear();
+                    // The sheet AutoFilter hosted on this table's header row is the table's filter too.
+                    cleared = sh.autofilter.as_ref().is_some_and(|af| af.range.start.row == t.range.start.row && af.range.intersects(&t.range));
+                }
+            }
+            if cleared {
+                sh.autofilter = None;
+                for r in filtered {
+                    if let Some(info) = sh.rows.get_mut(&r) {
+                        info.hidden = false;
+                    }
                 }
             }
             Ok(Json::Null)

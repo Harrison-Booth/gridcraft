@@ -100,3 +100,15 @@ fn sheet_autofilter_not_on_the_header_row_is_not_folded() {
     let cols: Vec<u32> = s.tables[0].filter.iter().map(|(c, _)| *c).collect();
     assert_eq!(cols, [1], "only the table's own criterion");
 }
+
+#[test]
+fn disabled_table_filter_saves_no_autofilter_criteria() {
+    let mut wb = filtered("B2:C6", 0);
+    if let Some(t) = wb.sheet_mut(0).unwrap().tables.first_mut() {
+        t.filter_button = false;
+        t.filter.clear();
+    }
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let t = &back.sheet(0).unwrap().tables[0];
+    assert!(!t.filter_button && t.filter.is_empty(), "{:?}", t.filter);
+}

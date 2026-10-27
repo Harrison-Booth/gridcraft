@@ -109,6 +109,7 @@ pub(super) fn table_filter(sheet: &Sheet, t: &Table) -> Vec<(u32, FilterCriterio
     let mut criteria = t.filter.clone();
     let Some(af) = sheet.autofilter.as_ref().filter(|af| {
         t.header_row
+            && t.filter_button
             && af.range.start.row == t.range.start.row
             && af.range.intersects(&t.range)
             && t.data_range().is_some_and(|d| af.range.end.row >= d.end.row)
@@ -144,7 +145,7 @@ pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, filter:
         let _ = write!(s, " connectionId=\"{c}\"");
     }
     s.push('>');
-    if t.header_row && (t.filter_button || !filter.is_empty()) {
+    if t.header_row && t.filter_button {
         let end_row = if t.totals_row { t.range.end.row.saturating_sub(1).max(t.range.start.row) } else { t.range.end.row };
         let r = RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col));
         s.push_str(&autofilter_xml(r, filter, out));
