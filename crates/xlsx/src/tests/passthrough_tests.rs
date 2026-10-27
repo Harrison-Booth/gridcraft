@@ -1210,9 +1210,12 @@ struct ConnPkg {
     connections_blocked: bool,
     /// The connection the Data Model cache names.
     model_connection: u32,
+    /// The PivotTables have relationships to their caches (otherwise they name them by `cacheId`).
+    table_rels: bool,
 }
 
-const CONN_PKG: ConnPkg = ConnPkg { model_part: true, big_model: false, connections: true, connections_blocked: false, model_connection: 1 };
+const CONN_PKG: ConnPkg =
+    ConnPkg { model_part: true, big_model: false, connections: true, connections_blocked: false, model_connection: 1, table_rels: true };
 
 /// Sheet "Report" with a PivotTable on the Data Model (cache 3) and sheet "More" with one on the
 /// plain connection (cache 4, with records), plus the hidden name a worksheet connection uses.
@@ -1281,6 +1284,9 @@ fn conn_pivot_package(o: ConnPkg) -> Vec<u8> {
         ("xl/pivotCache/_rels/pivotCacheDefinition2.xml.rels", c2_rels.as_bytes()),
         ("xl/pivotCache/pivotCacheRecords2.xml", CONN_RECORDS.as_bytes()),
     ];
+    if !o.table_rels {
+        parts.retain(|(name, _)| !name.starts_with("xl/pivotTables/_rels/"));
+    }
     if o.connections {
         parts.push(("xl/connections.xml", MODEL_CONNECTIONS.as_bytes()));
     }
@@ -1398,6 +1404,19 @@ fn data_model_pivot_tables_without_the_model_are_kept_as_plain_cells() {
         assert_eq!(caches.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["4"], "{caches:?}");
         assert_eq!(written_pivot_tables(&u, "More").len(), 1);
     }
+}
+
+#[test]
+fn pivot_tables_naming_their_cache_by_id_go_with_a_dropped_cache() {
+    // No connections part: both caches are dropped, and the tables that name them only by
+    // `cacheId` must not stay behind with an id the workbook no longer lists.
+    let (wb, _) = read_xlsx(&conn_pivot_package(ConnPkg { connections: false, table_rels: false, ..CONN_PKG })).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    for sheet in ["Report", "More"] {
+        assert!(written_pivot_tables(&u, sheet).is_empty(), "{sheet}");
+    }
+    assert!(written_pivot_caches(&u).is_empty());
 }
 
 #[test]

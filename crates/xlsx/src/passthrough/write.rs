@@ -15,6 +15,9 @@ pub struct KeptOut {
     /// Names of the workbook's kept parts, which sheets' kept parts can refer to (the cache of a
     /// kept PivotTable).
     pub(super) wb_names: NameMap,
+    /// The `cacheId`s of the workbook's kept pivot caches: a kept PivotTable that names its cache
+    /// only by id is written only when its cache is among them.
+    pub(super) cache_ids: HashSet<u32>,
     patches: StylePatches,
 }
 
@@ -416,6 +419,7 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
         })
         .collect();
     out.kept.wb_names = names;
+    out.kept.cache_ids = pivot_caches.iter().map(|(id, _)| *id).collect();
     WorkbookKept {
         pivot_caches,
         elements: p.elements.iter().filter(|e| e.slot == "externalReferences").filter_map(|e| remap(&e.xml, &ids)).collect(),

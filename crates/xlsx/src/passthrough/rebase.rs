@@ -14,11 +14,20 @@ impl<'a> SheetKept<'a> {
     pub fn write(sheet: &'a Sheet, rels: &mut Rels, out: &mut Out) -> SheetKept<'a> {
         let Some(p) = sheet.preserved.as_deref() else { return SheetKept { p: None, names: NameMap::new(), ids: HashMap::new() } };
         // A kept PivotTable whose cache wasn't kept with the workbook is left out.
-        let wb_names = &out.kept.wb_names;
+        let (wb_names, cache_ids) = (&out.kept.wb_names, &out.kept.cache_ids);
         let orphan: HashSet<String> = p
             .parts
             .iter()
-            .filter(|q| q.rels.iter().any(|r| !r.external && is_kind(r, &["pivotCacheDefinition"]) && !wb_names.contains_key(&normalize(&r.target))))
+            .filter(|q| {
+                let direct = q.rels.iter().filter(|r| !r.external && is_kind(r, &["pivotCacheDefinition"]));
+                // A table with no relationship to its cache names it by `cacheId` instead.
+                let by_id = || {
+                    q.content_type == CT_PIVOT_TABLE
+                        && crate::xml::parse(&q.data).ok().and_then(|x| x.attr_u32("cacheId")).is_some_and(|id| !cache_ids.contains(&id))
+                };
+                let mut direct = direct.peekable();
+                if direct.peek().is_some() { direct.any(|r| !wb_names.contains_key(&normalize(&r.target))) } else { by_id() }
+            })
             .map(|q| normalize(&q.name))
             .collect();
         let (parts, sheet_rels): (Cow<'_, [PreservedPart]>, Cow<'_, [PreservedRel]>) = if orphan.is_empty() {
