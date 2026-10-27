@@ -90,6 +90,11 @@ fn rate_follows_excel_iteration() {
     // Guess at or below -1 is #VALUE!; type is 0 or anything else (1).
     is_err(rate_of(&[10.0, -100.0, 1000.0, 0.0, 0.0, -1.0]), CellError::Value);
     is_err(rate_of(&[0.0, -100.0, 1000.0]), CellError::Num);
+    // Excel does not step the second point back to -1: a fractional nper with a guess near -1 is #NUM!
+    // even though a root exists at -0.99, and the same case from a guess of -0.99 finds it.
+    is_err(rate_of(&[0.5, 0.0, -1.0, 0.1, 0.0, -0.9995]), CellError::Num);
+    is_err(rate_of(&[0.5, 0.0, -1.0, 0.1, 0.0, -0.5]), CellError::Num);
+    close_tol(rate_of(&[0.5, 0.0, -1.0, 0.1, 0.0, -0.99]), -0.99, 1e-7);
     assert_eq!(rate_of(&[10.0, -100.0, 1000.0, 0.0, 2.0]), rate_of(&[10.0, -100.0, 1000.0, 0.0, 1.0]));
     // Ordinary loans, and large amounts that can't get within 1e-7 of zero.
     close_tol(rate_of(&[360.0, -1000.0, 150000.0]), 0.005_850_253_376_759_637, 1e-11);
