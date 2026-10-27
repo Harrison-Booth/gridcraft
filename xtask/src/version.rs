@@ -100,6 +100,10 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
                 crate::run(c, "cargo update --workspace")?;
             }
             println!("version: {old} -> {new}");
+            // A release credits everyone: nudge (don't block) when the About list is stale.
+            if let Ok(Some(msg)) = crate::contributors::warning(root) {
+                eprintln!("warning: {msg}");
+            }
             Ok(())
         }
         _ => Err("usage: cargo xtask version [set X.Y.Z[-pre]]".into()),
