@@ -354,7 +354,9 @@ pub(crate) fn paint_quadrant(
             _ => text_left + pad + indent,
         };
         let gh = galley.size().y;
-        let y = cell_text_y(st.align.v, *rect, gh, cell_text_lead(&galley, font.size), z);
+        // Rotated text keeps its line box: the lead only lifts upright text (and the underline below it).
+        let lead = if rotated { 0.0 } else { cell_text_lead(&galley, font.size) };
+        let y = cell_text_y(st.align.v, *rect, gh, lead, z);
         let cp = p.with_clip_rect(clip.intersect(p.clip_rect()));
         if rotated {
             let angle = -(st.align.rotation as f32).to_radians();
