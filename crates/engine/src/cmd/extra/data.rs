@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn table_resize(s: &mut Session, p: &Json) -> Result<Json> {
     let r = str_param(p, "range").and_then(RangeRef::parse).ok_or_else(|| bad("table.resize", "missing `range`"))?;
     let d = s.doc()?;
-    let si = d.wb.active_sheet;
+    let si = d.wb.active_sheet();
     let sh = d.wb.sheet(si).ok_or(EngineError::NoDocument)?;
     let ti = match str_param(p, "table") {
         Some(n) => sh.tables.iter().position(|t| t.name.eq_ignore_ascii_case(n)),
