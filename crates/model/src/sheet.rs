@@ -268,7 +268,11 @@ impl Sheet {
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
         self.cell_pictures.remove(&c);
-        self.linked_records.remove(&c);
+        // A write that keeps the value (a format-only paste) keeps the record.
+        let same = cell.formula.is_none() && self.cells.get(c).is_some_and(|old| old.formula.is_none() && old.value == cell.value);
+        if !same {
+            self.linked_records.remove(&c);
+        }
         self.cells.set(c, cell);
     }
     pub fn remove_cell(&mut self, c: CellRef) -> Option<Cell> {
@@ -485,6 +489,19 @@ fn line_at(pos: f64, default: f64, custom: &BTreeMap<u32, LineInfo>, max: u32) -
 mod tests {
     use super::*;
     use crate::cell::Formula;
+
+    #[test]
+    fn a_format_only_write_keeps_a_linked_record_and_a_new_value_drops_it() {
+        let at = CellRef::new(0, 0);
+        let mut s = Sheet::new("S");
+        s.set_value(at, Value::text("EUR/USD"));
+        s.linked_records.insert(at, Arc::new(LinkedRecord { display: "EUR/USD".into(), fields: vec![] }));
+        let style = StyleId(1);
+        s.set_cell(at, Cell { value: Value::text("EUR/USD"), formula: None, style });
+        assert!(s.linked_records.contains_key(&at));
+        s.set_cell(at, Cell::value(Value::text("other")));
+        assert!(!s.linked_records.contains_key(&at));
+    }
 
     #[test]
     fn line_index_matches_linear() {
