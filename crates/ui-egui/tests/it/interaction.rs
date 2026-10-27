@@ -444,7 +444,11 @@ fn language_switch_renders_the_ribbon_and_persists() {
     // the documented no-font gap, not a missing-glyph or accessibility opt-out.
     let languages: Vec<Language> = Language::ALL
         .into_iter()
-        .filter(|l| gridcraft_ui_egui::theme::craft_fonts_loaded() || !matches!(l, Language::Ja | Language::Ko | Language::Zh | Language::Vi))
+        .filter(|l| {
+            let sample = ["Home", "Insert", "Formulas", "Data", "View"].map(|t| l.tr(t)).join(" ");
+            !matches!(l, Language::Ja | Language::Ko | Language::Zh | Language::Vi)
+                || (gridcraft_ui_egui::theme::craft_fonts_cover(&sample) && (*l != Language::Zh || gridcraft_ui_egui::theme::chinese_font_loaded()))
+        })
         .collect();
     for language in languages {
         h.state_mut().run("app.language.set", json!({"language": language.code()})).unwrap();
@@ -862,9 +866,9 @@ fn column_autocomplete_skips_ambiguous_prefixes_and_numbers() {
 #[test]
 fn column_autocomplete_folds_case_beyond_ascii() {
     // "ẞ" (U+1E9E) has no glyph in egui's bundled faces; without craft-fonts the strict harness would panic drawing it.
-    let fonts = gridcraft_ui_egui::theme::craft_fonts_loaded();
+    let fonts = gridcraft_ui_egui::theme::craft_fonts_cover("ẞ");
     if !fonts {
-        eprintln!("skipping the \"ẞ\" case: CRAFT_FONTS_DIR is not set, so no installed font has the glyph");
+        eprintln!("skipping the \"ẞ\" case: no embedded craft face has the glyph");
     }
     let mut s = blank();
     s.execute(
