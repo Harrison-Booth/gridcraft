@@ -384,7 +384,9 @@ fn core_structure(record: &LinkedRecord) -> String {
 
 pub fn write(out: &mut Out, workbook_rels: &mut Rels) -> Result<(), IoError> {
     let items = std::mem::take(&mut out.cell_pictures).items;
-    if items.len() > MAX_RECORDS {
+    // A linked record emits two `rv` elements (its core and its wrapper), so count what is written.
+    let emitted = items.iter().fold(0usize, |n, item| n.saturating_add(if matches!(item, Item::Linked(_)) { 2 } else { 1 }));
+    if emitted > MAX_RECORDS {
         return Err(IoError::TooLarge("too many cell pictures".into()));
     }
     let has_pictures = items.iter().any(|item| matches!(item, Item::Picture(_)));
