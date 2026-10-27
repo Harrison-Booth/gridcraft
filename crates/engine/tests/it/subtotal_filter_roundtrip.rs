@@ -218,3 +218,23 @@ fn turning_a_table_filter_off_hides_the_rows_of_all_other_filtered_tables() {
         assert!(sh.is_row_hidden(row), "row {} is excluded by one of the two other tables", row + 1);
     }
 }
+
+#[test]
+fn filtering_a_table_whose_buttons_were_turned_off_turns_them_back_on() {
+    let mut s = table_book();
+    s.execute("data.filter", json!({})).unwrap();
+    assert!(!wb(&s).active().unwrap().tables[0].filter_button);
+    s.execute("data.filterBy", json!({"column":"A","values":["a"]})).unwrap();
+    assert!(wb(&s).active().unwrap().tables[0].filter_button);
+    let back = reopened(wb(&s));
+    assert_eq!(back.active().unwrap().tables[0].filter.len(), 1, "the criteria are saved with the table");
+}
+
+#[test]
+fn a_partial_range_inside_the_active_table_is_refused_not_a_toggle() {
+    let mut s = table_book();
+    s.execute("data.filterBy", json!({"column":"A","values":["a"]})).unwrap();
+    assert!(s.execute("data.filter", json!({"range":"B1:B7"})).is_err());
+    let sh = wb(&s).active().unwrap();
+    assert!(sh.tables[0].filter_button && sh.autofilter.is_some(), "the filter is untouched");
+}

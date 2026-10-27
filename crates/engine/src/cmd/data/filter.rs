@@ -11,6 +11,19 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
     let has = s.doc()?.wb.sheet(sheet).is_some_and(|sh| sh.autofilter.is_some());
     let in_table = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.table_at(at).map(|t| t.name.clone()));
     if let Some(name) = in_table {
+        // An explicit range over part of the table is refused, as when installing a filter on it.
+        if p.get("range").is_some()
+            && let Some(sh) = s.doc()?.wb.sheet(sheet)
+            && let Some(t) = sh.tables.iter().find(|t| t.name == name)
+            && t.range.intersects(&r)
+            && !(t.header_row
+                && t.range.start.row == r.start.row
+                && t.range.contains(r.start)
+                && t.range.contains(r.end)
+                && t.data_range().is_none_or(|data| r.end.row >= data.end.row))
+        {
+            return Err(bad("data.filter", "a filter range can't overlap a table; filter inside the table instead"));
+        }
         return edit(s, |cx| {
             let sh = cx.sheet_mut(sheet)?;
             let filtered: Vec<u32> = sh.rows.keys().copied().filter(|r| sh.is_row_filtered(*r)).collect();
@@ -121,6 +134,8 @@ fn install_filter(s: &mut Session, p: &Json) -> Result<Json> {
         let sh = cx.sheet_mut(sheet)?;
         let mut criteria = vec![];
         if let Some(t) = host.and_then(|i| sh.tables.get_mut(i)) {
+            // The criteria are saved with the table only while its filter buttons are on.
+            t.filter_button = true;
             let shift = r.start.col.saturating_sub(t.range.start.col);
             criteria = std::mem::take(&mut t.filter).into_iter().filter_map(|(o, c)| Some((o.checked_sub(shift)?, c))).collect();
         }
