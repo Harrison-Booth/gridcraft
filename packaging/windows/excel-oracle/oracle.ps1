@@ -335,7 +335,11 @@ if ($todo.Count) {
     if ($xlPid) { Wait-Process -Id ([int]$xlPid) -Timeout 15 -ErrorAction SilentlyContinue; Stop-Process -Id ([int]$xlPid) -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $todoFile -Force
     if (Test-Path -LiteralPath $local) { Move-Item -LiteralPath $local -Destination $xlsx -Force }
-    if (-not $done) { $state = "TIMEOUT: no answer in $TimeoutSec s" }
+    if (-not $done) {
+        $state = "TIMEOUT: no answer in $TimeoutSec s"
+        # Excel was still starting, so its process id was never reported and nothing is stopped: it may be this run's or someone else's.
+        if (-not $xlPid) { $state += '; Excel never reported its process id, so none was stopped (check for a stray EXCEL.EXE started with /automation)' }
+    }
     elseif (($lines | Select-Object -Last 1) -ne 'DONE') { $state = "FAIL: $($lines | Select-Object -Last 1)" }
 }
 
