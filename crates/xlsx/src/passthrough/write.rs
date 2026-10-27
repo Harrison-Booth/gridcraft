@@ -424,7 +424,7 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
             out.kept.root.push((r.rel_type.clone(), target, r.external));
         }
     }
-    let pivot_caches = p
+    let pivot_caches: Vec<(u32, String)> = p
         .elements
         .iter()
         .filter(|e| e.slot == "pivotCache")
