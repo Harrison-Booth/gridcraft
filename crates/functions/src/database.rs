@@ -88,6 +88,7 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>
     let all_match = rows.is_empty();
     let mut budget_gone = false;
     let records = (1..db.rows)
+        .take_while(|_| !budget_gone)
         .filter(|&rec| {
             all_match
                 || rows.iter().any(|(r, conds)| {
