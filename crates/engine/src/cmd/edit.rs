@@ -834,6 +834,9 @@ fn redo(s: &mut Session, p: &Json) -> Result<Json> {
 
 // ---------------------------------------------------------------- clipboard
 
+/// Largest copied block a paste walks without trimming, so a hostile range can't run the process out of memory.
+const CLIP_WALK_CAP: u64 = 16_000_000;
+
 fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
     let multiple = || EngineError::Other("This action won't work on multiple selections.".into());
     let sheet = target_sheet(s, p)?;
@@ -846,7 +849,7 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
     let d = s.doc()?;
     let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
     let trim = |range: RangeRef| {
-        if range.is_full_cols() || range.is_full_rows() {
+        if range.is_full_cols() || range.is_full_rows() || range.count() > CLIP_WALK_CAP {
             let used = sh.used_range().unwrap_or(RangeRef::cell(range.start));
             range.intersection(&used.union(&RangeRef::cell(range.start))).unwrap_or(range)
         } else {
@@ -1122,6 +1125,9 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let sel = s.doc()?.selection.current();
     let at = cell_param_on(s, p, "at", dest_sheet)?.unwrap_or(sel.start);
     let src = clip.range;
+    if src.count() > CLIP_WALK_CAP {
+        return Err(EngineError::Other("The copied area is too large to paste.".into()));
+    }
     let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     // Tile the copy over a larger destination that is a multiple of its size.
     let tile = sel.height() % h == 0
@@ -1150,7 +1156,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             *style_map.entry(id).or_insert_with(|| wb.styles.intern(src_wb.styles.get(id).clone()))
         };
-        let mut moved_formulas = Vec::new();
+        let mut moved_formulas = std::collections::HashMap::new();
         let mut moved_pictures = std::collections::BTreeMap::new();
         if cut_move {
             // Remove the source first (contents and formats), and fix references to it.
@@ -1167,7 +1173,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             for (c, _) in &taken {
                 cx.touch(clip.sheet, *c);
             }
-            moved_formulas = taken;
+            moved_formulas = taken.into_iter().collect();
         }
         for tr in 0..tiles_r {
             for tc in 0..tiles_c {
@@ -1176,11 +1182,7 @@ fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                         let sc = CellRef::new(src.start.row + r, src.start.col + c);
                         let (dr, dc) = if transpose { (c, r) } else { (r, c) };
                         let Some(dest) = at.offset((tr * h + dr) as i64, (tc * w + dc) as i64) else { continue };
-                        let src_cell = if cut_move {
-                            moved_formulas.iter().find(|(k, _)| *k == sc).map(|(_, v)| v.clone())
-                        } else {
-                            src_sheet.cell(sc).cloned()
-                        };
+                        let src_cell = if cut_move { moved_formulas.get(&sc).cloned() } else { src_sheet.cell(sc).cloned() };
                         let src_val = src_sheet.value(sc);
                         let src_picture = if cut_move { moved_pictures.get(&sc) } else { src_sheet.cell_pictures.get(&sc) }.cloned();
                         if skip_blanks && src_picture.is_none() && src_val.is_empty() && src_cell.as_ref().is_none_or(|x| x.formula.is_none()) {
