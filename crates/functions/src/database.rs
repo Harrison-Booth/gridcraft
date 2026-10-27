@@ -86,29 +86,37 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>
         rows.push((r, conds));
     }
     let all_match = rows.is_empty();
-    let mut budget_gone = false;
-    let records = (1..db.rows)
-        .take_while(|_| !budget_gone)
-        .filter(|&rec| {
-            all_match
-                || rows.iter().any(|(r, conds)| {
-                    conds.iter().all(|(c, col, cr)| match col {
-                        Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
-                        // Under a label that names no field, only a formula (a computed
-                        // criterion) can hold.
-                        None => match ctx.computed_criterion(*r, *c, db, rec) {
-                            Some(Ok(b)) => b,
-                            Some(Err(_)) => {
-                                budget_gone = true;
-                                false
-                            }
-                            None => false,
-                        },
-                    })
-                })
-        })
-        .collect();
-    if budget_gone { Err(CellError::Calc) } else { Ok(records) }
+    let mut records = Vec::new();
+    for rec in 1..db.rows {
+        let mut keep = all_match;
+        for (r, conds) in &rows {
+            if keep {
+                break;
+            }
+            let mut all = true;
+            for (c, col, cr) in conds {
+                all = match col {
+                    Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
+                    // Under a label that names no field, only a formula (a computed
+                    // criterion) can hold.
+                    None => match ctx.computed_criterion(*r, *c, db, rec) {
+                        Some(Ok(b)) => b,
+                        // Budget gone: stop rather than evaluate the remaining records.
+                        Some(Err(e)) => return Err(e),
+                        None => false,
+                    },
+                };
+                if !all {
+                    break;
+                }
+            }
+            keep |= all;
+        }
+        if keep {
+            records.push(rec);
+        }
+    }
+    Ok(records)
 }
 
 struct Selection<'a> {
