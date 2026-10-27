@@ -957,6 +957,35 @@ pub fn export_as(app: &mut SheetApp, fmt: &str) -> bool {
 fn options(app: &mut SheetApp, ui: &mut Ui) {
     let lang = app.ui.language;
     section(ui, lang, "Options|General");
+    general_options(app, ui, lang);
+    ui.add_space(6.0);
+    let mut formula_bar = app.session.prefs.formula_bar;
+    if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
+        app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
+    }
+    ui.add_space(18.0);
+    section(ui, lang, "Options|Editing");
+    let mut autocomplete = app.ui.autocomplete;
+    if ui.checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
+        app.run_or_alert("options.autoComplete", json!({"on": autocomplete}));
+    }
+    ui.add_space(18.0);
+    section(ui, lang, "Options|Save");
+    let mut autosave = app.ui.autosave;
+    if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
+        app.toggle_autosave();
+    }
+    let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
+    ui.add_space(18.0);
+    section(ui, lang, "Formulas");
+    ui.label(lang.tr("Workbook calculation"));
+    calc_options(app, ui, lang, &calc);
+    ui.add_space(6.0);
+    dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+/// The display theme and interface language controls of the General section.
+fn general_options(app: &mut SheetApp, ui: &mut Ui, lang: Language) {
     egui::Grid::new("backstage_options_general").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         let label = ui.label(lang.tr("Display theme"));
         let mode = app.ui.theme_mode();
@@ -993,27 +1022,10 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
             .labelled_by(label.id);
         ui.end_row();
     });
-    ui.add_space(6.0);
-    let mut formula_bar = app.session.prefs.formula_bar;
-    if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
-        app.run_or_alert("view.formulaBar", json!({"on": formula_bar}));
-    }
-    ui.add_space(18.0);
-    section(ui, lang, "Options|Editing");
-    let mut autocomplete = app.ui.autocomplete;
-    if ui.checkbox(&mut autocomplete, lang.tr("Enable AutoComplete for cell values")).changed() {
-        app.run_or_alert("options.autoComplete", json!({"on": autocomplete}));
-    }
-    ui.add_space(18.0);
-    section(ui, lang, "Options|Save");
-    let mut autosave = app.ui.autosave;
-    if ui.checkbox(&mut autosave, lang.tr("Save .xlsx workbooks automatically after every change")).changed() {
-        app.toggle_autosave();
-    }
-    let Some(calc) = app.session.active().map(|d| d.wb.calc.clone()) else { return };
-    ui.add_space(18.0);
-    section(ui, lang, "Formulas");
-    ui.label(lang.tr("Workbook calculation"));
+}
+
+/// The calculation mode, and iterative calculation, of the active workbook.
+fn calc_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraft_engine::model::CalcSettings) {
     use gridcraft_engine::model::CalcMode;
     for (mode, id, label) in [
         (CalcMode::Automatic, "automatic", "Automatic"),
@@ -1030,6 +1042,13 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
         app.run_or_alert("formulas.calculationOptions", json!({"iterative": iterative}));
     }
     // Maximum Iterations and Maximum Change apply only while iteration is on, as in Excel.
+    iteration_options(app, ui, lang, calc, iterative);
+    // TODO: add "Set precision as displayed" here once `formulas.calculationOptions` takes
+    // `precisionAsDisplayed` (PR #1366); the model already stores it.
+}
+
+/// Maximum Iterations and Maximum Change, live only while iterative calculation is on.
+fn iteration_options(app: &mut SheetApp, ui: &mut Ui, lang: Language, calc: &gridcraft_engine::model::CalcSettings, iterative: bool) {
     ui.add_enabled_ui(iterative, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(24.0);
@@ -1070,10 +1089,6 @@ fn options(app: &mut SheetApp, ui: &mut Ui) {
             });
         });
     });
-    // TODO: add "Set precision as displayed" here once `formulas.calculationOptions` takes
-    // `precisionAsDisplayed` (PR #1366); the model already stores it.
-    ui.add_space(6.0);
-    dim(ui, lang.tr("Calculation settings are saved with the workbook."));
 }
 
 /// Refuses a typed setting with a message, leaving the workbook as it was. The Enter that

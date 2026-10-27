@@ -78,6 +78,32 @@ pub fn highlight(text: &str, lang: Lang) -> Vec<(Range<usize>, Token)> {
     }
 }
 
+/// End (exclusive, in chars) of the Python string literal opening with quote `c` at char `i`.
+fn python_string_end(chars: &[(usize, char)], i: usize, c: char) -> usize {
+    let triple = chars.get(i + 1).is_some_and(|(_, d)| *d == c) && chars.get(i + 2).is_some_and(|(_, d)| *d == c);
+    let mut j = if triple { i + 3 } else { i + 1 };
+    loop {
+        match chars.get(j) {
+            None => break,
+            Some((_, '\\')) => j += 2,
+            Some((_, '\n')) if !triple => break,
+            Some((_, d)) if *d == c => {
+                if !triple {
+                    j += 1;
+                    break;
+                }
+                if chars.get(j + 1).is_some_and(|(_, d)| *d == c) && chars.get(j + 2).is_some_and(|(_, d)| *d == c) {
+                    j += 3;
+                    break;
+                }
+                j += 1;
+            }
+            Some(_) => j += 1,
+        }
+    }
+    j.min(chars.len())
+}
+
 fn python(text: &str) -> Vec<(Range<usize>, Token)> {
     let chars: Vec<(usize, char)> = text.char_indices().collect();
     let end_of = |i: usize| chars.get(i).map(|(b, _)| *b).unwrap_or(text.len());
@@ -92,28 +118,7 @@ fn python(text: &str) -> Vec<(Range<usize>, Token)> {
             out.push((start..end_of(j), Token::Comment));
             i = j;
         } else if c == '"' || c == '\'' {
-            let triple = chars.get(i + 1).is_some_and(|(_, d)| *d == c) && chars.get(i + 2).is_some_and(|(_, d)| *d == c);
-            let mut j = if triple { i + 3 } else { i + 1 };
-            loop {
-                match chars.get(j) {
-                    None => break,
-                    Some((_, '\\')) => j += 2,
-                    Some((_, '\n')) if !triple => break,
-                    Some((_, d)) if *d == c => {
-                        if !triple {
-                            j += 1;
-                            break;
-                        }
-                        if chars.get(j + 1).is_some_and(|(_, d)| *d == c) && chars.get(j + 2).is_some_and(|(_, d)| *d == c) {
-                            j += 3;
-                            break;
-                        }
-                        j += 1;
-                    }
-                    Some(_) => j += 1,
-                }
-            }
-            let j = j.min(chars.len());
+            let j = python_string_end(&chars, i, c);
             out.push((start..end_of(j), Token::String));
             i = j;
         } else if c.is_ascii_digit() || (c == '.' && chars.get(i + 1).is_some_and(|(_, d)| d.is_ascii_digit())) {
