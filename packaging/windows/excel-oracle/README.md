@@ -26,8 +26,10 @@ Output in `-Out`:
   here.
 - `cases.tsv`: id, formula, expected; keep it with the workbook to regenerate it.
 
-`ev("F", vec![..])` calls in `crates/functions` tests are read from the lines the diff adds. Tests that build a
+`ev("F", vec![..])` calls in `crates/functions` tests are read from the lines the diff adds (other files are ignored). Tests that build a
 workbook (`crates/calc/src/tests.rs`) are not parsed; write their formulas into a cases file.
 
-Excel runs in a child process with a timeout (60 s by default), as a new instance with alerts off and macros disabled;
-only that instance is stopped on a hang.
+Excel runs in a child process with a timeout (60 s by default), as a new instance with alerts off and macros disabled.
+On a hang only that instance is stopped. If startup times out before Excel reports its process id, nothing is stopped
+(the result says so): look for a stray `EXCEL.EXE` started with `/automation`.
+Formulas that call a function reaching outside the workbook, or that name another workbook or a path, are skipped.

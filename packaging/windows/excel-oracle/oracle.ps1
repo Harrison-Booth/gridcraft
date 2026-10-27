@@ -92,6 +92,10 @@ function ConvertFrom-RustString([string]$lit) {
 $denied = '\b(WEBSERVICE|FILTERXML|CALL|REGISTER(\.ID)?|RTD|SQL\.REQUEST|HYPERLINK|EXEC|IMAGE|STOCKHISTORY|CUBE\w+)\s*\('
 function Get-DeniedReason([string]$formula) {
     if ($formula -match $denied) { return "function not evaluated (external I/O): $($Matches[1])" }
+    # A reference into another workbook or a path would read a file; text and error literals may hold '!' or '[' without naming one, so they go first.
+    $outside = [regex]::Replace($formula, '"(?:[^"]|"")*"', '""')
+    $outside = [regex]::Replace($outside, (($errText.Values | ForEach-Object { [regex]::Escape($_) }) -join '|'), '')
+    if ($outside -match "[\[\]!\\']") { return "reference outside the workbook not evaluated: $formula" }
     $null
 }
 
@@ -106,8 +110,8 @@ function ConvertTo-ExcelText([string]$s) { '"' + $s.Replace('"', '""') + '"' }
 # Rust numeric expression -> Excel expression; $null when it holds anything but arithmetic.
 function ConvertTo-ExcelNumber([string]$e) {
     $e = ($e -replace '(\d)_?f64', '$1' -replace 'f64::', '').Trim()
-    if ($e -match '^-?\s*d\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)$') {
-        return "DATE($($Matches[1]),$($Matches[2]),$($Matches[3]))"
+    if ($e -match '^(-?)\s*d\(\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*,\s*(-?[\d.]+)\s*\)$') {
+        return "$($Matches[1])DATE($($Matches[2]),$($Matches[3]),$($Matches[4]))"
     }
     if ($e -match '^[\d.eE+\-*/() ]+$') { return $e }
     $null
@@ -170,6 +174,7 @@ function Read-Diff([string]$path) {
     $cases = @(); $text = New-Object Text.StringBuilder; $file = ''
     $flush = {
         param($file, $src)
+        if ($file -notmatch '^crates/functions/') { return } # only the function tests are documented as read
         $tests = [regex]::Matches($src, '\bfn\s+(\w+)\s*\(')
         foreach ($m in [regex]::Matches($src, '\bev\(\s*"([A-Za-z_][\w.]*)"\s*,\s*vec!\s*\[')) {
             $script:why = $null
@@ -228,6 +233,8 @@ else {
         if ($f.Count -gt 2 -and (ConvertFrom-Cell $f[2]) -match '(?s)^(num|text|err|bool):(.*)$') { $kind, $val = $Matches[1], $Matches[2] }
         # A numeric expectation is evaluated by Excel, so it must be plain arithmetic, like the ones read from a diff.
         $denial = Get-DeniedReason $formula
+        # A line without a formula is skipped with a reason, or the rows of Excel's answers would pair with the wrong cases.
+        if (-not $denial -and -not "$formula".Trim()) { $denial = 'no formula' }
         # A mistyped expectation (nmu:2) must not pass for a call that has none.
         $given = if ($f.Count -gt 2) { ConvertFrom-Cell $f[2] } else { '' }
         if (-not $denial -and $given.Trim() -and $kind -eq 'none') { $denial = "expectation not recognised: $given" }
@@ -262,6 +269,7 @@ $probe = {
         $out = @(); $k = 0; $i = 0
         foreach ($c in $cases) {
             $i++
+            $ws.Cells.Item($i, 1).NumberFormat = '@' # an id that starts with = must stay text
             $ws.Cells.Item($i, 1).Value2 = $c.Id
             $ws.Cells.Item($i, 3).NumberFormat = '@'
             $ws.Cells.Item($i, 3).Value2 = "$($c.Kind):$($c.Expected)"
@@ -282,6 +290,7 @@ $probe = {
                 $cell.Clear()
                 $k++
                 $cell = $arrays.Cells.Item(2, 1 + 40 * ($k - 1))
+                $arrays.Cells.Item(1, 1 + 40 * ($k - 1)).NumberFormat = '@'
                 $arrays.Cells.Item(1, 1 + 40 * ($k - 1)).Value2 = $c.Id
                 try { $cell.Formula2 = $c.Formula } catch { $cell.Formula = $c.Formula }
                 $x.Calculate()
@@ -322,6 +331,7 @@ $probe = {
 }
 
 $xlsx = Join-Path $Out 'oracle.xlsx'
+Remove-Item -LiteralPath $xlsx -Force -ErrorAction SilentlyContinue # never leave an earlier run's workbook beside the new cases
 $state = 'OK'
 if ($todo.Count) {
     $todoFile = Join-Path $Out 'todo.json'; $resultFile = Join-Path $Out 'excel.json'
@@ -332,12 +342,16 @@ if ($todo.Count) {
     $job = Start-Job -ScriptBlock $probe -ArgumentList $todoFile, $resultFile, $local
     $done = Wait-Job $job -Timeout $TimeoutSec
     $lines = @(Receive-Job $job -Keep -ErrorAction SilentlyContinue)
+    $xlPid = ($lines | Where-Object { $_ -like "PID`t*" } | Select-Object -First 1) -replace '^PID\t', ''
+    # Excel goes first: a job blocked in a COM call may not return from Stop-Job.
+    if (-not $done -and $xlPid) { Stop-Process -Id ([int]$xlPid) -Force -ErrorAction SilentlyContinue }
     if (-not $done) { Stop-Job $job }
     Remove-Job $job -Force
-    $xlPid = ($lines | Where-Object { $_ -like "PID`t*" } | Select-Object -First 1) -replace '^PID\t', ''
     if ($xlPid) { Wait-Process -Id ([int]$xlPid) -Timeout 15 -ErrorAction SilentlyContinue; Stop-Process -Id ([int]$xlPid) -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath $todoFile -Force
-    if (Test-Path -LiteralPath $local) { Move-Item -LiteralPath $local -Destination $xlsx -Force }
+    # Only a finished run leaves a workbook: a killed SaveAs can leave a partial file.
+    if ($done -and ($lines | Select-Object -Last 1) -eq 'DONE' -and (Test-Path -LiteralPath $local)) { Move-Item -LiteralPath $local -Destination $xlsx -Force }
+    else { Remove-Item -LiteralPath $local -Force -ErrorAction SilentlyContinue }
     if (-not $done) {
         $state = "TIMEOUT: no answer in $TimeoutSec s"
         # Excel was still starting, so its process id was never reported and nothing is stopped: it may be this run's or someone else's.
