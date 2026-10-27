@@ -523,8 +523,11 @@ impl Host for PassHost<'_> {
             }
         }
         // Spilled values sit between the stored cells (and the formulas just calculated may have
-        // produced some): leave such blocks to `range_values`.
-        if self.spills.keys().any(|a| a.0 == sheet) || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c)) {
+        // produced some): leave such blocks to `range_values`. A one-value result (kept for `C4#`)
+        // fills only its anchor, a formula cell read above, so it doesn't count.
+        if self.spills.iter().any(|(a, arr)| a.0 == sheet && arr.data.len() > 1)
+            || sh.spill.range(range.start..=range.end).any(|(c, _)| range.contains(*c))
+        {
             return false;
         }
         for (c, cell) in sh.cells.iter_range(range) {
