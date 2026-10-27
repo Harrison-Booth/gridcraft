@@ -16,7 +16,8 @@ expectation. Calls that were only context lines in the diff, and tests that buil
 not read: give those as -CaseFile.
 
 Writes into -Out:
-  cases.tsv     id, Excel formula, expected (kind:value) - input for a rerun, and the key to oracle.xlsx
+  cases.tsv     id, Excel formula, expected (kind:value), tab separated with \\ \t \n escapes - input for a rerun,
+                and the key to oracle.xlsx
   results.tsv   id, formula, expected, excel, verdict (MATCH / DIFF / NOEXPECT / SKIP)
   results.md    the same as a table for a PR comment
   oracle.xlsx   saved by Excel: sheet Oracle holds one formula per row (A id, B formula with Excel's cached value,
@@ -92,6 +93,12 @@ $denied = '\b(WEBSERVICE|FILTERXML|CALL|REGISTER(\.ID)?|RTD|SQL\.REQUEST|HYPERLI
 function Get-DeniedReason([string]$formula) {
     if ($formula -match $denied) { return "function not evaluated (external I/O): $($Matches[1])" }
     $null
+}
+
+# A tab or newline inside a case would break the TSV, so fields are escaped (\\ \t \n) and decoded when a cases file is read.
+function ConvertTo-Cell([string]$s) { ($s -replace '\\', '\\' -replace "`t", '\t' -replace "`r?`n", '\n') }
+function ConvertFrom-Cell([string]$s) {
+    [regex]::Replace($s, '\\(.)', { switch ($args[0].Groups[1].Value) { 't' { "`t" } 'n' { "`n" } default { $args[0].Groups[1].Value } } })
 }
 
 function ConvertTo-ExcelText([string]$s) { '"' + $s.Replace('"', '""') + '"' }
@@ -216,14 +223,16 @@ if ($Diff) { $cases = @(Read-Diff (Resolve-Path -LiteralPath $Diff).ProviderPath
 else {
     $cases = @(Get-Content -Encoding UTF8 -LiteralPath $CaseFile | Where-Object { $_ -and -not $_.StartsWith('#') } | ForEach-Object {
         $f = $_ -split "`t", 3
-        $kind, $val = if ($f.Count -gt 2 -and $f[2] -match '^(num|text|err|bool):(.*)$') { $Matches[1], $Matches[2] } else { 'none', '' }
-        $denial = Get-DeniedReason $f[1]
-        [pscustomobject]@{ Id = $f[0]; Formula = $(if ($denial) { $null } else { $f[1] }); Kind = $kind; Expected = $val; Tol = 1e-9; Skip = $denial; Raw = '' }
+        $formula = ConvertFrom-Cell $f[1]
+        $kind, $val = 'none', ''
+        if ($f.Count -gt 2 -and (ConvertFrom-Cell $f[2]) -match '(?s)^(num|text|err|bool):(.*)$') { $kind, $val = $Matches[1], $Matches[2] }
+        # A numeric expectation is evaluated by Excel, so it must be plain arithmetic, like the ones read from a diff.
+        $denial = Get-DeniedReason $formula
+        if (-not $denial -and $kind -eq 'num' -and $null -eq (ConvertTo-ExcelNumber $val)) { $denial = "expected not arithmetic: $val" }
+        [pscustomobject]@{ Id = $f[0]; Formula = $(if ($denial) { $null } else { $formula }); Kind = $kind; Expected = $val; Tol = 1e-9; Skip = $denial; Raw = '' }
     })
 }
 if (-not $cases.Count) { throw 'no cases found' }
-# A tab or newline inside a case would break the TSV; the Excel text literal keeps them, the TSV shows them escaped.
-function ConvertTo-Cell([string]$s) { ($s -replace "`t", '\t' -replace "`r?`n", '\n') }
 $todo = @($cases | Where-Object { $_.Formula })
 
 # ---------------------------------------------------------------- Excel
