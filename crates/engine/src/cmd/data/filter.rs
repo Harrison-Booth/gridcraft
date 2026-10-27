@@ -26,12 +26,22 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
             if cleared {
                 sh.autofilter = None;
                 for r in filtered {
-                    // Rows another table's criteria still hide stay hidden.
-                    if !sh.is_row_filtered(r)
-                        && let Some(info) = sh.rows.get_mut(&r)
-                    {
+                    if let Some(info) = sh.rows.get_mut(&r) {
                         info.hidden = false;
                     }
+                }
+                // Rows another table's criteria hide stay hidden: evaluate each such table's
+                // saved criteria through the live filter, then take the filter off again.
+                let others: Vec<(RangeRef, Vec<(u32, FilterCriterion)>)> =
+                    sh.tables.iter().filter(|t| !t.filter.is_empty()).map(|t| (t.range, t.filter.clone())).collect();
+                for (range, criteria) in others {
+                    if let Some(sh) = cx.wb.sheet_mut(sheet) {
+                        sh.autofilter = Some(AutoFilter { range, criteria });
+                    }
+                    apply_filter(&mut cx.wb, sheet);
+                }
+                if let Some(sh) = cx.wb.sheet_mut(sheet) {
+                    sh.autofilter = None;
                 }
             }
             Ok(Json::Null)
