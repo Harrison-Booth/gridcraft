@@ -792,6 +792,17 @@ impl<'h> Evaluator<'h> {
                     }
                 }
             }
+            "FIELDVALUE" => {
+                if args.len() != 2 {
+                    return err(CellError::Value);
+                }
+                let Some(Value::Text(field)) = self.arg_val(args, 1) else { return err(CellError::Value) };
+                let Ev::R(areas) = self.eval(&args[0]) else { return err(CellError::Value) };
+                let Some(a) = areas.first() else { return err(CellError::Ref) };
+                let record = self.host.workbook().sheet(a.sheet).and_then(|s| s.linked_records.get(&a.range.start));
+                // Excel's #FIELD! has no error value here yet; a missing record or field is #VALUE!.
+                record.and_then(|r| r.field(&field)).map_or(err(CellError::Value), Ev::V)
+            }
             "SHEET" | "SHEETS" => {
                 let wb = self.host.workbook();
                 if args.is_empty() {
@@ -1991,6 +2002,7 @@ fn is_special(n: &str) -> bool {
             | "ISREF"
             | "ISFORMULA"
             | "FORMULATEXT"
+            | "FIELDVALUE"
             | "SHEET"
             | "SHEETS"
             | "OFFSET"
@@ -2029,6 +2041,7 @@ pub const SPECIAL_FUNCTIONS: &[&str] = &[
     "ISREF",
     "ISFORMULA",
     "FORMULATEXT",
+    "FIELDVALUE",
     "SHEET",
     "SHEETS",
     "OFFSET",

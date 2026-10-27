@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use gridcraft_core::{DateSystem, RangeRef};
-use gridcraft_model::{CalcMode, CellPicture, DefinedName, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook};
+use gridcraft_model::{
+    CalcMode, CellPicture, DefinedName, LinkedRecord, PhoneticString, Sheet, ShowObjects, Style, StyleId, StyleTable, Visibility, Workbook,
+};
 
 use crate::package::{Package, Rel};
 use crate::styles::{StylesIn, read_styles};
@@ -30,6 +32,8 @@ pub struct Ctx<'a> {
     pub num_fmts: std::collections::HashMap<u32, String>,
     /// Value metadata blocks, indexed by the worksheet's one-based `vm` attribute.
     pub cell_pictures: Vec<Option<Arc<CellPicture>>>,
+    /// The same blocks, for linked data type records.
+    pub linked_records: Vec<Option<Arc<LinkedRecord>>>,
     /// x14 conditional-format ids of the current sheet's data bars, with the index of the rule in `cond_formats`.
     pub cf_ext_ids: Vec<(String, usize)>,
 }
@@ -112,6 +116,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         next_id: 1,
         num_fmts: Default::default(),
         cell_pictures: vec![],
+        linked_records: vec![],
         cf_ext_ids: vec![],
     };
     let root_rels = cx.pkg.rels("")?;
@@ -137,6 +142,13 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
         Ok(pictures) => pictures,
         Err(error) => {
             cx.warn(format!("cell-picture data could not be read ({error}); scalar fallbacks were retained"));
+            vec![]
+        }
+    };
+    cx.linked_records = match crate::richdata::read_linked(&mut cx, &wb_rels) {
+        Ok(records) => records,
+        Err(error) => {
+            cx.warn(format!("linked data type records could not be read ({error}); their displayed text was retained"));
             vec![]
         }
     };

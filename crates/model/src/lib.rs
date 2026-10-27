@@ -15,7 +15,7 @@ pub mod store;
 pub mod style;
 pub mod workbook;
 
-pub use cell::{Cell, CellPicture, Formula};
+pub use cell::{Cell, CellPicture, Formula, LinkedField, LinkedRecord};
 pub use features::*;
 pub use password::PasswordHash;
 pub use preserved::{Preserved, PreservedPart, PreservedRel, PreservedSheet, PreservedXml};

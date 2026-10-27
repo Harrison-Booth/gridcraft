@@ -6,7 +6,7 @@ use std::sync::Arc;
 use gridcraft_core::{CellRef, RangeRef, Value};
 use serde::{Deserialize, Serialize};
 
-use crate::cell::{Cell, CellPicture};
+use crate::cell::{Cell, CellPicture, LinkedRecord};
 use crate::features::{
     AutoFilter, Chart, Comment, CondFormat, Hyperlink, Image, LineInfo, PivotTable, PrintSettings, Shape, SheetProtection, Slicer, Sparkline, Table,
     Validation,
@@ -63,6 +63,9 @@ pub struct Sheet {
     /// Static pictures are sparse rich content. Ordinary cells carry no picture pointer.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "picture_map")]
     pub cell_pictures: BTreeMap<CellRef, Arc<CellPicture>>,
+    /// Linked data type records (Stocks, Currencies…); the cell's value is the record's display text.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty", with = "picture_map")]
+    pub linked_records: BTreeMap<CellRef, Arc<LinkedRecord>>,
     /// Values spilled by dynamic-array formulas (maintained by calc), keyed by cell.
     #[serde(skip)]
     pub spill: BTreeMap<CellRef, Value>,
@@ -152,6 +155,7 @@ impl Sheet {
             file_id: 0,
             cells: CellStore::new(),
             cell_pictures: BTreeMap::new(),
+            linked_records: BTreeMap::new(),
             spill: BTreeMap::new(),
             spill_ranges: BTreeMap::new(),
             cols: BTreeMap::new(),
@@ -264,15 +268,18 @@ impl Sheet {
     /// Replaces content, removing any picture at this address. Style-only edits use set_style.
     pub fn set_cell(&mut self, c: CellRef, cell: Cell) {
         self.cell_pictures.remove(&c);
+        self.linked_records.remove(&c);
         self.cells.set(c, cell);
     }
     pub fn remove_cell(&mut self, c: CellRef) -> Option<Cell> {
         self.cell_pictures.remove(&c);
+        self.linked_records.remove(&c);
         self.cells.remove(c)
     }
     /// Removes content in a range; returns scalar cells, with pictures removed from the side map.
     pub fn take_cells(&mut self, range: RangeRef) -> Vec<(CellRef, Cell)> {
         self.cell_pictures.retain(|c, _| !range.contains(*c));
+        self.linked_records.retain(|c, _| !range.contains(*c));
         self.cells.take_range(range)
     }
     /// Pictures retain a scalar fallback for calculation and unsupported consumers.
@@ -630,15 +637,14 @@ mod tests {
 
 // CellRef is a struct, so encode the sparse map as entries for JSON as well as other formats.
 mod picture_map {
-    use crate::cell::CellPicture;
     use gridcraft_core::CellRef;
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
     use std::collections::BTreeMap;
     use std::sync::Arc;
-    pub fn serialize<S: Serializer>(map: &BTreeMap<CellRef, Arc<CellPicture>>, serializer: S) -> Result<S::Ok, S::Error> {
+    pub fn serialize<S: Serializer, T: Serialize>(map: &BTreeMap<CellRef, Arc<T>>, serializer: S) -> Result<S::Ok, S::Error> {
         map.iter().collect::<Vec<_>>().serialize(serializer)
     }
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<BTreeMap<CellRef, Arc<CellPicture>>, D::Error> {
-        Ok(Vec::<(CellRef, Arc<CellPicture>)>::deserialize(deserializer)?.into_iter().collect())
+    pub fn deserialize<'de, D: Deserializer<'de>, T: Deserialize<'de>>(deserializer: D) -> Result<BTreeMap<CellRef, Arc<T>>, D::Error> {
+        Ok(Vec::<(CellRef, Arc<T>)>::deserialize(deserializer)?.into_iter().collect())
     }
 }

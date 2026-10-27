@@ -296,6 +296,7 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     // sheetData
     let mut keys: BTreeSet<CellRef> = sheet.cells.iter().map(|(c, _)| c).collect();
     keys.extend(sheet.cell_pictures.keys().copied());
+    keys.extend(sheet.linked_records.keys().copied());
     keys.extend(extra.keys().copied());
     keys.extend(overrides.keys().copied());
     let mut rows: BTreeMap<u32, Vec<CellRef>> = BTreeMap::new();
@@ -340,7 +341,9 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
                 let f = cell?.formula.as_ref()?;
                 (f.array.is_none() && crate::array_formula::needs_array(wb, si, *c, f)).then_some(RangeRef::cell(*c))
             });
-            write_cell(&mut s, *c, cell, sheet.cell_pictures.get(c), ov, ex, array.as_ref(), &sid, out);
+            let linked = sheet.linked_records.get(c).filter(|_| cell.is_some_and(|x| x.formula.is_none()));
+            let rich = sheet.cell_pictures.get(c).map(Rich::Picture).or(linked.map(Rich::Linked));
+            write_cell(&mut s, *c, cell, rich, ov, ex, array.as_ref(), &sid, out);
         }
         s.push_str("</row>");
     }
@@ -664,11 +667,17 @@ pub fn write_sheet(wb: &Workbook, si: usize, selected: bool, out: &mut Out) -> (
     (s, rels)
 }
 
+/// A cell whose content is a rich value, not a scalar.
+enum Rich<'a> {
+    Picture(&'a std::sync::Arc<gridcraft_model::CellPicture>),
+    Linked(&'a std::sync::Arc<gridcraft_model::LinkedRecord>),
+}
+
 fn write_cell(
     s: &mut String,
     c: CellRef,
     cell: Option<&Cell>,
-    picture: Option<&std::sync::Arc<gridcraft_model::CellPicture>>,
+    rich: Option<Rich<'_>>,
     ov: Option<&String>,
     extra: Option<&Value>,
     dynamic: Option<&RangeRef>,
@@ -680,8 +689,11 @@ fn write_cell(
     if style != 0 {
         let _ = write!(s, " s=\"{style}\"");
     }
-    if let Some(picture) = picture {
-        let vm = out.cell_pictures.index(picture);
+    if let Some(rich) = rich {
+        let vm = match rich {
+            Rich::Picture(picture) => out.cell_pictures.index(picture),
+            Rich::Linked(record) => out.cell_pictures.index_linked(record),
+        };
         let _ = write!(s, " t=\"e\" vm=\"{vm}\"><v>#VALUE!</v></c>");
         return;
     }
