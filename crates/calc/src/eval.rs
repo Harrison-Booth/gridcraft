@@ -2115,7 +2115,6 @@ mod fuel_tests {
     }
 
     #[test]
-    #[test]
     fn array_cells_spend_a_per_formula_budget() {
         let run = |cells: u64, src: &str| {
             let mut host = Empty { wb: Workbook::default() };
