@@ -26,7 +26,10 @@ Writes into -Out:
 
 Excel is a temporary workbook in an instance this script started, DisplayAlerts off, macros disabled; it is closed
 without saving over anything but oracle.xlsx and quit. A hang past -TimeoutSec kills only that instance (found by
-its window's process id). Exit code 1 when any case is DIFF or the run fails.
+its window's process id). Verdicts: MATCH, DIFF, NOEXPECT (no assertion around the call), SKIP (an argument or
+expectation not read, or a function that is never evaluated; the reason is in the Excel column) and FAIL (Excel timed
+out or failed). Worksheet functions that reach outside the workbook (WEBSERVICE, CALL, RTD, IMAGE...) are never
+evaluated: a diff or cases file is untrusted input. Exit code 1 when any case is DIFF or the run fails.
 #>
 param(
     [string]$Diff,
@@ -83,6 +86,14 @@ function ConvertFrom-RustString([string]$lit) {
     })
 }
 
+# Worksheet functions that reach outside the workbook (network, code, files); a PR diff or cases file is untrusted
+# input and DisplayAlerts / AutomationSecurity do not stop worksheet functions, so these are never evaluated.
+$denied = '\b(WEBSERVICE|FILTERXML|CALL|REGISTER(\.ID)?|RTD|SQL\.REQUEST|HYPERLINK|EXEC|IMAGE|STOCKHISTORY|CUBE\w+)\s*\('
+function Get-DeniedReason([string]$formula) {
+    if ($formula -match $denied) { return "function not evaluated (external I/O): $($Matches[1])" }
+    $null
+}
+
 function ConvertTo-ExcelText([string]$s) { '"' + $s.Replace('"', '""') + '"' }
 
 # Rust numeric expression -> Excel expression; $null when it holds anything but arithmetic.
@@ -125,7 +136,14 @@ function Get-Expected([string]$wrapper, [string[]]$rest) {
             $num = ConvertTo-ExcelNumber $x
             if ($null -eq $num) { return @{ Kind = 'skip'; Value = "expected not arithmetic: $x"; Tol = 0 } }
             $tol = 1e-9
-            if ($wrapper -eq 'close_tol' -and $rest.Count -gt 1) { $tol = [double]::Parse(($rest[1] -replace '_', ''), $inv) }
+            if ($wrapper -eq 'close_tol' -and $rest.Count -gt 1) {
+                $t = ConvertTo-ExcelNumber $rest[1]
+                $parsed = 0.0
+                if ($null -eq $t -or -not [double]::TryParse($t, [Globalization.NumberStyles]::Float, $inv, [ref]$parsed)) {
+                    return @{ Kind = 'skip'; Value = "tolerance not a literal: $($rest[1])"; Tol = 0 }
+                }
+                $tol = $parsed
+            }
             return @{ Kind = 'num'; Value = $num; Tol = $tol }
         }
         '^is_text$' { $s = ConvertFrom-RustString $x; if ($null -ne $s) { return @{ Kind = 'text'; Value = $s; Tol = 0 } } }
@@ -170,6 +188,7 @@ function Read-Diff([string]$path) {
             $exp = Get-Expected $wrapper $rest
             $formula = $null
             if (-not $script:why -and $exp.Kind -ne 'skip') { $formula = "=$($name.ToUpper())($($converted -join ','))" }
+            if ($formula -and ($denial = Get-DeniedReason $formula)) { $formula = $null; $script:why = $denial }
             $skip = if ($script:why) { $script:why } elseif ($exp.Kind -eq 'skip') { $exp.Value } else { $null }
             $script:found += , [pscustomobject]@{ Id = $id; Formula = $formula; Kind = $exp.Kind; Expected = $exp.Value; Tol = $exp.Tol; Skip = $skip; Raw = $src.Substring($m.Index, $callClose - $m.Index + 1) }
         }
@@ -193,12 +212,13 @@ function Read-Diff([string]$path) {
 
 New-Item -ItemType Directory -Path $Out -Force | Out-Null
 $Out = (Resolve-Path -LiteralPath $Out).ProviderPath
-if ($Diff) { $cases = @(Read-Diff $Diff) }
+if ($Diff) { $cases = @(Read-Diff (Resolve-Path -LiteralPath $Diff).ProviderPath) }
 else {
     $cases = @(Get-Content -Encoding UTF8 -LiteralPath $CaseFile | Where-Object { $_ -and -not $_.StartsWith('#') } | ForEach-Object {
         $f = $_ -split "`t", 3
         $kind, $val = if ($f.Count -gt 2 -and $f[2] -match '^(num|text|err|bool):(.*)$') { $Matches[1], $Matches[2] } else { 'none', '' }
-        [pscustomobject]@{ Id = $f[0]; Formula = $f[1]; Kind = $kind; Expected = $val; Tol = 1e-9; Skip = $null; Raw = '' }
+        $denial = Get-DeniedReason $f[1]
+        [pscustomobject]@{ Id = $f[0]; Formula = $(if ($denial) { $null } else { $f[1] }); Kind = $kind; Expected = $val; Tol = 1e-9; Skip = $denial; Raw = '' }
     })
 }
 if (-not $cases.Count) { throw 'no cases found' }
@@ -232,9 +252,18 @@ $probe = {
             $ws.Cells.Item($i, 3).Value2 = "$($c.Kind):$($c.Expected)"
             $cell = $ws.Cells.Item($i, 2)
             $cell.NumberFormat = 'General'
-            try { $cell.Formula2 = $c.Formula } catch { $cell.Formula = $c.Formula }
+            $rejected = $null
+            # Excel refuses some formulas outright (wrong argument count): that is its answer for the case, not a failed run.
+            try { $cell.Formula2 = $c.Formula } catch { try { $cell.Formula = $c.Formula } catch { $rejected = $_.Exception.Message -replace '\s+', ' ' } }
+            if ($rejected) {
+                $out += [pscustomobject]@{ Id = $c.Id; Type = 'rejected'; Excel = "formula rejected: $rejected"; Expected = $null }
+                continue
+            }
             $x.Calculate()
-            if ($cell.Text -eq '#SPILL!') {
+            # A multi-cell result is moved before the next row is written, or that row would block its spill.
+            $multi = $false
+            try { $multi = $cell.HasSpill -and $cell.SpillingToRange.Cells.Count -gt 1 } catch {}
+            if ($cell.Text -eq '#SPILL!' -or $multi) {
                 $cell.Clear()
                 $k++
                 $cell = $arrays.Cells.Item(2, 1 + 40 * ($k - 1))
@@ -302,7 +331,7 @@ if ($todo.Count) {
 
 # Results come back in case order; pair by position so two cases in one test (same id) stay apart.
 # Windows PowerShell 5.1 hands a JSON array back as one object, so it is enumerated explicitly.
-$excelRows = @(if ($state -eq 'OK') { $parsed = ConvertFrom-Json (Get-Content -Raw -LiteralPath (Join-Path $Out 'excel.json')); foreach ($r in $parsed) { $r } })
+$excelRows = @(if ($state -eq 'OK' -and $todo.Count) { $parsed = ConvertFrom-Json (Get-Content -Raw -LiteralPath (Join-Path $Out 'excel.json')); foreach ($r in $parsed) { $r } })
 $rows = @(); $j = 0
 foreach ($c in $cases) {
     $excel = ''; $verdict = 'SKIP'; $exp = ConvertTo-Cell "$($c.Kind):$($c.Expected)"

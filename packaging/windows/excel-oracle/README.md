@@ -15,8 +15,11 @@ From WSL: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File <path>\oracle
 
 Output in `-Out`:
 
-- `results.md` / `results.tsv`: per case `MATCH`, `DIFF`, `NOEXPECT` (no assertion around the call) or `SKIP` (an
-  argument or expectation the script does not read; the reason is in the Excel column). Exit code 1 on any `DIFF`.
+- `results.md` / `results.tsv`: per case `MATCH`, `DIFF`, `NOEXPECT` (no assertion around the call), `SKIP` (an
+  argument or expectation the script does not read, or a function that reaches outside the workbook such as
+  `WEBSERVICE`, which is never evaluated; the reason is in the Excel column) or `FAIL` (Excel timed out or failed).
+  A formula Excel refuses (wrong argument count) is Excel's answer for that case and shows as `formula rejected`.
+  Exit code 1 on any `DIFF` or a failed Excel run.
 - `oracle.xlsx`: saved by Excel, one formula per row on sheet `Oracle` (id, formula with Excel's cached value,
   expected); array results spill on sheet `Arrays`. This is the shape `gridcraft-cli check` takes as oracle (formula
   cells with the producer's cached values), so it is what the corpus repo holds. It is Excel output: never commit it
