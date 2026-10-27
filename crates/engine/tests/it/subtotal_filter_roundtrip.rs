@@ -164,3 +164,26 @@ fn a_sheet_filter_from_outside_a_table_leaves_the_table_out() {
     assert!(s.execute("data.filter", json!({"range":"A1:C8"})).is_err());
     assert!(wb(&s).active().unwrap().autofilter.is_none());
 }
+
+#[test]
+fn turning_a_table_filter_off_keeps_rows_another_table_still_hides() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range":"A1","values":[["K","V"],["k1",1],["k2",2],["k3",3],["k4",4],["k5",5]]})).unwrap();
+    s.execute("range.setValues", json!({"range":"D1","values":[["X","Y"],["x1",1],["x2",2],["x3",3],["x4",4],["x5",5]]})).unwrap();
+    s.execute("insert.table", json!({"range":"A1:B6","header":true})).unwrap();
+    s.execute("insert.table", json!({"range":"D1:E6","header":true})).unwrap();
+    // The second table's criteria are saved with it, so both tables hold a filter after reopening.
+    s.execute("selection.set", json!({"cell":"D2"})).unwrap();
+    s.execute("data.filterBy", json!({"column":"D","values":["x1","x2"]})).unwrap();
+    let mut s2 = Session::new();
+    s2.add_document(gridcraft_engine::DocState::new(reopened(wb(&s)), None, "t".into(), gridcraft_engine::Trust::FromFile));
+    s2.execute("selection.set", json!({"cell":"A2"})).unwrap();
+    s2.execute("data.filterBy", json!({"column":"A","values":["k1"]})).unwrap();
+    s2.execute("data.filter", json!({})).unwrap();
+    let sh = wb(&s2).active().unwrap();
+    assert!(!sh.is_row_hidden(2), "only the first table hid row 3");
+    for row in 3..6 {
+        assert!(sh.is_row_hidden(row), "row {} is still filtered out of the second table", row + 1);
+    }
+}

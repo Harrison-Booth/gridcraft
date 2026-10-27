@@ -26,7 +26,10 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
             if cleared {
                 sh.autofilter = None;
                 for r in filtered {
-                    if let Some(info) = sh.rows.get_mut(&r) {
+                    // Rows another table's criteria still hide stay hidden.
+                    if !sh.is_row_filtered(r)
+                        && let Some(info) = sh.rows.get_mut(&r)
+                    {
                         info.hidden = false;
                     }
                 }
