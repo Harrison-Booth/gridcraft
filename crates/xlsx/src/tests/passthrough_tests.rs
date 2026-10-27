@@ -1420,6 +1420,18 @@ fn pivot_tables_naming_their_cache_by_id_go_with_a_dropped_cache() {
 }
 
 #[test]
+fn pivot_tables_naming_their_cache_by_id_keep_it() {
+    let (wb, _) = read_xlsx(&conn_pivot_package(ConnPkg { table_rels: false, ..CONN_PKG })).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    for sheet in ["Report", "More"] {
+        assert_eq!(written_pivot_tables(&u, sheet).len(), 1, "{sheet}");
+    }
+    let caches = written_pivot_caches(&u);
+    assert_eq!(caches.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["3", "4"], "{caches:?}");
+}
+
+#[test]
 fn connection_pivot_tables_need_their_connections() {
     // No connections part: the caches name connections that aren't there.
     let (none, rep) = read_xlsx(&conn_pivot_package(ConnPkg { connections: false, ..CONN_PKG })).unwrap();

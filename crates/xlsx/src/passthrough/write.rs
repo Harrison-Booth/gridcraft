@@ -379,14 +379,29 @@ pub fn write_workbook(wb: &Workbook, wb_rels: &mut Rels, out: &mut Out) -> Workb
     let (live, dropped): (Vec<&PreservedSheet>, Vec<&PreservedSheet>) = p.sheets.iter().partition(|s| chart_sheet_usable(wb, p, s));
     let root_of = |s: &PreservedSheet| p.rels.iter().find(|r| r.id == s.rel_id);
     // Pivot caches no kept PivotTable of a sheet uses any more (their sheets were deleted).
-    let used_caches: HashSet<String> = wb
-        .sheets
-        .iter()
-        .filter_map(|s| s.preserved.as_deref())
-        .flat_map(|q| q.parts.iter().flat_map(|part| part.rels.iter()))
+    let sheet_parts = || wb.sheets.iter().filter_map(|s| s.preserved.as_deref()).flat_map(|q| q.parts.iter());
+    let mut used_caches: HashSet<String> = sheet_parts()
+        .flat_map(|part| part.rels.iter())
         .filter(|r| !r.external && is_kind(r, &["pivotCacheDefinition"]))
         .map(|r| normalize(&r.target))
         .collect();
+    // A PivotTable can name its cache only by the workbook's `cacheId`.
+    let cache_of_id: HashMap<u32, String> = p
+        .elements
+        .iter()
+        .filter(|e| e.slot == "pivotCache")
+        .filter_map(|e| {
+            let x = xml::parse(e.xml.as_bytes()).ok()?;
+            let rel = p.rels.iter().find(|r| Some(r.id.as_str()) == x.attr("id"))?;
+            Some((x.attr_u32("cacheId")?, normalize(&rel.target)))
+        })
+        .collect();
+    used_caches.extend(
+        sheet_parts()
+            .filter(|part| part.content_type == CT_PIVOT_TABLE)
+            .filter_map(|part| xml::parse(&part.data).ok()?.attr_u32("cacheId"))
+            .filter_map(|id| cache_of_id.get(&id).cloned()),
+    );
     let unused_caches: Vec<&PreservedRel> =
         p.rels.iter().filter(|r| !r.external && is_kind(r, &["pivotCacheDefinition"]) && !used_caches.contains(&normalize(&r.target))).collect();
     let mut dropped_ids: HashSet<&str> = dropped.iter().map(|s| s.rel_id.as_str()).collect();
