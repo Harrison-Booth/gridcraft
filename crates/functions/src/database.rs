@@ -67,7 +67,7 @@ fn cell_criterion(v: &Value) -> Option<Criterion> {
 }
 
 /// Rows (1-based within the database, excluding the header) of matching records.
-fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> Vec<usize> {
+fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> R<Vec<usize>> {
     // Per criteria row: its index and a list of (criteria column, database column or None when
     // the label is unknown, criterion).
     let mut rows: Vec<(usize, Vec<(usize, Option<usize>, Criterion)>)> = Vec::new();
@@ -86,7 +86,8 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> Vec<usize> {
         rows.push((r, conds));
     }
     let all_match = rows.is_empty();
-    (1..db.rows)
+    let mut budget_gone = false;
+    let records = (1..db.rows)
         .filter(|&rec| {
             all_match
                 || rows.iter().any(|(r, conds)| {
@@ -94,11 +95,19 @@ fn matching_records(db: &Array, crit: &Array, ctx: &mut dyn Ctx) -> Vec<usize> {
                         Some(f) => cr.matches(db.get(rec, *f).unwrap_or(&Value::Empty)),
                         // Under a label that names no field, only a formula (a computed
                         // criterion) can hold.
-                        None => ctx.computed_criterion(*r, *c, db, rec).unwrap_or(false),
+                        None => match ctx.computed_criterion(*r, *c, db, rec) {
+                            Some(Ok(b)) => b,
+                            Some(Err(_)) => {
+                                budget_gone = true;
+                                false
+                            }
+                            None => false,
+                        },
                     })
                 })
         })
-        .collect()
+        .collect();
+    if budget_gone { Err(CellError::Calc) } else { Ok(records) }
 }
 
 struct Selection<'a> {
@@ -119,7 +128,7 @@ fn select<'a>(a: &'a [Arg], ctx: &mut dyn Ctx) -> R<Selection<'a>> {
     let db = as_array(dbv);
     let crit = as_array(critv);
     let field = field_index(&db, a)?;
-    let records = matching_records(&db, &crit, ctx);
+    let records = matching_records(&db, &crit, ctx)?;
     Ok(Selection { db, field, records })
 }
 
@@ -346,6 +355,33 @@ mod tests {
         close(d("DCOUNT", empty()), 3.0);
         is_err(d("DSUM", t("Nope")), CellError::Value);
         is_err(d("DSUM", n(9.0)), CellError::Value);
+    }
+
+    /// A host whose computed criteria have run out of cell budget.
+    struct SpentCtx;
+    impl crate::Ctx for SpentCtx {
+        fn date_system(&self) -> gridcraft_core::DateSystem {
+            gridcraft_core::DateSystem::D1900
+        }
+        fn now_serial(&self) -> f64 {
+            0.0
+        }
+        fn random(&mut self) -> f64 {
+            0.0
+        }
+        fn computed_criterion(&mut self, _: usize, _: usize, _: &gridcraft_core::Array, _: usize) -> Option<Result<bool, CellError>> {
+            Some(Err(CellError::Calc))
+        }
+    }
+
+    #[test]
+    fn computed_criterion_out_of_budget_fails_the_function() {
+        let crit = arr(vec![vec![tv("Formula")], vec![tv("=x")]]);
+        for f in ["DSUM", "DCOUNT", "DCOUNTA", "DGET"] {
+            let spec = crate::lookup(f).unwrap_or_else(|| panic!("{f} not registered"));
+            let r = crate::call(spec, &[rf(db()), t("Age"), rf(crit.clone())], &mut SpentCtx);
+            is_err(r, CellError::Calc);
+        }
     }
 
     #[test]

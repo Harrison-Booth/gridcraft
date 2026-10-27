@@ -159,7 +159,7 @@ impl Ctx for FnCtx<'_, '_> {
     /// outside both the database and the criteria cell's own precedents (say `=G2<H2` with column H
     /// outside the database) is read here but not tracked, so editing that cell doesn't recalculate
     /// the D-function until something else does.
-    fn computed_criterion(&mut self, row: usize, col: usize, db: &Array, record: usize) -> Option<bool> {
+    fn computed_criterion(&mut self, row: usize, col: usize, db: &Array, record: usize) -> Option<Result<bool, CellError>> {
         let area = self.criteria?;
         let at = area.range.start.offset(row as i64, col as i64).filter(|c| area.range.contains(*c))?;
         let expr = self.ev.host.workbook().sheet(area.sheet)?.cell(at)?.formula.as_ref()?.expr_arc()?;
@@ -183,11 +183,15 @@ impl Ctx for FnCtx<'_, '_> {
             fuel: self.ev.fuel,
             cells: self.ev.cells,
         };
-        let v = matches!(ev.value(&shifted).scalar().to_bool(), Ok(true));
+        let v = ev.value(&shifted).scalar().to_bool();
         // The child's spend counts against this cell's budget.
         self.ev.fuel = ev.fuel;
         self.ev.cells = ev.cells;
-        Some(v)
+        // Other errors just fail the criterion, as in Excel.
+        Some(match v {
+            Err(CellError::Calc) => Err(CellError::Calc),
+            v => Ok(matches!(v, Ok(true))),
+        })
     }
     fn has_lambda(&self) -> bool {
         self.lambda.is_some()
