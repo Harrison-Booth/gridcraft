@@ -439,12 +439,12 @@ fn language_switch_renders_the_ribbon_and_persists() {
     for id in ["app.language.set", "app.language.english", "app.language.japanese"] {
         assert!(ids.contains(&id), "engine.commands lists {id}");
     }
-    // A minimal CI image has egui's bundled faces but no Japanese/Korean/Chinese face. Those
+    // A minimal CI image has egui's bundled faces but no Japanese/Korean/Chinese/Vietnamese face. Those
     // catalogs are exercised when the pinned craft-fonts input is present; skipping them here is
     // the documented no-font gap, not a missing-glyph or accessibility opt-out.
     let languages: Vec<Language> = Language::ALL
         .into_iter()
-        .filter(|l| gridcraft_ui_egui::theme::craft_fonts_loaded() || !matches!(l, Language::Ja | Language::Ko | Language::Zh))
+        .filter(|l| gridcraft_ui_egui::theme::craft_fonts_loaded() || !matches!(l, Language::Ja | Language::Ko | Language::Zh | Language::Vi))
         .collect();
     for language in languages {
         h.state_mut().run("app.language.set", json!({"language": language.code()})).unwrap();
@@ -861,8 +861,16 @@ fn column_autocomplete_skips_ambiguous_prefixes_and_numbers() {
 
 #[test]
 fn column_autocomplete_folds_case_beyond_ascii() {
+    // "ẞ" (U+1E9E) has no glyph in egui's bundled faces; without craft-fonts the strict harness would panic drawing it.
+    let fonts = gridcraft_ui_egui::theme::craft_fonts_loaded();
+    if !fonts {
+        eprintln!("skipping the \"ẞ\" case: CRAFT_FONTS_DIR is not set, so no installed font has the glyph");
+    }
     let mut s = blank();
-    s.execute("range.setValues", json!({"range": "A1", "values": [["Ébène"], ["Ébano"], ["ébano"], ["STRAẞENBAHN"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Ébène"], ["Ébano"], ["ébano"]]})).unwrap();
+    if fonts {
+        s.execute("range.setValues", json!({"range": "A4", "values": [["STRAẞENBAHN"]]})).unwrap();
+    }
     s.execute("selection.set", json!({"cell": "A5"})).unwrap();
     let mut h = harness(s);
     text(&mut h, "éba");
@@ -871,6 +879,9 @@ fn column_autocomplete_folds_case_beyond_ascii() {
     text(&mut h, "éb");
     assert_eq!(completion(&h).1, None, "Ébène and Ébano differ past the prefix");
     h.state_mut().cancel_edit();
+    if !fonts {
+        return;
+    }
     // "ß" is two bytes, "ẞ" three: the proposed rest starts after the fifth character, not the sixth byte.
     text(&mut h, "straß");
     assert_eq!(completion(&h), ("straß".into(), Some("STRAẞENBAHN".into())));
