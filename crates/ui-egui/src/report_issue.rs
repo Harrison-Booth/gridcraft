@@ -6,11 +6,11 @@ use serde_json::json;
 
 use crate::SheetApp;
 
-/// The new-issue address. `version` and `environment` are the bug form's field ids, and `body`
+/// The new-issue address. `version` and `environment` (`os` too, for the other open form) are the bug form's field ids, and `body`
 /// fills a blank issue where no form exists. The document is described by its file extension
 /// alone, never a name, path or contents. Plain strings in, so it can move to a shared crate.
 pub(crate) fn issue_url(version: &str, os: &str, document_ext: Option<&str>) -> String {
-    let short = |s: &str| s.chars().filter(|c| !c.is_control()).take(24).collect::<String>();
+    let short = |s: &str| s.chars().filter(|c| !c.is_control()).take(16).collect::<String>();
     let ext: String = document_ext.unwrap_or("none").chars().filter(char::is_ascii_alphanumeric).take(8).collect();
     let (version, environment) = (short(version), format!("{}; document: {ext}", short(os)));
     let encode = |s: &str| {
@@ -19,7 +19,7 @@ pub(crate) fn issue_url(version: &str, os: &str, document_ext: Option<&str>) -> 
     };
     let body = format!("GridCraft {version}\n{environment}");
     let (v, e, b) = (encode(&version), encode(&environment), encode(&body));
-    format!("https://github.com/storytold/gridcraft/issues/new?template=bug_report.yml&version={v}&environment={e}&body={b}")
+    format!("https://github.com/storytold/gridcraft/issues/new?template=bug_report.yml&version={v}&environment={e}&os={e}&body={b}")
 }
 
 /// `help.reportIssue`: opens the issue form, or shows the address to copy when no browser opened.
@@ -44,9 +44,9 @@ mod tests {
     #[test]
     fn the_address_carries_version_and_system_only_and_stays_short() {
         let url = issue_url("0.1.0", "Linux (x86_64)", Some("xlsx"));
-        assert!(url.contains("&version=0.1.0&environment=Linux%20%28x86_64%29%3B%20document%3A%20xlsx&body=GridCraft%200.1.0%0A"), "{url}");
+        assert!(url.contains("&version=0.1.0&environment=Linux%20%28x86_64%29%3B%20document%3A%20xlsx&os=Linux%20%28x86_64%29%3B%20document%3A%20xlsx&body=GridCraft%200.1.0%0A"), "{url}");
         // Hostile text and an unusual extension can't add a parameter, leak, or grow the address.
-        let url = issue_url(&"&é#".repeat(99), "a=b\n", Some("x.y/Z"));
+        let url = issue_url(&"\u{1F600}".repeat(99), &"&#=".repeat(99), Some("x.y/Z"));
         assert_eq!(url.matches('?').count() + url.matches('#').count(), 1, "{url}");
         assert!(url.is_ascii() && url.contains("document%3A%20xyZ") && url.len() < 2048, "{} bytes: {url}", url.len());
         assert!(issue_url("1", "w", None).contains("document%3A%20none"));
