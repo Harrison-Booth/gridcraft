@@ -83,7 +83,7 @@ pub fn chart_series(sheet: &str, origin: CellRef, out: &Output) -> Vec<Series> {
 }
 
 /// Error bars stay with the series of the same name; duplicate names pair up in order, each old series used once.
-fn carry_error_bars(old: &[Series], new: &mut [Series]) {
+pub(super) fn carry_error_bars(old: &[Series], new: &mut [Series]) {
     let mut used = vec![false; old.len()];
     for s in new {
         let hit = old.iter().enumerate().find(|(i, o)| !used[*i] && o.name == s.name).map(|(i, _)| i);

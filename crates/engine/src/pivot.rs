@@ -330,6 +330,7 @@ mod fit_tests {
 
 #[cfg(test)]
 mod carry_error_bars_tests {
+    use super::charts::carry_error_bars;
     use super::*;
 
     fn series(name: &str, bars: usize) -> Series {
