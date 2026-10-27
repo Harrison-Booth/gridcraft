@@ -187,3 +187,34 @@ fn turning_a_table_filter_off_keeps_rows_another_table_still_hides() {
         assert!(sh.is_row_hidden(row), "row {} is still filtered out of the second table", row + 1);
     }
 }
+
+#[test]
+fn turning_a_table_filter_off_hides_the_rows_of_all_other_filtered_tables() {
+    let mut s = Session::new();
+    s.new_workbook();
+    for (col, keys) in [("A", "k"), ("D", "x"), ("G", "z")] {
+        let rows: Vec<Json> = (1..=5).map(|n| json!([format!("{keys}{n}"), n])).collect();
+        s.execute("range.setValues", json!({"range": format!("{col}1"), "values": [json!(["K", "V"])].into_iter().chain(rows).collect::<Vec<_>>()}))
+            .unwrap();
+    }
+    for range in ["A1:B6", "D1:E6", "G1:H6"] {
+        s.execute("insert.table", json!({"range": range, "header": true})).unwrap();
+    }
+    // Each filtered table's criteria are saved with it: reopening leaves both holding a filter.
+    s.execute("selection.set", json!({"cell":"D2"})).unwrap();
+    s.execute("data.filterBy", json!({"column":"D","values":["x1","x2"]})).unwrap();
+    let mut s2 = Session::new();
+    s2.add_document(gridcraft_engine::DocState::new(reopened(wb(&s)), None, "t".into(), gridcraft_engine::Trust::FromFile));
+    s2.execute("selection.set", json!({"cell":"G2"})).unwrap();
+    s2.execute("data.filterBy", json!({"column":"G","values":["z1","z3"]})).unwrap();
+    let mut s3 = Session::new();
+    s3.add_document(gridcraft_engine::DocState::new(reopened(wb(&s2)), None, "t".into(), gridcraft_engine::Trust::FromFile));
+    s3.execute("selection.set", json!({"cell":"A2"})).unwrap();
+    s3.execute("data.filterBy", json!({"column":"A","values":["k1"]})).unwrap();
+    s3.execute("data.filter", json!({})).unwrap();
+    let sh = wb(&s3).active().unwrap();
+    assert!(!sh.is_row_hidden(1));
+    for row in 2..6 {
+        assert!(sh.is_row_hidden(row), "row {} is excluded by one of the two other tables", row + 1);
+    }
+}

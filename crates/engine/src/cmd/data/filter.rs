@@ -30,19 +30,28 @@ pub(super) fn toggle_filter(s: &mut Session, p: &Json) -> Result<Json> {
                         info.hidden = false;
                     }
                 }
-                // Rows another table's criteria hide stay hidden: evaluate each such table's
-                // saved criteria through the live filter, then take the filter off again.
+                // Rows another table's criteria hide stay hidden: evaluate each such table's saved
+                // criteria through the live filter, then hide the union once (a later table would
+                // unhide what an earlier one excluded) and take the filter off again.
                 let others: Vec<(RangeRef, Vec<(u32, FilterCriterion)>)> =
                     sh.tables.iter().filter(|t| !t.filter.is_empty()).map(|t| (t.range, t.filter.clone())).collect();
+                let mut excluded: std::collections::HashSet<u32> = std::collections::HashSet::new();
                 for (range, criteria) in others {
                     if let Some(sh) = cx.wb.sheet_mut(sheet) {
                         sh.autofilter = Some(AutoFilter { range, criteria });
                     }
                     apply_filter(&mut cx.wb, sheet);
+                    if let Some(sh) = cx.wb.sheet(sheet) {
+                        excluded.extend((range.start.row.saturating_add(1)..=range.end.row).filter(|r| sh.is_row_hidden(*r)));
+                    }
                 }
                 if let Some(sh) = cx.wb.sheet_mut(sheet) {
                     sh.autofilter = None;
+                    for r in excluded {
+                        sh.rows.entry(r).or_default().hidden = true;
+                    }
                 }
+                cx.structural = true;
             }
             Ok(Json::Null)
         });
