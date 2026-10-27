@@ -228,6 +228,9 @@ else {
         if ($f.Count -gt 2 -and (ConvertFrom-Cell $f[2]) -match '(?s)^(num|text|err|bool):(.*)$') { $kind, $val = $Matches[1], $Matches[2] }
         # A numeric expectation is evaluated by Excel, so it must be plain arithmetic, like the ones read from a diff.
         $denial = Get-DeniedReason $formula
+        # A mistyped expectation (nmu:2) must not pass for a call that has none.
+        $given = if ($f.Count -gt 2) { ConvertFrom-Cell $f[2] } else { '' }
+        if (-not $denial -and $given.Trim() -and $kind -eq 'none') { $denial = "expectation not recognised: $given" }
         if (-not $denial -and $kind -eq 'num') {
             $norm = ConvertTo-ExcelNumber $val
             if ($null -eq $norm) { $denial = "expected not arithmetic: $val" } else { $val = $norm }
