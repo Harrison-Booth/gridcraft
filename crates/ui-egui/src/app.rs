@@ -372,7 +372,7 @@ mod autosave_gate_tests {
         let path = dir.join("book.xlsx");
         let mut app = dirty_app(&path);
         app.ui.autosave = true;
-        app.grid.last_autosave = 0.0;
+        app.grid.last_autosave = monotonic_ms() - 5000.0;
         frame(&mut app);
         // The user keeps typing while the snapshot is written.
         app.run("cell.set", json!({"cell": "A1", "input": "typed during the save"})).unwrap();
@@ -381,7 +381,7 @@ mod autosave_gate_tests {
         let (saved, _) = gridcraft_engine::io::open_bytes("book.xlsx", &std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved.sheet(0).unwrap().value(cell(0, 0)), gridcraft_engine::core::Value::text("unsaved change"));
         // The next AutoSave writes it.
-        app.grid.last_autosave = 0.0;
+        app.grid.last_autosave = monotonic_ms() - 5000.0;
         frame(&mut app);
         app.finish_pending_autosave();
         assert!(!app.session.active().unwrap().is_dirty());
@@ -395,7 +395,7 @@ mod autosave_gate_tests {
         std::fs::write(dir.join("blocker.txt"), b"not a folder").unwrap();
         let mut app = dirty_app(&dir.join("blocker.txt").join("book.xlsx"));
         app.ui.autosave = true;
-        app.grid.last_autosave = 0.0;
+        app.grid.last_autosave = monotonic_ms() - 5000.0;
         frame(&mut app);
         assert!(app.autosave_job.is_some(), "the save starts on the worker");
         app.finish_pending_autosave();
@@ -416,7 +416,7 @@ mod autosave_gate_tests {
         std::fs::write(dir.join("blocker.txt"), b"not a folder").unwrap();
         let mut app = dirty_app(&dir.join("blocker.txt").join("book.xlsx"));
         app.ui.autosave = true;
-        app.grid.last_autosave = 0.0;
+        app.grid.last_autosave = monotonic_ms() - 5000.0;
         frame(&mut app);
         app.finish_pending_autosave();
         assert_eq!(app.autosave_failures, 1);
@@ -445,7 +445,7 @@ mod autosave_gate_tests {
         let path = dir.join("book.xlsx");
         let mut app = dirty_app(&path);
         app.ui.autosave = true;
-        app.grid.last_autosave = 0.0;
+        app.grid.last_autosave = monotonic_ms() - 5000.0;
         frame(&mut app);
         app.run("cell.set", json!({"cell": "A1", "input": "saved by hand"})).unwrap();
         app.run("file.save", json!({})).unwrap();
