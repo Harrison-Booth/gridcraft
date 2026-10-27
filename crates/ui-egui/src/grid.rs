@@ -853,6 +853,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         interact(app, ui, &resp, &geo, sh, &wb);
     }
     update_cursor(app, ui, &resp, &geo, sh);
+    expose_active_cell(app, ui, resp.id, &wb, sh);
     crate::text_box::show(app, ui, &geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, &geo, sh, &wb);
@@ -2134,6 +2135,23 @@ fn header_edge_cursor(app: &SheetApp, ctx: &egui::Context, pointer: &egui::Point
         Some(at) if hidden => paint_split_cursor(ctx, at, near_col_edge),
         _ => ctx.set_cursor_icon(if near_col_edge { CursorIcon::ResizeColumn } else { CursorIcon::ResizeRow }),
     }
+}
+
+/// The grid is painted, so a screen reader sees one blank node. Give it the active cell: address as
+/// the label, shown text as the value, and the formula (when it isn't hidden) as the description.
+fn expose_active_cell(app: &SheetApp, ui: &egui::Ui, id: egui::Id, wb: &Workbook, sh: &Sheet) {
+    let at = app.session.active().map(|d| d.selection.active).unwrap_or_default();
+    let at = sh.merge_at(at).map(|m| m.start).unwrap_or(at);
+    let (address, shown) = (at.to_string(), gridcraft_engine::display::cell_text(wb, sh, at));
+    let input = crate::formula_bar::active_input(app);
+    ui.ctx().accesskit_node_builder(id, |node| {
+        node.set_role(egui::accesskit::Role::Cell);
+        node.set_label(address);
+        node.set_value(shown);
+        if input.starts_with('=') {
+            node.set_description(input);
+        }
+    });
 }
 
 fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
