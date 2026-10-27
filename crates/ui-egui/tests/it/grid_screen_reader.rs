@@ -1,7 +1,7 @@
 //! The painted grid exposes the active cell to assistive tech: address, value and formula (gap 18).
 
 use egui::accesskit::Role;
-use egui_kittest::kittest::Queryable as _;
+use egui_kittest::kittest::{NodeT as _, Queryable as _};
 use gridcraft_engine::Session;
 use gridcraft_ui_egui::SheetApp;
 use serde_json::json;
