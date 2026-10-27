@@ -193,9 +193,9 @@ fn turning_a_table_filter_off_hides_the_rows_of_all_other_filtered_tables() {
     let mut s = Session::new();
     s.new_workbook();
     for (col, keys) in [("A", "k"), ("D", "x"), ("G", "z")] {
-        let rows: Vec<Json> = (1..=5).map(|n| json!([format!("{keys}{n}"), n])).collect();
-        s.execute("range.setValues", json!({"range": format!("{col}1"), "values": [json!(["K", "V"])].into_iter().chain(rows).collect::<Vec<_>>()}))
-            .unwrap();
+        let mut values = vec![json!(["K", "V"])];
+        values.extend((1..=5).map(|n| json!([format!("{keys}{n}"), n])));
+        s.execute("range.setValues", json!({"range": format!("{col}1"), "values": values})).unwrap();
     }
     for range in ["A1:B6", "D1:E6", "G1:H6"] {
         s.execute("insert.table", json!({"range": range, "header": true})).unwrap();
