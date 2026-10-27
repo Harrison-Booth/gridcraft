@@ -14,7 +14,7 @@ pub struct KeptOut {
     root: Vec<(String, String, bool)>,
     /// Names of the workbook's kept parts, which sheets' kept parts can refer to (the cache of a
     /// kept PivotTable).
-    wb_names: NameMap,
+    pub(super) wb_names: NameMap,
     patches: StylePatches,
 }
 
@@ -54,6 +54,77 @@ impl KeptOut {
             if self.used.insert(cand.to_ascii_lowercase()) || self.n == u32::MAX {
                 return cand;
             }
+        }
+    }
+}
+
+/// Rewrites the values of `dxfId` and `numFmtId` attributes through the maps (ids not in a map
+/// are kept). `None` when the XML is damaged.
+fn map_style_ids(data: &[u8], dxfs: &HashMap<u32, u32>, fmts: &HashMap<u32, u32>) -> Option<Vec<u8>> {
+    let text = xml::to_utf8(data);
+    let mut reader = Reader::from_reader(text.as_ref());
+    let mut writer = Writer::new(Vec::with_capacity(data.len()));
+    let mut buf = vec![];
+    let map = |e: &BytesStart<'_>| -> Option<BytesStart<'static>> {
+        let name = String::from_utf8(e.name().as_ref().to_vec()).ok()?;
+        let mut out = BytesStart::new(name);
+        for a in e.attributes().with_checks(false) {
+            let a = a.ok()?;
+            let k = a.key.local_name();
+            let table = match k.as_ref() {
+                b"dxfId" => Some(dxfs),
+                b"numFmtId" => Some(fmts),
+                _ => None,
+            };
+            let new = table.and_then(|t| std::str::from_utf8(&a.value).ok()?.trim().parse::<u32>().ok().and_then(|id| t.get(&id)));
+            match new {
+                Some(n) => out.push_attribute(Attribute { key: a.key, value: Cow::Owned(n.to_string().into_bytes()) }),
+                None => out.push_attribute(Attribute { key: a.key, value: Cow::Owned(a.value.to_vec()) }),
+            }
+        }
+        Some(out)
+    };
+    loop {
+        match reader.read_event_into(&mut buf).ok()? {
+            Event::Eof => break,
+            Event::Start(e) => writer.write_event(Event::Start(map(&e)?)).ok()?,
+            Event::Empty(e) => writer.write_event(Event::Empty(map(&e)?)).ok()?,
+            ev => writer.write_event(ev).ok()?,
+        }
+        buf.clear();
+    }
+    Some(writer.into_inner())
+}
+
+/// Kept parts whose style ids are renumbered once the styles part is written.
+#[derive(Default)]
+pub struct StylePatches {
+    /// (written part name, source bytes, dxf id map, source number format id → code).
+    pub(super) list: Vec<(String, Arc<[u8]>, HashMap<u32, u32>, Vec<(u32, String)>)>,
+}
+
+impl KeptOut {
+    /// Number format codes kept parts refer to (to be registered in the styles part).
+    pub fn num_fmt_codes(&self) -> Vec<String> {
+        let mut v: Vec<String> = vec![];
+        for (_, _, _, fmts) in &self.patches.list {
+            for (_, code) in fmts {
+                if !v.contains(code) {
+                    v.push(code.clone());
+                }
+            }
+        }
+        v
+    }
+}
+
+/// Renumbers the `dxfId` and `numFmtId` attributes of kept PivotTables and pivot caches to the
+/// written styles part. `fmt_id` maps a number format code to its id there.
+pub fn finish_style_ids(out: &mut Out, fmt_id: &dyn Fn(&str) -> Option<u32>) {
+    for (name, data, dxfs, fmts) in std::mem::take(&mut out.kept.patches.list) {
+        let fmts: HashMap<u32, u32> = fmts.iter().filter_map(|(old, code)| Some((*old, fmt_id(code)?))).collect();
+        if let Some(x) = map_style_ids(&data, &dxfs, &fmts) {
+            out.replace(&name, x);
         }
     }
 }

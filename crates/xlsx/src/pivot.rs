@@ -37,7 +37,7 @@ use crate::xml::{El, esc_attr};
 mod read;
 mod write;
 
-pub use read::{CachesIn, ExternalPivot, KeptSource, SheetPivots, read_pivots};
+pub use read::{CachesIn, ExternalPivot, KeptSource, read_pivots};
 pub use write::PivotWriter;
 
 pub const CT_PIVOT_TABLE: &str = "application/vnd.openxmlformats-officedocument.spreadsheetml.pivotTable+xml";
