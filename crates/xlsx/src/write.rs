@@ -9,7 +9,7 @@ use gridcraft_model::{CalcMode, CalcSettings, PhoneticString, ShowObjects, Style
 
 use crate::package::ZipOut;
 use crate::xml::{esc, esc_attr};
-use crate::{IoError, XlsxKind};
+use crate::{FunctionInfo, IoError, XlsxKind};
 
 pub const NS_MAIN: &str = "http://schemas.openxmlformats.org/spreadsheetml/2006/main";
 pub const NS_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -128,6 +128,10 @@ pub struct Out {
     pub cell_pictures: crate::richdata::PicturesOut,
     /// Kept (pass-through) parts written so far.
     pub kept: crate::passthrough::KeptOut,
+    /// Decides which formulas need dynamic-array metadata.
+    pub functions: FunctionInfo,
+    /// Defined names analysed for implicit intersection, shared by every formula written.
+    pub(crate) names: crate::array_formula::NameCache,
 }
 
 impl Out {
@@ -204,13 +208,13 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
 /// Workbook name written in a PivotChart's link when the file name isn't known.
 const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
 
-pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
-    write_xlsx_named(wb, kind, None)
+pub fn write_xlsx(wb: &Workbook, kind: XlsxKind, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
+    write_xlsx_named(wb, kind, None, functions)
 }
 
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
-pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
+pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>, functions: FunctionInfo) -> Result<Vec<u8>, IoError> {
     if wb.sheets.is_empty() {
         return Err(IoError::Format("a workbook needs at least one sheet".into()));
     }
@@ -237,13 +241,14 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         needs_calc: false,
         cell_pictures: Default::default(),
         kept: Default::default(),
+        functions,
+        names: Default::default(),
     };
     out.kept.reserve_vml_blocks(wb);
     out.default_type("rels", "application/vnd.openxmlformats-package.relationships+xml");
     out.default_type("xml", "application/xml");
 
     // Which sheet is active (must be visible), and at least one visible sheet.
-    let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
     let active = if wb.sheets.get(wb.active_sheet()).is_some_and(|s| s.visibility == Visibility::Visible) {
         wb.active_sheet()
     } else {
@@ -251,92 +256,9 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
     };
 
     let mut wb_rels = Rels::default();
-    // Kept content first: the chart sheets among the worksheets need their relationship ids.
-    let kept = crate::passthrough::write_workbook(wb, &mut wb_rels, &mut out);
-    let mut pivots = crate::pivot::PivotWriter::default();
-    let mut sheets_xml = String::new();
-    let mut ids = crate::passthrough::SheetIds::new(wb, &kept);
-    for (i, sheet) in wb.sheets.iter().enumerate() {
-        sheets_xml.push_str(&kept.sheet_entries(i, false, &mut ids));
-        let (xml, mut rels) = crate::sheet_write::write_sheet(wb, i, i == active, &mut out);
-        pivots.add_sheet(wb, i, &mut out, &mut rels);
-        let name = format!("xl/worksheets/sheet{}.xml", i + 1);
-        out.part(&name, Some(CT_WORKSHEET), xml.into_bytes());
-        if !rels.is_empty() {
-            out.part(&format!("xl/worksheets/_rels/sheet{}.xml.rels", i + 1), None, rels.xml().into_bytes());
-        }
-        let rid = wb_rels.add("worksheet", &format!("worksheets/sheet{}.xml", i + 1));
-        let state = match sheet.visibility {
-            Visibility::Visible => "",
-            _ if !any_visible && i == active => "",
-            Visibility::Hidden => " state=\"hidden\"",
-            Visibility::VeryHidden => " state=\"veryHidden\"",
-        };
-        let name: String = sheet.name.chars().take(31).collect();
-        let sheet_id = ids.take(sheet.file_id);
-        let _ = write!(sheets_xml, "<sheet name=\"{}\" sheetId=\"{sheet_id}\"{state} r:id=\"{rid}\"/>", esc_attr(&name));
-    }
-    sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
+    let (sheets_xml, kept, pivots) = write_sheets(wb, &mut out, active, &mut wb_rels);
 
-    // Defined names, then print areas and titles.
-    let mut names = String::new();
-    let mut seen = std::collections::HashSet::new();
-    for n in &wb.names {
-        if n.name.is_empty() || !seen.insert((n.name.to_ascii_lowercase(), n.scope)) {
-            continue;
-        }
-        if let Some(sc) = n.scope
-            && sc >= wb.sheets.len()
-        {
-            continue;
-        }
-        let _ = write!(names, "<definedName name=\"{}\"", esc_attr(&n.name));
-        if let Some(sc) = n.scope {
-            let _ = write!(names, " localSheetId=\"{}\"", kept.file_index(sc));
-        }
-        if n.hidden {
-            names.push_str(" hidden=\"1\"");
-        }
-        if !n.comment.is_empty() {
-            let _ = write!(names, " comment=\"{}\"", esc_attr(&n.comment));
-        }
-        let _ = write!(names, ">{}</definedName>", esc(&crate::fmla::text_to_file(&n.formula)));
-    }
-    for (i, f) in out.chart_names.iter().enumerate() {
-        let _ = write!(
-            names,
-            "<definedName name=\"{}{i}\" hidden=\"1\">{}</definedName>",
-            crate::chartex::NAME_PREFIX,
-            esc(&crate::fmla::text_to_file(f))
-        );
-    }
-    for (i, sheet) in wb.sheets.iter().enumerate() {
-        let q = quote_sheet(&sheet.name);
-        if let Some(pa) = &sheet.print.print_area {
-            let _ = write!(
-                names,
-                "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"{}\">{}!{}</definedName>",
-                kept.file_index(i),
-                esc(&q),
-                abs_range(pa)
-            );
-        }
-        let mut titles = vec![];
-        if let Some((c0, c1)) = sheet.print.title_cols {
-            titles.push(format!("{q}!{}", abs_range(&RangeRef::cols(c0.min(c1), c0.max(c1)))));
-        }
-        if let Some((r0, r1)) = sheet.print.title_rows {
-            titles.push(format!("{q}!{}", abs_range(&RangeRef::rows(r0.min(r1), r0.max(r1)))));
-        }
-        if !titles.is_empty() {
-            let _ = write!(
-                names,
-                "<definedName name=\"_xlnm.Print_Titles\" localSheetId=\"{}\">{}</definedName>",
-                kept.file_index(i),
-                esc(&titles.join(","))
-            );
-        }
-    }
+    let names = write_defined_names(wb, &kept, &out.chart_names);
 
     let mut w = format!("{XML_DECL}<workbook xmlns=\"{NS_MAIN}\" xmlns:r=\"{NS_REL}\">");
     // A workbook read from a file keeps its <fileVersion> as it was: Excel trusts the saved values
@@ -508,6 +430,107 @@ pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) 
         zip.add(name, data)?;
     }
     zip.finish()
+}
+
+fn write_sheets(
+    wb: &Workbook,
+    out: &mut Out,
+    active: usize,
+    wb_rels: &mut Rels,
+) -> (String, crate::passthrough::WorkbookKept, crate::pivot::PivotWriter) {
+    // Kept content first: the chart sheets among the worksheets need their relationship ids.
+    let kept = crate::passthrough::write_workbook(wb, wb_rels, out);
+    let mut pivots = crate::pivot::PivotWriter::default();
+    let mut sheets_xml = String::new();
+    let any_visible = wb.sheets.iter().any(|s| s.visibility == Visibility::Visible);
+    let mut ids = crate::passthrough::SheetIds::new(wb, &kept);
+    for (i, sheet) in wb.sheets.iter().enumerate() {
+        sheets_xml.push_str(&kept.sheet_entries(i, false, &mut ids));
+        let (xml, mut rels) = crate::sheet_write::write_sheet(wb, i, i == active, out);
+        pivots.add_sheet(wb, i, out, &mut rels);
+        let name = format!("xl/worksheets/sheet{}.xml", i + 1);
+        out.part(&name, Some(CT_WORKSHEET), xml.into_bytes());
+        if !rels.is_empty() {
+            out.part(&format!("xl/worksheets/_rels/sheet{}.xml.rels", i + 1), None, rels.xml().into_bytes());
+        }
+        let rid = wb_rels.add("worksheet", &format!("worksheets/sheet{}.xml", i + 1));
+        let state = match sheet.visibility {
+            Visibility::Visible => "",
+            _ if !any_visible && i == active => "",
+            Visibility::Hidden => " state=\"hidden\"",
+            Visibility::VeryHidden => " state=\"veryHidden\"",
+        };
+        let name: String = sheet.name.chars().take(31).collect();
+        let sheet_id = ids.take(sheet.file_id);
+        let _ = write!(sheets_xml, "<sheet name=\"{}\" sheetId=\"{sheet_id}\"{state} r:id=\"{rid}\"/>", esc_attr(&name));
+    }
+    sheets_xml.push_str(&kept.sheet_entries(wb.sheets.len(), true, &mut ids));
+
+    (sheets_xml, kept, pivots)
+}
+
+fn write_defined_names(wb: &Workbook, kept: &crate::passthrough::WorkbookKept, chart_names: &[String]) -> String {
+    // Defined names, then print areas and titles.
+    let mut names = String::new();
+    let mut seen = std::collections::HashSet::new();
+    for n in &wb.names {
+        if n.name.is_empty() || !seen.insert((n.name.to_ascii_lowercase(), n.scope)) {
+            continue;
+        }
+        if let Some(sc) = n.scope
+            && sc >= wb.sheets.len()
+        {
+            continue;
+        }
+        let _ = write!(names, "<definedName name=\"{}\"", esc_attr(&n.name));
+        if let Some(sc) = n.scope {
+            let _ = write!(names, " localSheetId=\"{}\"", kept.file_index(sc));
+        }
+        if n.hidden {
+            names.push_str(" hidden=\"1\"");
+        }
+        if !n.comment.is_empty() {
+            let _ = write!(names, " comment=\"{}\"", esc_attr(&n.comment));
+        }
+        let _ = write!(names, ">{}</definedName>", esc(&crate::fmla::text_to_file(&n.formula)));
+    }
+    for (i, f) in chart_names.iter().enumerate() {
+        let _ = write!(
+            names,
+            "<definedName name=\"{}{i}\" hidden=\"1\">{}</definedName>",
+            crate::chartex::NAME_PREFIX,
+            esc(&crate::fmla::text_to_file(f))
+        );
+    }
+    for (i, sheet) in wb.sheets.iter().enumerate() {
+        let q = quote_sheet(&sheet.name);
+        if let Some(pa) = &sheet.print.print_area {
+            let _ = write!(
+                names,
+                "<definedName name=\"_xlnm.Print_Area\" localSheetId=\"{}\">{}!{}</definedName>",
+                kept.file_index(i),
+                esc(&q),
+                abs_range(pa)
+            );
+        }
+        let mut titles = vec![];
+        if let Some((c0, c1)) = sheet.print.title_cols {
+            titles.push(format!("{q}!{}", abs_range(&RangeRef::cols(c0.min(c1), c0.max(c1)))));
+        }
+        if let Some((r0, r1)) = sheet.print.title_rows {
+            titles.push(format!("{q}!{}", abs_range(&RangeRef::rows(r0.min(r1), r0.max(r1)))));
+        }
+        if !titles.is_empty() {
+            let _ = write!(
+                names,
+                "<definedName name=\"_xlnm.Print_Titles\" localSheetId=\"{}\">{}</definedName>",
+                kept.file_index(i),
+                esc(&titles.join(","))
+            );
+        }
+    }
+
+    names
 }
 
 /// Cell metadata declaring dynamic-array formulas (MS-XLSX `XLDAPR`).

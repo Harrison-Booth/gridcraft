@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use gridcraft_core::{Array, CellError, CellRef, MAX_COLS, MAX_ROWS, RangeRef, Value, compare};
-use gridcraft_formula::{BinOp, Expr, RefKind, Reference, SheetSel, StructItem, StructRef, UnOp};
+use gridcraft_formula::{BinOp, Expr, Reference, SheetSel, StructItem, StructRef, UnOp};
 use gridcraft_functions::{Arg, Ctx};
 use gridcraft_model::Workbook;
 
@@ -530,6 +530,11 @@ impl<'h> Evaluator<'h> {
         }
         if r.height() == 1 && r.start.col <= self.at.col && self.at.col <= r.end.col {
             return Some(CellRef::new(r.start.row, self.at.col));
+        }
+        // A 2-D range intersects on both the formula's row and column (observed in Excel, on
+        // another sheet too); one that includes the formula's own cell is a circular reference.
+        if r.start.row <= self.at.row && self.at.row <= r.end.row && r.start.col <= self.at.col && self.at.col <= r.end.col {
+            return Some(self.at);
         }
         None
     }

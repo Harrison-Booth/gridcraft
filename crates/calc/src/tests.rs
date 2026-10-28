@@ -1884,6 +1884,54 @@ fn offset_extreme_arguments_return_ref() {
     }
 }
 
+/// `@` intersects a reference with the formula's row (a column range) or column (a row range);
+/// a 2D range both (circular when it includes the formula's cell); a range the formula does not
+/// line up with gives #VALUE!. An array gives its top-left value. Legacy formulas read from files use it where Excel intersects implicitly.
+#[test]
+fn implicit_intersection_operator() {
+    let mut t = T::new();
+    for (at, v) in [("A1", "1"), ("A2", "2"), ("A3", "3"), ("A5", "4"), ("B5", "5"), ("C5", "6")] {
+        t.set(at, v);
+    }
+    t.set("B2", "=TANH(@A1:A3)");
+    t.set("B7", "=TANH(@A5:C5)");
+    t.set("B3", "=@A1:C3");
+    t.set("B9", "=@A1:A3");
+    t.set("E9", "=@A5:C5");
+    t.set("D1", "=@{7,8;9,10}");
+    t.set("D2", "=@A2");
+    t.set("D3", "=SUM(@A1:A3)");
+    assert_eq!(t.num("B2"), 2f64.tanh());
+    assert_eq!(t.num("B7"), 5f64.tanh());
+    for at in ["B9", "E9"] {
+        assert_eq!(t.get(at), Value::Error(CellError::Value), "{at}");
+    }
+    // A 2D range that includes the formula's own cell is a circular reference (Excel shows 0).
+    assert_eq!(t.get("B3"), Value::Error(CellError::Circ));
+    // From another sheet a 2D range intersects on both row and column; outside it is #VALUE!.
+    t.wb.sheets.push(std::sync::Arc::new(gridcraft_model::Sheet::new("Other")));
+    for (at, input) in [("B2", "=@Sheet1!A1:C3"), ("C1", "=@Sheet1!A1:C3"), ("B9", "=@Sheet1!A1:C3"), ("E2", "=@Sheet1!A1:C3")] {
+        t.wb.sheet_mut(1).unwrap().cells.set(c(at), Cell::formula(Formula::new(input)));
+    }
+    t.calc.recalc_all(&mut t.wb);
+    let other = |at: &str| t.wb.sheet(1).unwrap().value(c(at));
+    assert_eq!(other("B2"), Value::Number(2f64.tanh())); // Sheet1!B2
+    assert_eq!(other("C1"), Value::Number(0.0));
+    assert_eq!(other("B9"), Value::Error(CellError::Value));
+    assert_eq!(other("E2"), Value::Error(CellError::Value));
+    assert_eq!(t.num("D1"), 7.0);
+    assert_eq!(t.num("D2"), 2.0);
+    assert_eq!(t.num("D3"), 3.0);
+    // An array result shows its top-left value (T of a reference reads its top-left cell).
+    t.set("A11", "x");
+    t.set("C11", "y");
+    t.set("E1", "=@T(A11:C11)");
+    assert_eq!(t.get("E1"), Value::text("x"));
+    // Without `@` (a dynamic-array formula) the same formula spills.
+    t.set("F1", "=TANH(A1:A3)");
+    assert_eq!((t.num("F1"), t.num("F2"), t.num("F3")), (1f64.tanh(), 2f64.tanh(), 3f64.tanh()));
+}
+
 #[test]
 fn analysis_toolpak_value_params_reject_multi_cell_references() {
     // Excel 365 (observed): EOMONTH, WORKDAY, COUPDAYS, BIN2DEC... give #VALUE! for a reference to more
