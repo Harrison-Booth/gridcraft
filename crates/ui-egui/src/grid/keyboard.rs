@@ -5,6 +5,7 @@ use super::selection::add_mode_move;
 use super::{CellRef, Drag, SelectionMode, Sheet, SheetApp, json};
 
 /// Grid keyboard handling when no text field has focus.
+#[allow(clippy::cognitive_complexity)] // Keyboard input dispatch keeps related key behavior together.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
     if !claim_grid_keyboard(app, ctx, resp) {
         return;
