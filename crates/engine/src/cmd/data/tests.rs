@@ -490,6 +490,11 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     let (mut reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
     gridcraft_calc::Calc::new().recalc_all(&mut reopened);
     check(&reopened);
+    for (cell, expected) in [("I1", vec!["Red", "Green", "Blue"]), ("J1", vec!["Red", "Green", "Blue"]), ("L1", vec!["1", "2", "3"])] {
+        let at = CellRef::parse(cell).unwrap();
+        let dv = reopened.active().unwrap().validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(at))).unwrap();
+        assert_eq!(list_items(&reopened, 0, dv, at), expected, "reopened dropdown items for {cell}");
+    }
     assert_eq!(sheet_xml(&reopened), xml, "a second save writes the same rules");
 }
 
