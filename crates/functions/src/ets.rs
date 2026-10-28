@@ -1103,7 +1103,10 @@ mod tests {
 
     #[test]
     fn single_data_point_is_div0() {
-        // Excel 16: one point gives #DIV/0! in every ETS function; repeated stamps stay #NUM!.
+        // Excel 16: with a single data point, FORECAST.ETS, .CONFINT, .SEASONALITY and .STAT (types 1-8)
+        // give #DIV/0!, while .STAT type 9 gives #NUM!. When every time stamp is the same (no distinct
+        // stamp), FORECAST.ETS and .SEASONALITY give #NUM!; duplicate stamps are accepted when another
+        // distinct stamp exists (see the duplicate-timeline test above).
         let one = || [range(&[1.0]), range(&[1.0])];
         for name in ["FORECAST.ETS", "FORECAST.ETS.CONFINT"] {
             let [y, t] = one();
