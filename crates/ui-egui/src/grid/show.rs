@@ -841,6 +841,7 @@ fn expose_active_cell(
     let picture = sh.cell_pictures.contains_key(&at);
     // A picture cell's text value is its error fallback; the picture's alt text is what it shows.
     let address = at.to_string();
+    let mut text_child = String::new();
     ui.ctx().accesskit_node_builder(id, |node| {
         let (shown, hidden) = if picture {
             (input.clone(), false)
@@ -877,6 +878,7 @@ fn expose_active_cell(
         } else {
             String::new()
         };
+        text_child = shown.clone();
         node.set_role(egui::accesskit::Role::Cell);
         node.set_label(address);
         node.set_value(shown.clone());
@@ -884,7 +886,7 @@ fn expose_active_cell(
             node.set_description(description);
         }
     });
-    if !shown.is_empty() {
+    if !text_child.is_empty() {
         // AT-SPI doesn't expose a string value for table cells; a child label gives it text.
         ui.new_child(
             egui::UiBuilder::new()
@@ -892,7 +894,7 @@ fn expose_active_cell(
                 .max_rect(rect)
                 .accessibility_parent(id)
                 .accessibility_role(egui::accesskit::Role::Label)
-                .accessibility_label(shown),
+                .accessibility_label(text_child),
         );
     }
 }
