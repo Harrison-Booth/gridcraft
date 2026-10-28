@@ -430,6 +430,17 @@ fn linked_text_box_reference_moves_with_inserted_rows() {
 }
 
 #[test]
+fn editing_linked_text_box_clears_link_even_when_text_is_unchanged() {
+    let mut s = s();
+    let id = s.execute("insert.textBox", json!({"at": "C4", "text": "linked"})).unwrap()["shape"].clone();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().shapes[0].text_link = Some("$A$1".into());
+    s.execute("shape.setText", json!({"id": id, "text": "linked"})).unwrap();
+    let shape = &s.doc().unwrap().wb.active().unwrap().shapes[0];
+    assert_eq!(shape.text, "linked");
+    assert_eq!(shape.text_link, None);
+}
+
+#[test]
 fn shape_text_rejects_invalid_targets_and_params() {
     let mut s = s();
     let id = s.execute("insert.textBox", json!({"text": "Original"})).unwrap()["shape"].clone();

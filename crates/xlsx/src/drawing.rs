@@ -264,7 +264,7 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
         _ => ShapeTextAlign::Left,
     });
     f.rtl = ppr.is_some_and(|p| p.flag("rtl", false));
-    let rpr = body.kids("p").flat_map(|p| p.kids("r")).find_map(|r| r.child("rPr"));
+    let rpr = body.kids("p").flat_map(|p| p.children.iter()).filter(|r| r.name == "r" || r.name == "fld").find_map(|r| r.child("rPr"));
     if let Some(r) = rpr {
         // `sz` is in hundredths of a point (100..=400000 in the schema).
         f.font_size = r.attr_f64("sz").filter(|v| v.is_finite()).map(|v| (v / 100.0).clamp(1.0, 4000.0) as f32);
@@ -426,7 +426,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     s.push_str("</a:ln>");
                 }
                 s.push_str("</xdr:spPr>");
-                if !sh.text.is_empty() {
+                if !sh.text.is_empty() || sh.text_link.is_some() {
                     let f = &sh.format;
                     let anchor = match f.anchor {
                         Some(ShapeTextAnchor::Top) => " anchor=\"t\"",
@@ -449,7 +449,7 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                         if sh.text_link.is_some() {
                             let _ = write!(
                                 s,
-                                "<a:p>{ppr}<a:fld id=\"{{00000000-0000-0000-0000-000000000000}}\" type=\"TxLink\"><a:rPr lang=\"en-US\"{rpr_attrs}/><a:pPr/><a:t>{}</a:t></a:fld></a:p>",
+                                "<a:p>{ppr}<a:fld id=\"{{00000000-0000-0000-0000-000000000000}}\" type=\"TxLink\"><a:rPr lang=\"en-US\"{rpr_attrs}>{rpr_body}</a:rPr><a:pPr/><a:t>{}</a:t></a:fld></a:p>",
                                 esc(line)
                             );
                         } else if line.is_empty() {

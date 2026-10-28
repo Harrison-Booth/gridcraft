@@ -609,8 +609,8 @@ fn linked_text_box_survives_an_unrelated_edit_and_roundtrip() {
         anchor: Anchor { cell: at("C3"), width: 120.0, height: 60.0, ..Default::default() },
         fill: Color::Auto,
         line: Color::Auto,
-        text: "hello".into(),
-        format: ShapeFormat::default(),
+        text: String::new(),
+        format: ShapeFormat { bold: true, font_size: Some(14.0), ..ShapeFormat::default() },
     });
     let (mut loaded, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     loaded.sheet_mut(0).unwrap().set_value(at("B2"), Value::text("unrelated edit"));
@@ -618,7 +618,9 @@ fn linked_text_box_survives_an_unrelated_edit_and_roundtrip() {
     let shape = saved.sheet(0).unwrap().shapes.first().unwrap();
     assert_eq!(shape.name.as_deref(), Some("TextBox 1"));
     assert_eq!(shape.text_link.as_deref(), Some("$A$1"));
-    assert_eq!(shape.text, "hello");
+    assert_eq!(shape.text, "");
+    assert!(shape.format.bold);
+    assert_eq!(shape.format.font_size, Some(14.0));
 }
 
 #[test]
