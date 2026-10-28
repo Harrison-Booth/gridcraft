@@ -341,15 +341,13 @@ pub(super) fn percentrank_impl(a: &[Arg], exc: bool) -> R<Value> {
         return Err(CellError::NA);
     }
     let n = s.len() as f64;
+    // Excel: a one-value array ranks its value at 1 for both flavours.
+    if n == 1.0 {
+        return num_val(1.0);
+    }
     let rank_of = |v: f64| -> f64 {
         let less = s.iter().filter(|&&y| y < v).count() as f64;
-        if exc {
-            (less + 1.0) / (n + 1.0)
-        } else if n <= 1.0 {
-            1.0
-        } else {
-            less / (n - 1.0)
-        }
+        if exc { (less + 1.0) / (n + 1.0) } else { less / (n - 1.0) }
     };
     let r = if s.contains(&x) {
         rank_of(x)

@@ -447,6 +447,42 @@ fn discrete() {
 }
 
 #[test]
+fn probability_boundaries_are_num_as_in_excel() {
+    // Excel 16: the closed ends of the probability arguments are #NUM!.
+    is_err(ev("BETA.INV", vec![n(1.0), n(1.0), n(1.0)]), CellError::Num);
+    is_err(ev("BETAINV", vec![n(0.0), n(1.0), n(1.0)]), CellError::Num);
+    is_err(ev("BETA.INV", vec![n(1.0), n(1.0), n(1.0), n(2.0), n(4.0)]), CellError::Num);
+    close(ev("BETA.INV", vec![n(0.5), n(1.0), n(1.0), n(2.0), n(4.0)]), 3.0);
+    for name in ["BINOM.INV", "CRITBINOM"] {
+        is_err(ev(name, vec![n(1.0), n(1.0), n(1.0)]), CellError::Num);
+        is_err(ev(name, vec![n(10.0), n(0.5), n(1.0)]), CellError::Num);
+        is_err(ev(name, vec![n(10.0), n(0.5), n(0.0)]), CellError::Num);
+        is_err(ev(name, vec![n(10.0), n(1.0), n(0.5)]), CellError::Num);
+        is_err(ev(name, vec![n(10.0), n(0.0), n(0.5)]), CellError::Num);
+        close(ev(name, vec![n(0.0), n(0.5), n(0.5)]), 0.0);
+        close(ev(name, vec![n(10.0), n(0.5), n(0.999_999)]), 10.0);
+    }
+    is_err(ev("NEGBINOM.DIST", vec![n(1.0), n(1.0), n(1.0), b(true)]), CellError::Num);
+    is_err(ev("NEGBINOM.DIST", vec![n(1.0), n(1.0), n(1.0), b(false)]), CellError::Num);
+    is_err(ev("NEGBINOM.DIST", vec![n(2.0), n(3.0), n(0.0), b(false)]), CellError::Num);
+    is_err(ev("NEGBINOM.DIST", vec![n(2.0), n(3.0), n(0.0), b(true)]), CellError::Num);
+    is_err(ev("NEGBINOMDIST", vec![n(1.0), n(1.0), n(1.0)]), CellError::Num);
+    close(ev("NEGBINOM.DIST", vec![n(1.0), n(1.0), n(0.5), b(true)]), 0.75);
+    close(ev("NEGBINOMDIST", vec![n(0.0), n(1.0), n(0.5)]), 0.5);
+}
+
+#[test]
+fn percentrank_one_value_array() {
+    // Excel 16: PERCENTRANK.EXC({1},1) and PERCENTRANK.INC({1},1) are both 1.
+    for name in ["PERCENTRANK", "PERCENTRANK.INC", "PERCENTRANK.EXC"] {
+        close(ev(name, vec![c(&[1.0]), n(1.0)]), 1.0);
+        is_err(ev(name, vec![c(&[5.0]), n(4.0)]), CellError::NA);
+    }
+    close_tol(ev("PERCENTRANK.EXC", vec![c(&[1.0, 2.0]), n(1.0)]), 0.333, 1e-12);
+    close(ev("PERCENTRANK.INC", vec![c(&[5.0, 5.0]), n(5.0)]), 0.0);
+}
+
+#[test]
 fn continuous() {
     close_tol(ev("EXPON.DIST", vec![n(0.2), n(10.0), b(true)]), 0.86466472, D7);
     close_tol(ev("EXPON.DIST", vec![n(0.2), n(10.0), b(false)]), 1.35335283, D7);
