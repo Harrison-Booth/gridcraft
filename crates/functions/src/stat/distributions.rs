@@ -437,7 +437,8 @@ pub(super) fn binom_inv(a: &[Arg], _: C) -> R<Value> {
     let n = num(a, 0)?.trunc();
     let p = num(a, 1)?;
     let alpha = num(a, 2)?;
-    if n < 0.0 || !(0.0..=1.0).contains(&p) || !(0.0..=1.0).contains(&alpha) {
+    // Excel rejects the boundaries p and alpha of 0 and 1.
+    if n < 0.0 || !(p > 0.0 && p < 1.0) || !(alpha > 0.0 && alpha < 1.0) {
         return Err(CellError::Num);
     }
     // Smallest k with cdf(k) ≥ alpha, by bisection on the integer k.
@@ -569,16 +570,11 @@ pub(super) fn betadist_legacy(a: &[Arg], _: C) -> R<Value> {
 pub(super) fn beta_inv(a: &[Arg], _: C) -> R<Value> {
     let (p, al, be) = (num(a, 0)?, num(a, 1)?, num(a, 2)?);
     let (lo, hi) = beta_bounds(a, 3)?;
-    if al <= 0.0 || be <= 0.0 || !(0.0..=1.0).contains(&p) {
+    // Excel rejects the boundaries p = 0 and p = 1.
+    if al <= 0.0 || be <= 0.0 || !(p > 0.0 && p < 1.0) {
         return Err(CellError::Num);
     }
-    let z = if p == 0.0 {
-        0.0
-    } else if p == 1.0 {
-        1.0
-    } else {
-        invert(|x| reg_inc_beta(x, al, be), p, 0.0, 1.0, 1.0)
-    };
+    let z = invert(|x| reg_inc_beta(x, al, be), p, 0.0, 1.0, 1.0);
     num_val(lo + z * (hi - lo))
 }
 
@@ -639,17 +635,12 @@ pub(super) fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
     let s = num(a, 1)?.trunc();
     let p = num(a, 2)?;
     let cum = if a.len() > 3 { boolean(a, 3)? } else { false };
-    if f < 0.0 || s < 1.0 || !(0.0..=1.0).contains(&p) {
+    // Excel rejects the boundaries p = 0 and p = 1.
+    if f < 0.0 || s < 1.0 || !(p > 0.0 && p < 1.0) {
         return Err(CellError::Num);
     }
     if cum {
-        if p == 0.0 {
-            return num_val(0.0);
-        }
         return num_val(reg_inc_beta(p, s, f + 1.0));
-    }
-    if p == 0.0 || p == 1.0 {
-        return num_val(if p == 1.0 && f == 0.0 { 1.0 } else { 0.0 });
     }
     num_val((ln_comb(f + s - 1.0, s - 1.0) + s * p.ln() + f * (1.0 - p).ln()).exp())
 }
