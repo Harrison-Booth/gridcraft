@@ -1,6 +1,10 @@
 use super::clipboard::What;
-use super::*;
+use super::{
+    Cell, CellRef, EngineError, Formula, Json, RangeRef, Result, Session, StyleId, Value, bad, bool_param, cell_param_on, edit, json, str_param,
+    target_sheet,
+};
 
+#[allow(clippy::cognitive_complexity)] // The command applies the selected paste mode in one atomic edit.
 pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
     let Some(clip) = s.clipboard.clone() else { return Err(EngineError::Other("Nothing to paste.".into())) };
     let what = match str_param(p, "what").unwrap_or("all") {
@@ -288,7 +292,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         }
         let pasted = RangeRef::new(at, at.offset_clamped(i64::from(tiles_r * h) - 1, i64::from(tiles_c * w) - 1));
         if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-            paste_validations(cx, src_sheet, src, dest_sheet, pasted, (h, w), transpose, skip_blanks)?;
+            paste_validations(cx, src_sheet, src, dest_sheet, pasted, transpose, skip_blanks)?;
         }
         if what == What::ColumnWidths {
             // Each pasted column takes the width of the column copied to it (transposed, the
@@ -367,11 +371,10 @@ fn paste_validations(
     src: RangeRef,
     dest_sheet: usize,
     pasted: RangeRef,
-    size: (u32, u32),
     transpose: bool,
     skip_blanks: bool,
 ) -> Result<()> {
-    let (h, w) = size;
+    let (h, w) = if transpose { (src.width(), src.height()) } else { (src.height(), src.width()) };
     let (tiles_r, tiles_c) = (pasted.height() / h.max(1), pasted.width() / w.max(1));
     let mut rules = Vec::new();
     // Under Skip Blanks the destination keeps its rule below a blank source cell that has none, so
