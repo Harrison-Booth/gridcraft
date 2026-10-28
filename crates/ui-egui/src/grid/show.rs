@@ -833,7 +833,7 @@ fn expose_active_cell(app: &SheetApp, ui: &egui::Ui, id: egui::Id, wb: &Workbook
     let shown = if picture {
         input.clone()
     } else {
-        let style = cell_paint::look(wb, si, sh, at, &mut CfCache::new()).0.style;
+        let style = super::cell_paint::look(wb, si, sh, at, &mut CfCache::new()).0.style;
         if sh.show_formulas
             && !gridcraft_engine::display::formula_hidden(wb, sh, at)
             && let Some(formula) = sh.cell(at).and_then(|cell| cell.formula.as_ref())
