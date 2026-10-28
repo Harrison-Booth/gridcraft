@@ -429,6 +429,7 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("range.setValues", json!({"range": "K1:K3", "values": [["Red"], ["Green"], ["Blue"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "M1", "input": "=SEQUENCE(3)"})).unwrap();
     s.execute("formulas.defineName", json!({"name": "Colors", "refersTo": "=Sheet1!$K$1:$K$3"})).unwrap();
     let rules = [
         ("A1", "Open,In progress,Closed", r#""Open,In progress,Closed""#),
@@ -440,6 +441,8 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
         ("G1", "=Colors", "Colors"),
         ("H1", "Sheet1!$K$1:$K$3", "Sheet1!$K$1:$K$3"),
         ("I1", "=OFFSET($K$1,0,0,3,1)", "OFFSET($K$1,0,0,3,1)"),
+        ("J1", "=INDIRECT(\"K1:K3\")", "INDIRECT(\"K1:K3\")"),
+        ("L1", "=$M$1#", "$M$1#"),
     ];
     for (cell, source, _) in rules {
         s.execute("data.validation", json!({"range": cell, "type": "list", "formula1": source})).unwrap();
@@ -453,6 +456,9 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
         ("F1", "Blue"),
         ("G1", "Red"),
         ("H1", "Green"),
+        ("I1", "Blue"),
+        ("J1", "Green"),
+        ("L1", "2"),
     ];
     let check = |wb: &Workbook| {
         for (cell, input) in accepted {
@@ -463,6 +469,11 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     };
     let wb = s.doc().unwrap().wb.clone();
     check(&wb);
+    for (cell, expected) in [("I1", vec!["Red", "Green", "Blue"]), ("J1", vec!["Red", "Green", "Blue"]), ("L1", vec!["1", "2", "3"])] {
+        let dv = wb.active().unwrap().validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(CellRef::parse(cell).unwrap()))).unwrap();
+        assert_eq!(list_items(&wb, 0, dv), expected, "dropdown items for {cell}");
+        assert!(check_validation(&wb, 0, CellRef::parse(cell).unwrap(), "0").is_some(), "{cell} accepts 0");
+    }
 
     let sheet_xml = |wb: &Workbook| {
         let bytes = gridcraft_xlsx::write_xlsx(wb).unwrap();

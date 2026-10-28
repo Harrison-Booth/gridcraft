@@ -145,7 +145,7 @@ fn list_source(f: &str) -> String {
 /// List entries of a list validation (literal or from a range).
 pub fn list_items(wb: &Workbook, sheet: usize, dv: &Validation) -> Vec<String> {
     let f = dv.f1.trim();
-    if is_literal_list(f) {
+    if f.starts_with('"') {
         // A quoted list is a string literal: `""` inside stands for one `"`.
         let items = match f.strip_prefix('"').and_then(|x| x.strip_suffix('"')) {
             Some(body) => body.replace("\"\"", "\""),
