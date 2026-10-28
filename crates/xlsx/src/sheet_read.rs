@@ -3,6 +3,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::IoError;
+use crate::fmla::from_file;
+use crate::package::Rel;
+use crate::read::Ctx;
+use crate::styles::read_color;
+use crate::tables::{col_width_to_px, paper_name, pt_to_px};
+use crate::xml::{self, El};
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
@@ -11,17 +18,6 @@ use gridcraft_model::{
     NoteBox, NoteCorner, Orientation, PasswordHash, Sheet, SheetProtection, Sparkline, SparklineKind, Table, TableColumn, TotalsFn, Validation,
     ValidationKind, XmlColumnPr,
 };
-use quick_xml::Reader;
-use quick_xml::events::Event;
-
-use crate::IoError;
-use crate::fmla::from_file;
-use crate::package::Rel;
-use crate::read::Ctx;
-use crate::styles::read_color;
-use crate::tables::{col_width_to_px, paper_name, pt_to_px};
-use crate::write::NS_MAIN;
-use crate::xml::{self, El};
 
 mod parts;
 mod rules;
