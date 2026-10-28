@@ -40,7 +40,15 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             |s, p| quick_sort(s, p, true)
         ),
-        cmd!("data.sortDescending", "Sort Z to A", ["Data", "Sort & Filter"], None, "{range?, column?}", has_doc, |s, p| quick_sort(s, p, false)),
+        cmd!(
+            "data.sortDescending",
+            "Sort Z to A",
+            ["Data", "Sort & Filter"],
+            None,
+            "{range?, column?: \"B\", textAsNumbers?: bool}",
+            has_doc,
+            |s, p| quick_sort(s, p, false)
+        ),
         cmd!(
             "data.sort",
             "Sort…",

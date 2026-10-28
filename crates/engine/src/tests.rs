@@ -1427,6 +1427,15 @@ fn sort_text_as_numbers_orders_numeric_text_by_value() {
 }
 
 #[test]
+fn sort_text_as_numbers_keeps_text_for_custom_lists() {
+    let mut s = s();
+    s.execute("range.setValues", json!({"range": "A1", "values": [["'2"], ["'10"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A2", "header": false, "textAsNumbers": true, "keys": [{"column": "A", "customList": ["10", "2"]}]}))
+        .unwrap();
+    assert_eq!([v(&s, "A1"), v(&s, "A2")], ["10", "2"].map(Value::from));
+}
+
+#[test]
 fn sort_with_a_sheet_prefix_sorts_the_named_sheet() {
     let col = |s: &Session, sheet: &str| -> Vec<Value> {
         let wb = &s.doc().unwrap().wb;

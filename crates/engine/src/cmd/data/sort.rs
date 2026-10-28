@@ -112,8 +112,12 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
         let key_val = |i: u32, k: &SortKey| -> (Value, u32) {
             let c = line(i, k.col);
             let mut v = sh.value(c);
-            let as_number =
-                if k.text_as_numbers { v.as_text().and_then(|t| gridcraft_core::parse::parse_number_text_in(t, date_system)) } else { None };
+            // A custom list matches the cell's text, so those keys keep it.
+            let as_number = if k.text_as_numbers && k.list.is_none() {
+                v.as_text().and_then(|t| gridcraft_core::parse::parse_number_text_in(t, date_system))
+            } else {
+                None
+            };
             if let Some(n) = as_number {
                 v = Value::number(n);
             }
