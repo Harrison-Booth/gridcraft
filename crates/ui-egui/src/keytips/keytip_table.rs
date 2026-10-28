@@ -231,4 +231,21 @@ mod tests {
         assert!(anchor_badge("", &["edit.paste"]).is_none(), "empty prefix shows only tab badges");
         assert!(anchor_badge("H", &["view.zoom"]).is_none(), "no sequences under this prefix");
     }
+
+    #[test]
+    fn autosum_variants_pass_their_own_function() {
+        for (seq, function) in [
+            ("HUA", "AVERAGE"),
+            ("HUC", "COUNT"),
+            ("HUI", "MIN"),
+            ("HUM", "MAX"),
+            ("MUA", "AVERAGE"),
+            ("MUC", "COUNT"),
+            ("MUI", "MIN"),
+            ("MUM", "MAX"),
+        ] {
+            let want = format!("{{\"function\":\"{function}\"}}");
+            assert_eq!(lookup(seq), Some(Entry::Finish(Action::CommandWith("formulas.autoSum", Box::leak(want.into_boxed_str())))), "{seq}");
+        }
+    }
 }
