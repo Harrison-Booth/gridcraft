@@ -2024,6 +2024,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+ "web-time",
  "zip 3.0.0",
 ]
 
@@ -2097,6 +2098,7 @@ dependencies = [
  "sys-locale",
  "toml",
  "web-sys",
+ "web-time",
  "zbus",
 ]
 
