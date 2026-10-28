@@ -59,8 +59,8 @@ fn custom_lists(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
             bs.custom_list_draft = lists.get(bs.custom_list_index).map(|l| l.join("\n")).unwrap_or_default();
         }
     }
-    ui.label("Enter one item per line:");
-    ui.add(egui::TextEdit::multiline(&mut bs.custom_list_draft).desired_rows(6).desired_width(420.0));
+    let label = ui.label("Enter one item per line:");
+    ui.add(egui::TextEdit::multiline(&mut bs.custom_list_draft).desired_rows(6).desired_width(420.0)).labelled_by(label.id);
     ui.horizontal(|ui| {
         if ui.button("Add").clicked() {
             let before = app.session.prefs.custom_lists.len();
