@@ -3,6 +3,7 @@ use super::cell_paint::{
     rotated_text_pos, shrink_font, wrapped_cell_text_y,
 };
 use super::geo::Geo;
+use super::is_number_stored_as_text;
 use super::tables::{filter_button_rect, paint_filter_button};
 use super::{
     CellRef, CfCache, CfLook, Color32, FontId, HAlign, MAX_COLS, Painter, Pos2, RangeRef, Rect, Sheet, Stroke, StrokeKind, Tokens, Underline, Value,

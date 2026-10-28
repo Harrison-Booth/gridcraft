@@ -1,5 +1,6 @@
 use super::editor::popup_dismissed;
 use super::geo::Geo;
+use super::is_number_stored_as_text;
 use super::tables::filter_table_range;
 use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
 
