@@ -1,3 +1,4 @@
+use super::MAX_LAMBDA_CALLS;
 use super::array::{broadcast_len, single};
 use super::special::is_special;
 use super::*;
