@@ -103,8 +103,10 @@ fn map_style_ids(data: &[u8], dxfs: &HashMap<u32, u32>, fmts: &HashMap<u32, u32>
 #[derive(Default)]
 pub struct StylePatches {
     /// (written part name, source bytes, dxf id map, source number format id → code).
-    pub(super) list: Vec<(String, Arc<[u8]>, HashMap<u32, u32>, Vec<(u32, String)>)>,
+    pub(super) list: Vec<StylePatch>,
 }
+
+pub(super) type StylePatch = (String, Arc<[u8]>, HashMap<u32, u32>, Vec<(u32, String)>);
 
 impl KeptOut {
     /// Number format codes kept parts refer to (to be registered in the styles part).
