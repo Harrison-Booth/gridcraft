@@ -9,6 +9,8 @@
 //! of `<pageSetup>`, the legacy VML shapes those controls need and the pictures of the headers and
 //! footers, `&G`, with their `<legacyDrawingHF>`). The workbook also keeps its
 //! `<fileVersion>` and the calcFeatures extension, which Excel needs to trust the saved values.
+//! Each worksheet chart keeps its own style, colour and user-shape parts on the chart
+//! ([`KeptReader::charts`], [`write_chart_parts`]).
 //!
 //! On write, kept parts get fresh part names where needed and new relationship ids; the `r:id`s in
 //! kept XML are rewritten to match. Kept content is conservative:
@@ -50,7 +52,7 @@ pub use read::KeptReader;
 pub use rebase::{SheetKept, rebase_links};
 #[cfg(test)]
 pub(crate) use write::sheet_names_in;
-pub use write::{KeptOut, SheetIds, workbook_elements, write_package_rels, write_workbook};
+pub use write::{KeptOut, SheetIds, WorkbookKept, workbook_elements, write_chart_parts, write_package_rels, write_workbook};
 
 /// Most bytes kept for one workbook.
 pub const MAX_KEPT_TOTAL: usize = 256 * 1024 * 1024;
@@ -104,6 +106,10 @@ const CALC_FEATURES_URI: &str = "{B58B0392-4F1F-4190-BB64-5DF3571DCE5F}";
 const NS_CALC_FEATURES: &str = "http://schemas.microsoft.com/office/spreadsheetml/2018/calcfeatures";
 /// Kept sheet elements, in schema order (all after `<legacyDrawing>`, before `<tableParts>`).
 const SHEET_SLOTS: &[&str] = &["legacyDrawingHF", "picture", "oleObjects", "controls"];
+/// Relationship kinds of a worksheet chart to its own parts: the Chart Styles gallery choice, the
+/// Change Colors set and the shapes drawn inside the chart.
+const CHART_PARTS: &[&str] = &["chartStyle", "chartColorStyle", "chartUserShapes"];
+const USER_SHAPES: &[&str] = &["chartUserShapes"];
 
 /// Relationship kinds GridCraft reads and rewrites, or that depend on content it rewrites:
 /// kept content whose graph reaches one of them is dropped.

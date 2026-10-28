@@ -1,5 +1,8 @@
 use super::create::{insert_pivot, source_param};
-use super::*;
+use super::{
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, PivotDateGroup, Result, Session, Workbook, anchor_mode_param, bad, cell_param,
+    edit, f64_param, find_pivot, json, other, pv, str_param,
+};
 
 // ---------------------------------------------------------------- PivotChart
 
@@ -69,6 +72,7 @@ pub(super) fn insert_pivot_chart(s: &mut Session, p: &Json) -> Result<Json> {
         source: None,
         by_rows: false,
         pivot: Some(link),
+        kept: None,
     };
     edit(s, |cx| {
         cx.sheet_mut(si)?.charts.push(chart);

@@ -213,6 +213,14 @@ fn unmodelled_parts_survive_a_round_trip() {
     let out = write_xlsx(&wb).unwrap();
     let u = Unpacked::new(&out);
     u.assert_valid();
+    assert_kept_workbook_parts(&u);
+    let sheet = sheet_part(&u, "Data");
+    let sx = u.text(&sheet);
+    assert_kept_sheet_parts(&u, &sheet, &sx);
+    assert_round_trip_kept_content(&wb, &out);
+}
+
+fn assert_kept_workbook_parts(u: &Unpacked) {
     // Every kept part is in the output byte for byte.
     for d in [
         PRINTER,
@@ -244,34 +252,37 @@ fn unmodelled_parts_survive_a_round_trip() {
     let item = u.find(CUSTOM_XML.as_bytes())[0].clone();
     assert!(u.rels(&item).iter().any(|r| r.1.ends_with("/customXmlProps")));
     // Formulas using the link are written as they were.
-    let sheet = sheet_part(&u, "Data");
+    let sheet = sheet_part(u, "Data");
     let sx = u.text(&sheet);
     assert!(sx.contains("<f>[1]Sheet1!$A$1</f>"), "{sx}");
     assert!(sx.contains("<f>SUM([1]Sheet1!A1:A3)*2</f>"), "{sx}");
+}
+
+fn assert_kept_sheet_parts(u: &Unpacked, sheet: &str, sx: &str) {
     // Printer settings (#324).
-    let ps = attr_of(&sx, "pageSetup", "r:id");
-    let (ty, target) = u.target(&sheet, &ps);
+    let ps = attr_of(sx, "pageSetup", "r:id");
+    let (ty, target) = u.target(sheet, &ps);
     assert!(ty.ends_with("/printerSettings"));
     assert_eq!(u.parts.get(&target).unwrap(), PRINTER);
     // The OLE object and its preview image, re-linked.
-    let ole = attr_of(&sx, "oleObject", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &ole).1).unwrap(), OLE);
-    let preview = attr_of(&sx, "objectPr", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &preview).1).unwrap(), EMF);
+    let ole = attr_of(sx, "oleObject", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &ole).1).unwrap(), OLE);
+    let preview = attr_of(sx, "objectPr", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &preview).1).unwrap(), EMF);
     // Namespace declarations travel with the fragment.
-    assert_eq!(attr_of(&sx, "mc:AlternateContent", "xmlns:mc"), "http://schemas.openxmlformats.org/markup-compatibility/2006");
-    assert_eq!(attr_of(&sx, "mc:AlternateContent", "xmlns:x14"), "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main");
+    assert_eq!(attr_of(sx, "mc:AlternateContent", "xmlns:mc"), "http://schemas.openxmlformats.org/markup-compatibility/2006");
+    assert_eq!(attr_of(sx, "mc:AlternateContent", "xmlns:x14"), "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main");
     // The form control.
-    let ctrl = attr_of(&sx, "control", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &ctrl).1).unwrap(), CTRL_PROP.as_bytes());
+    let ctrl = attr_of(sx, "control", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &ctrl).1).unwrap(), CTRL_PROP.as_bytes());
     // Schema order: pageSetup < legacyDrawing < oleObjects < controls.
     let pos = |t: &str| sx.find(t).unwrap_or_else(|| panic!("no {t}"));
     assert!(pos("<pageSetup") < pos("<legacyDrawing") && pos("<legacyDrawing") < pos("<oleObjects") && pos("<oleObjects") < pos("<controls"));
     // Query table: a sheet relationship only.
-    assert!(u.rels(&sheet).iter().any(|r| r.1.ends_with("/queryTable") && u.parts.get(&r.2).is_some_and(|b| b == QUERY_TABLE.as_bytes())));
+    assert!(u.rels(sheet).iter().any(|r| r.1.ends_with("/queryTable") && u.parts.get(&r.2).is_some_and(|b| b == QUERY_TABLE.as_bytes())));
     // One VML drawing: the kept control shapes plus GridCraft's note, in a fresh shape block.
-    let vml_id = attr_of(&sx, "legacyDrawing", "r:id");
-    let vml_part = u.target(&sheet, &vml_id).1;
+    let vml_id = attr_of(sx, "legacyDrawing", "r:id");
+    let vml_part = u.target(sheet, &vml_id).1;
     let vml = u.text(&vml_part);
     assert!(vml.contains("_x0000_s1025") && vml.contains("_x0000_s1026"));
     assert!(!vml.contains("old note") && !vml.contains("_x0000_s1027"), "the source's note shape is replaced");
@@ -280,9 +291,11 @@ fn unmodelled_parts_survive_a_round_trip() {
     let img = u.rels(&vml_part);
     assert_eq!(img.len(), 1);
     assert_eq!(u.parts.get(&img[0].2).unwrap(), EMF);
+}
 
+fn assert_round_trip_kept_content(wb: &gridcraft_model::Workbook, out: &[u8]) {
     // Reading the output keeps the same content again.
-    let (wb2, rep2) = read_xlsx(&out).unwrap();
+    let (wb2, rep2) = read_xlsx(out).unwrap();
     assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
     let a = wb.sheet(0).unwrap().preserved.as_deref().unwrap();
     let b = wb2.sheet(0).unwrap().preserved.as_deref().unwrap();
@@ -293,7 +306,6 @@ fn unmodelled_parts_survive_a_round_trip() {
     assert_eq!(da, db);
     assert_eq!(a.elements.len(), b.elements.len());
     assert_eq!(wb.preserved.as_deref().unwrap().parts.len(), wb2.preserved.as_deref().unwrap().parts.len());
-    u.assert_valid();
 }
 
 #[test]
@@ -925,4 +937,225 @@ fn notes_take_shape_blocks_the_header_pictures_dont_use() {
         assert!(!hf_map.contains(b) && !hf_ids.contains(b), "notes reuse shape block {b}: {notes_map:?} {notes_ids:?}");
     }
     assert!(notes_ids.iter().all(|b| notes_map.contains(b)), "note ids outside their drawing's blocks");
+}
+
+// ---------------------------------------------------------------- chart style, colour and shape parts
+
+const NS_CS: &str = "http://schemas.microsoft.com/office/drawing/2012/chartStyle";
+const REL_2011: &str = "http://schemas.microsoft.com/office/2011/relationships";
+const CT_STYLE: &str = "application/vnd.ms-office.chartstyle+xml";
+const CT_COLORS: &str = "application/vnd.ms-office.chartcolorstyle+xml";
+const CT_SHAPES: &str = "application/vnd.openxmlformats-officedocument.drawingml.chartshapes+xml";
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n not really a picture";
+
+/// Opaque stand-ins for a chart's style, colour and user-shape parts (the reader never looks
+/// inside them); `n` makes each chart's distinct.
+fn style_part(n: u32) -> String {
+    format!(r#"<?xml version="1.0"?><cs:chartStyle xmlns:cs="{NS_CS}" id="{}"/>"#, 4200 + n)
+}
+fn colors_part(n: u32) -> String {
+    format!(r#"<?xml version="1.0"?><cs:colorStyle xmlns:cs="{NS_CS}" meth="cycle" id="{}"/>"#, 70 + n)
+}
+fn shapes_part(note: &str) -> String {
+    format!(r#"<?xml version="1.0"?><c:userShapes xmlns:c="{NS_C}" xmlns:r="{NS_R}"><!-- {note} --><pic embed="rId1"/></c:userShapes>"#)
+}
+
+fn chart(id: u32, kind: gridcraft_model::ChartKind) -> gridcraft_model::Chart {
+    use gridcraft_model::{Anchor, Chart, LegendPos, Series};
+    Chart {
+        id,
+        kind,
+        anchor: Anchor { cell: gridcraft_core::CellRef::new(0, 3), width: 400.0, height: 250.0, ..Anchor::default() },
+        title: None,
+        series: vec![Series {
+            name: None,
+            categories: Some("Data!$A$1:$A$3".into()),
+            values: "Data!$B$1:$B$3".into(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            smooth: false,
+            trendlines: Vec::new(),
+            quartiles: Default::default(),
+        }],
+        legend: LegendPos::Bottom,
+        data_labels: false,
+        gridlines: true,
+        style: 2,
+        x_title: None,
+        y_title: None,
+        source: None,
+        by_rows: false,
+        pivot: None,
+        kept: None,
+    }
+}
+
+/// A package like Excel writes it: GridCraft's own save of a column chart (`chart1.xml`) and a
+/// waterfall chart (`chartEx2.xml`), with the column chart given style, colour and user-shape
+/// parts (the shapes holding a picture) and the waterfall chart's style and colour parts replaced
+/// by the file's own. `shapes_rel` is the user-shape part's relationship (type, target).
+fn styled_chart_package(shapes_rel: (&str, &str)) -> Vec<u8> {
+    use gridcraft_model::{ChartKind, Workbook};
+    let mut s = Sheet::new("Data");
+    s.charts.push(chart(1, ChartKind::ColumnClustered));
+    s.charts.push(chart(2, ChartKind::Waterfall));
+    let wb = Workbook { sheets: vec![Arc::new(s)], ..Workbook::default() };
+    let mut u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    assert!(u.parts.contains_key("xl/charts/chart1.xml") && u.parts.contains_key("xl/charts/chartEx2.xml"));
+    let chart1 = u.text("xl/charts/chart1.xml").replace("</c:chartSpace>", r#"<c:userShapes r:id="rId9"/></c:chartSpace>"#);
+    let types = u.text("[Content_Types].xml").replace(
+        "</Types>",
+        &format!(
+            r#"<Default Extension="png" ContentType="image/png"/><Override PartName="/xl/charts/style1.xml" ContentType="{CT_STYLE}"/><Override PartName="/xl/charts/colors1.xml" ContentType="{CT_COLORS}"/><Override PartName="/xl/drawings/drawing7.xml" ContentType="{CT_SHAPES}"/></Types>"#
+        ),
+    );
+    let (style_rel, colors_rel) = (format!("{REL_2011}/chartStyle"), format!("{REL_2011}/chartColorStyle"));
+    let add: Vec<(&str, Vec<u8>)> = vec![
+        ("[Content_Types].xml", types.into_bytes()),
+        ("xl/charts/chart1.xml", chart1.into_bytes()),
+        (
+            "xl/charts/_rels/chart1.xml.rels",
+            rels(&[
+                ("rId9", "chartUserShapes", "../drawings/drawing7.xml"),
+                ("rId2", &style_rel, "style1.xml"),
+                ("rId3", &colors_rel, "colors1.xml"),
+            ])
+            .into_bytes(),
+        ),
+        ("xl/charts/style1.xml", style_part(1).into_bytes()),
+        ("xl/charts/colors1.xml", colors_part(1).into_bytes()),
+        ("xl/drawings/drawing7.xml", shapes_part("shapes").into_bytes()),
+        ("xl/drawings/_rels/drawing7.xml.rels", rels(&[("rId1", shapes_rel.0, shapes_rel.1)]).into_bytes()),
+        ("xl/media/image9.png", PNG.to_vec()),
+        // The waterfall chart's own style and colours in place of GridCraft's.
+        ("xl/charts/style2.xml", style_part(2).into_bytes()),
+        ("xl/charts/colors2.xml", colors_part(2).into_bytes()),
+    ];
+    for (name, data) in add {
+        u.parts.insert(name.to_string(), data);
+    }
+    let files: Vec<(&str, &[u8])> = u.parts.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    make_zip(&files)
+}
+
+/// The written chart part of relationship kind `kind` (`chart` or `chartEx`) on sheet "Data".
+fn written_chart(u: &Unpacked, kind: &str) -> String {
+    let sheet = sheet_part(u, "Data");
+    let drawing = u.rels(&sheet).into_iter().find(|r| r.1.ends_with("/drawing")).unwrap().2;
+    u.rels(&drawing).into_iter().find(|r| r.1.rsplit('/').next() == Some(kind)).unwrap_or_else(|| panic!("no {kind} in {drawing}")).2
+}
+
+/// The id of a chart's relationship of `kind` (last segment) and the data of its target.
+fn chart_rel_data(u: &Unpacked, chart: &str, kind: &str) -> Option<(String, Vec<u8>)> {
+    let rels = u.rels(chart);
+    let found: Vec<_> = rels.iter().filter(|r| r.1.rsplit('/').next() == Some(kind)).collect();
+    assert!(found.len() <= 1, "{chart}: {} {kind} relationships", found.len());
+    found.first().map(|r| (r.0.clone(), u.parts.get(&normalize(&r.2)).unwrap_or_else(|| panic!("missing {}", r.2)).clone()))
+}
+
+#[test]
+fn chart_style_colour_and_shape_parts_survive_a_round_trip() {
+    let bytes = styled_chart_package(("image", "../media/image9.png"));
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    // Twice: what was kept on the first save is read back and kept again.
+    let (again, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    for saved in [write_xlsx(&wb).unwrap(), write_xlsx(&again).unwrap()] {
+        let u = Unpacked::new(&saved);
+        u.assert_valid();
+        let chart = written_chart(&u, "chart");
+        assert_eq!(chart_rel_data(&u, &chart, "chartStyle").unwrap().1, style_part(1).as_bytes());
+        assert_eq!(chart_rel_data(&u, &chart, "chartColorStyle").unwrap().1, colors_part(1).as_bytes());
+        let (rid, shapes) = chart_rel_data(&u, &chart, "chartUserShapes").unwrap();
+        assert_eq!(shapes, shapes_part("shapes").as_bytes());
+        // The chart refers to its shapes by the new relationship id, after <c:chart>.
+        let xml = u.text(&chart);
+        assert!(xml.ends_with(&format!(r#"</c:chart><c:userShapes r:id="{rid}"/></c:chartSpace>"#)), "{xml}");
+        // The picture the shapes use comes along, under the shapes' own relationship id.
+        let shapes_name = u.target(&chart, &rid).1;
+        let (ty, pic) = u.target(&shapes_name, "rId1");
+        assert!(ty.ends_with("/image"), "{ty}");
+        assert_eq!(u.parts.get(&normalize(&pic)).unwrap().as_slice(), PNG);
+        let types = u.text("[Content_Types].xml");
+        for ct in [CT_STYLE, CT_COLORS, CT_SHAPES] {
+            assert!(types.contains(ct), "{ct} missing: {types}");
+        }
+
+        // The waterfall chart keeps the file's style and colours, not GridCraft's defaults.
+        let ex = written_chart(&u, "chartEx");
+        assert_eq!(chart_rel_data(&u, &ex, "chartStyle").unwrap().1, style_part(2).as_bytes());
+        assert_eq!(chart_rel_data(&u, &ex, "chartColorStyle").unwrap().1, colors_part(2).as_bytes());
+    }
+}
+
+#[test]
+fn chart_shapes_that_refer_to_rewritten_content_are_dropped() {
+    // A chart inside the chart's shapes: GridCraft rewrites charts, so the shapes go (with a
+    // warning) and the style and colours stay.
+    let bytes = styled_chart_package(("chart", "../charts/chartEx2.xml"));
+    let (wb, report) = read_xlsx(&bytes).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("shapes drawn inside the chart")), "{:?}", report.warnings);
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let chart = written_chart(&u, "chart");
+    assert!(chart_rel_data(&u, &chart, "chartUserShapes").is_none());
+    assert!(!u.text(&chart).contains("userShapes"));
+    assert_eq!(chart_rel_data(&u, &chart, "chartStyle").unwrap().1, style_part(1).as_bytes());
+}
+
+#[test]
+fn an_unnamed_user_shapes_part_is_not_kept() {
+    // The chart has a second shapes part that its `<c:userShapes>` does not name (rId9 does).
+    let mut u = Unpacked::new(&styled_chart_package(("image", "../media/image9.png")));
+    let stray = format!(r#"<Relationship Id="rId8" Type="{REL_2011}/chartUserShapes" Target="../drawings/drawing8.xml"/></Relationships>"#);
+    let chart_rels = u.text("xl/charts/_rels/chart1.xml.rels").replace("</Relationships>", &stray);
+    u.parts.insert("xl/charts/_rels/chart1.xml.rels".into(), chart_rels.into_bytes());
+    u.parts.insert("xl/drawings/drawing8.xml".into(), shapes_part("stray").into_bytes());
+    let types = u
+        .text("[Content_Types].xml")
+        .replace("</Types>", &format!(r#"<Override PartName="/xl/drawings/drawing8.xml" ContentType="{CT_SHAPES}"/></Types>"#));
+    u.parts.insert("[Content_Types].xml".into(), types.into_bytes());
+    let files: Vec<(&str, &[u8])> = u.parts.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (wb, report) = read_xlsx(&make_zip(&files)).unwrap();
+    assert!(report.warnings.is_empty(), "{:?}", report.warnings);
+    let saved = Unpacked::new(&write_xlsx(&wb).unwrap());
+    saved.assert_valid();
+    let chart = written_chart(&saved, "chart");
+    let (rid, shapes) = chart_rel_data(&saved, &chart, "chartUserShapes").unwrap();
+    assert_eq!(shapes, shapes_part("shapes").as_bytes());
+    assert!(saved.text(&chart).ends_with(&format!(r#"</c:chart><c:userShapes r:id="{rid}"/></c:chartSpace>"#)));
+    assert!(!saved.parts.values().any(|v| v == shapes_part("stray").as_bytes()));
+}
+
+#[test]
+fn a_restyled_or_retyped_chart_drops_its_style_and_colours_but_keeps_its_shapes() {
+    use gridcraft_model::ChartKind;
+    let (mut wb, _) = read_xlsx(&styled_chart_package(("image", "../media/image9.png"))).unwrap();
+    {
+        let s = Arc::make_mut(&mut wb.sheets[0]);
+        s.charts[0].style = 7;
+        s.charts[1].kind = ChartKind::Funnel;
+    }
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let chart = written_chart(&u, "chart");
+    assert!(chart_rel_data(&u, &chart, "chartStyle").is_none() && chart_rel_data(&u, &chart, "chartColorStyle").is_none());
+    assert!(chart_rel_data(&u, &chart, "chartUserShapes").is_some());
+    // A chartex part always has style and colour parts: GridCraft's once the file's no longer apply.
+    let ex = written_chart(&u, "chartEx");
+    assert_eq!(chart_rel_data(&u, &ex, "chartStyle").unwrap().1, crate::chartex::style_xml().as_bytes());
+    assert_eq!(chart_rel_data(&u, &ex, "chartColorStyle").unwrap().1, crate::chartex::colors_xml().as_bytes());
+}
+
+#[test]
+fn new_charts_get_no_kept_chart_parts() {
+    use gridcraft_model::{ChartKind, Workbook};
+    let mut s = Sheet::new("Data");
+    s.charts.push(chart(1, ChartKind::ColumnClustered));
+    let wb = Workbook { sheets: vec![Arc::new(s)], ..Workbook::default() };
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    assert!(u.rels("xl/charts/chart1.xml").is_empty());
+    assert!(!u.text("xl/charts/chart1.xml").contains("userShapes"));
 }

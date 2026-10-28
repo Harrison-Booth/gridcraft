@@ -11,7 +11,7 @@ use gridcraft_functions::Timeline;
 use gridcraft_model::{Anchor, Cell, Chart, ChartKind, Formula, LegendPos, Series, Sheet, StyleId, Table, TableColumn, TotalsFn};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, split_sheet, str_param};
 use crate::selection::current_region;
 
 const CMD: &str = "data.forecastSheet";
@@ -431,6 +431,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             source: None,
             by_rows: false,
             pivot: None,
+            kept: None,
         });
         cx.wb.sheets.insert(at, Arc::new(sheet));
         for nm in cx.wb.names.iter_mut() {
