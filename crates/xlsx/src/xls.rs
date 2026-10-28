@@ -3,24 +3,28 @@
 //! <https://learn.microsoft.com/en-us/openspecs/office_file_formats/ms-xls/cd03cb5f-ca02-4934-a391-bb674cb8aa06>.
 //!
 //! Read: worksheets, shared strings, cell values, formulas (text and cached results, including
-//! shared and array formulas), number formats, the 1904 date system, merged cells, column
-//! widths, row heights, defined names, print areas, print titles and the calculation settings
-//! (mode, iteration, precision as displayed). Everything else (fonts, fills, borders, charts,
-//! pictures, comments, conditional formats, validation, macros) is skipped with a warning.
+//! shared and array formulas), cell formatting (number formats, fonts, fills, borders,
+//! alignment, protection, the colour palette and user-defined cell styles), the 1904 date
+//! system, merged cells, column widths, row heights, defined names, print areas, print titles,
+//! the calculation settings (mode, iteration, precision as displayed), conditional formats and
+//! data validation. Everything else (charts, pictures, comments, macros) is skipped with a
+//! warning.
 //! Encrypted workbooks and pre-BIFF8 versions are refused.
 
 mod formula;
 mod ftab;
 mod records;
+mod rules;
+mod styles;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
-use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineInfo, NumFmt, Sheet, Style, StyleId, Visibility, Workbook};
+use gridcraft_model::{CalcMode, CalcSettings, Cell, DefinedName, Formula, LineInfo, Sheet, StyleId, Visibility, Workbook};
 
 use crate::cfb::Compound;
-use crate::tables::{builtin_format, col_width_to_px, pt_to_px};
+use crate::tables::{col_width_to_px, pt_to_px};
 use crate::{IoError, ReadReport};
 use formula::{Links, Mode, SupBook, Unsupported, Xti, cell_error, decode};
 use records::{Cursor, Record, Records};
@@ -131,7 +135,9 @@ struct Globals {
     sheets: Vec<BoundSheet>,
     date1904: bool,
     formats: HashMap<u16, String>,
-    xf_formats: Vec<u16>,
+    styles: styles::StyleRecords,
+    /// Number formats defined by DXF records (conditional formats).
+    dxf_formats: HashMap<u16, String>,
     sst: Vec<Arc<str>>,
     links: Links,
     names: Vec<Lbl>,
@@ -161,19 +167,11 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     let mut wb = Workbook::new();
     wb.sheets.clear();
     wb.date_system = if g.date1904 { DateSystem::D1904 } else { DateSystem::D1900 };
-    // One model style per XF: only the number format is imported.
-    let styles: Vec<StyleId> = g
-        .xf_formats
-        .iter()
-        .map(|ifmt| {
-            let code = g.formats.get(ifmt).map(String::as_str).or_else(|| builtin_format(u32::from(*ifmt))).unwrap_or("General");
-            if code.eq_ignore_ascii_case("General") {
-                StyleId::DEFAULT
-            } else {
-                wb.styles.intern(Style { num_fmt: NumFmt::new(code), ..Style::default() })
-            }
-        })
-        .collect();
+    // One model style per XF.
+    let styles = styles::build(&g.styles, &g.formats, &mut wb);
+    if g.styles.short {
+        report.warn("Some cell formatting records were shorter than expected; the formatting present was kept.");
+    }
 
     // BoundSheet8 index → model sheet index.
     let mut model_index: Vec<Option<usize>> = Vec::with_capacity(g.sheets.len());
@@ -210,7 +208,7 @@ pub(crate) fn read_xls_with(bytes: &[u8], mut budget: Budget) -> Result<(Workboo
     // The overview comes first.
     report.warnings.insert(
         0,
-        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, number formats, merged cells, column widths, row heights and defined names were read. Fonts, fills, borders, charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
+        "Imported from an Excel 97-2003 (.xls) workbook: values, formulas, cell formatting, conditional formats, data validation, merged cells, column widths, row heights and defined names were read. Charts, pictures, comments and other features are not imported yet. Save as .xlsx; saving .xls is not supported.".into(),
     );
     Ok((wb, report))
 }
@@ -280,10 +278,11 @@ fn globals(stream: &[u8], budget: &mut Budget, report: &mut ReadReport) -> Resul
                 budget.text(code.len())?;
                 g.formats.insert(ifmt, code);
             }
-            0x00E0 if g.xf_formats.len() < MAX_XFS => {
-                c.u16()?;
-                g.xf_formats.push(c.u16()?);
-            }
+            0x00E0 => g.styles.xf(&mut c, MAX_XFS),
+            0x0031 => g.styles.font(&mut c),
+            0x0092 => g.styles.palette(&mut c),
+            0x0293 => g.styles.style(&mut c),
+            0x088D => rules::dxf_format(&mut c, &mut g.dxf_formats),
             0x00FC => g.sst = shared_strings(&mut c, budget)?,
             0x01AE => {
                 let _ctab = c.u16()?;
@@ -424,6 +423,7 @@ struct SheetState<'g> {
     dropped: usize,
     unsupported: Vec<&'static str>,
     calc: CalcSettings,
+    rules: rules::SheetRules,
 }
 
 impl SheetState<'_> {
@@ -565,6 +565,7 @@ fn worksheet(
         dropped: 0,
         unsupported: vec![],
         calc: CalcSettings::default(),
+        rules: rules::SheetRules::default(),
     };
     let mut depth = 1usize;
     while let Some(rec) = recs.next_record()? {
@@ -593,6 +594,7 @@ fn worksheet(
     let pending = std::mem::take(&mut st.pending);
     resolve_pending(&mut st, &arrays, &shared, &pending);
     blank_array_followers(&mut st, &pending);
+    std::mem::take(&mut st.rules).finish(&g.links, &mut st.sheet, report);
     if st.dropped > 0 {
         report.warn(format!("{} cells outside the grid were skipped.", st.dropped));
     }
@@ -795,8 +797,10 @@ fn sheet_record(rec: &Record<'_>, st: &mut SheetState<'_>, budget: &mut Budget, 
         }
         0x001C => report.warn("Cell comments in .xls files are not imported yet."),
         0x00EC => report.warn("Pictures, charts and shapes in .xls files are not imported yet."),
-        0x01B0 | 0x0879 => report.warn("Conditional formatting in .xls files is not imported yet."),
-        0x01B2 => report.warn("Data validation in .xls files is not imported yet."),
+        rules::CONDFMT | rules::CF | rules::CONDFMT12 | rules::CF12 | rules::CFEX | rules::DV => {
+            let formats = rules::Formats { dxf: &st.g.dxf_formats, cells: &st.g.formats };
+            st.rules.record(rec.id, &mut c, &st.g.styles.color_table(), &formats, budget)?;
+        }
         0x01B8 => report.warn("Hyperlinks in .xls files are not imported yet."),
         0x00B0 => report.warn("PivotTables in .xls files are not imported yet; their values were kept."),
         _ => {}
