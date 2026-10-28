@@ -467,7 +467,7 @@ fn editor_shortcuts(
     outcome.action = action;
     outcome.arrow = arrow;
     // Ctrl+PageDown / Ctrl+PageUp moves to the next or previous sheet while a formula waits for a reference.
-    if ed.enter_mode && !ed.from_formula_bar && ed.can_point() {
+    if ed.enter_mode && !ed.from_formula_bar && ed.can_point() && app.session.prefs.formula_bar {
         let step = ui.input_mut(|i| {
             if i.consume_key(egui::Modifiers::CTRL, Key::PageDown) {
                 Some("sheet.next")
@@ -566,7 +566,7 @@ fn editor_arrow_keys(
     };
     let rtl = app.session.active().and_then(|d| d.wb.active()).is_some_and(|s| s.right_to_left);
     let dc = if rtl { -dc } else { dc };
-    if ed.can_point() {
+    if ed.can_point() && app.session.prefs.formula_bar {
         ui.input_mut(|i| {
             for key in [Key::ArrowUp, Key::ArrowDown, Key::ArrowLeft, Key::ArrowRight] {
                 i.consume_key(egui::Modifiers::NONE, key);

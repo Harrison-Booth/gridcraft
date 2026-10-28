@@ -25,6 +25,9 @@ fn navigator_items(sheets: &[Arc<Sheet>]) -> Vec<(String, String)> {
 /// Switch to sheet `i` from the tab strip or the navigator. In point mode the formula being typed keeps going on the
 /// other sheet; otherwise the edit is committed first.
 fn activate_sheet(app: &mut SheetApp, i: usize) {
+    if !app.session.prefs.formula_bar && app.editor.as_ref().is_some_and(|editor| editor.can_point()) {
+        return;
+    }
     if app.editor.as_ref().is_some_and(|e| e.can_point())
         && let Some(mut ed) = app.editor.take()
     {
