@@ -362,7 +362,7 @@ const MAX_PASTE_VALIDATION_RANGES: usize = 100_000;
 /// that covers part of the copied block `src` comes along as one rule over the translated parts.
 /// `size` is one tile's (height, width) at the destination; `pasted` is all the tiles together.
 fn paste_validations(
-    cx: &mut Ctx,
+    cx: &mut crate::cmd::Ctx<'_>,
     src_sheet: &gridcraft_model::Sheet,
     src: RangeRef,
     dest_sheet: usize,
