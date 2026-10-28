@@ -205,7 +205,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     if geo.paper.is_some() {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
-    show_grid_interactions(app, ui, &resp, &geo, sh, &wb);
+    show_grid_interactions(app, ui, &resp, &geo, sh, &wb, si);
     let track_x = vertical_scroll_track(available, rect, rtl);
     // The track starts below the column headings and frozen rows; the bar's column beside them
     // takes its colour too instead of showing a light square in dark mode.
@@ -322,7 +322,7 @@ impl<F: Fn(&mut SheetApp, egui::Vec2) -> Geo> ActiveCellVisibility<'_, F> {
     }
 }
 
-fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
+fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook, si: usize) {
     let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
@@ -338,7 +338,11 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
         interact(app, ui, resp, geo, sh, wb);
     }
     update_cursor(app, ui, resp, geo, sh);
-    expose_active_cell(app, ui, resp.id, wb, sh);
+    if let Some(active) = app.session.active()
+        && let Some(active_sheet) = active.wb.active()
+    {
+        expose_active_cell(app, ui, resp.id, &active.wb, active_sheet, active.wb.active_sheet());
+    }
     crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
         in_cell_editor(app, ui, geo, sh, wb);
@@ -820,22 +824,33 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
 
 /// The grid is painted, so a screen reader sees one blank node. Give it the active cell: address as
 /// the label, shown text as the value, and the formula (when it isn't hidden) as the description.
-fn expose_active_cell(app: &SheetApp, ui: &egui::Ui, id: egui::Id, wb: &Workbook, sh: &Sheet) {
+fn expose_active_cell(app: &SheetApp, ui: &egui::Ui, id: egui::Id, wb: &Workbook, sh: &Sheet, si: usize) {
     let at = app.session.active().map(|d| d.selection.active).unwrap_or_default();
     let at = sh.merge_at(at).map(|m| m.start).unwrap_or(at);
     let input = crate::formula_bar::active_input(app);
     let picture = sh.cell_pictures.contains_key(&at);
     // A picture cell's text value is its error fallback; the picture's alt text is what it shows.
-    let shown = if picture { input.clone() } else { gridcraft_engine::display::cell_text(wb, sh, at) };
+    let shown = if picture {
+        input.clone()
+    } else {
+        let style = cell_paint::look(wb, si, sh, at, &mut CfCache::new()).0.style;
+        if sh.show_formulas
+            && !gridcraft_engine::display::formula_hidden(wb, sh, at)
+            && let Some(formula) = sh.cell(at).and_then(|cell| cell.formula.as_ref())
+        {
+            format!("={}", formula.text)
+        } else {
+            gridcraft_engine::display::value_text_as(wb, &sh.value(at), style.num_fmt.as_str())
+        }
+    };
     let address = at.to_string();
     let has_formula = !picture && !input.is_empty() && sh.cell(sh.spill_anchor(at).unwrap_or(at)).is_some_and(|c| c.formula.is_some());
     ui.ctx().accesskit_node_builder(id, |node| {
         node.set_role(egui::accesskit::Role::Cell);
         node.set_label(address);
         node.set_value(shown);
-        if has_formula {
-            node.set_description(input);
-        }
+        let description = if has_formula { format!("Value: {shown}. Formula: {input}") } else { shown };
+        node.set_description(description);
     });
 }
 
