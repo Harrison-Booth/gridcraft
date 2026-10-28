@@ -3,7 +3,7 @@
 use gridcraft_core::{CellRef, Value};
 use serde_json::{Value as Json, json};
 
-use super::{CommandSpec, EngineError, Result, Session, bad, cmd, has_doc, ok, target_ranges, target_sheet};
+use super::{CommandSpec, EngineError, Result, Session, always, bad, cmd, has_doc, ok, target_ranges, target_sheet};
 
 const MAX_ITEMS: usize = 10_000;
 const MAX_LISTS: usize = 255;
