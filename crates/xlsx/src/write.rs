@@ -204,6 +204,16 @@ fn check_sheet_names(wb: &Workbook) -> Result<(), IoError> {
 /// Workbook name written in a PivotChart's link when the file name isn't known.
 const DEFAULT_BOOK_NAME: &str = "Workbook.xlsx";
 
+fn check_write_xlsx(wb: &Workbook) -> Result<(), IoError> {
+    if wb.sheets.is_empty() {
+        return Err(IoError::Format("a workbook needs at least one sheet".into()));
+    }
+    if wb.sheets.iter().any(|sheet| sheet.cell_pictures.keys().any(|c| sheet.cell(*c).is_some_and(|cell| cell.formula.is_some()))) {
+        return Err(IoError::Format("a static cell picture cannot also contain a formula".into()));
+    }
+    check_sheet_names(wb)
+}
+
 pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
     write_xlsx_named(wb, kind, None)
 }
@@ -211,13 +221,7 @@ pub fn write_xlsx(wb: &Workbook, kind: XlsxKind) -> Result<Vec<u8>, IoError> {
 /// Writes the workbook for the file `book_name` (a bare file name). A PivotChart is bound to its
 /// PivotTable in Excel only when its link starts with the workbook in brackets.
 pub fn write_xlsx_named(wb: &Workbook, kind: XlsxKind, book_name: Option<&str>) -> Result<Vec<u8>, IoError> {
-    if wb.sheets.is_empty() {
-        return Err(IoError::Format("a workbook needs at least one sheet".into()));
-    }
-    if wb.sheets.iter().any(|sheet| sheet.cell_pictures.keys().any(|c| sheet.cell(*c).is_some_and(|cell| cell.formula.is_some()))) {
-        return Err(IoError::Format("a static cell picture cannot also contain a formula".into()));
-    }
-    check_sheet_names(wb)?;
+    check_write_xlsx(wb)?;
     let mut out = Out {
         parts: vec![],
         overrides: vec![],
