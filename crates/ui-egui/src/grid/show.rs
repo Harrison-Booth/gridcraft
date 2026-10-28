@@ -341,7 +341,7 @@ fn show_grid_interactions(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Re
     if let Some(active) = app.session.active()
         && let Some(active_sheet) = active.wb.active()
     {
-        expose_active_cell(app, ui, resp.id, &active.wb, active_sheet, sh, cf);
+        expose_active_cell(app, ui, resp.id, resp.rect, &active.wb, active_sheet, sh, cf);
     }
     crate::text_box::show(app, ui, geo, sh);
     if app.editor.as_ref().is_some_and(|e| !e.from_formula_bar) {
@@ -824,7 +824,16 @@ fn paint_pages(app: &mut SheetApp, p: &Painter, geo: &Geo, sh: &Sheet) {
 
 /// The grid is painted, so a screen reader sees one blank node. Give it the active cell: address as
 /// the label, shown text as the value, and the formula (when it isn't hidden) as the description.
-fn expose_active_cell(app: &SheetApp, ui: &egui::Ui, id: egui::Id, wb: &Workbook, sh: &Sheet, painted_sheet: &Sheet, painted_cf: &mut CfCache) {
+fn expose_active_cell(
+    app: &SheetApp,
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    rect: egui::Rect,
+    wb: &Workbook,
+    sh: &Sheet,
+    painted_sheet: &Sheet,
+    painted_cf: &mut CfCache,
+) {
     let si = wb.active_sheet();
     let at = app.session.active().map(|d| d.selection.active).unwrap_or_default();
     let at = sh.merge_at(at).map(|m| m.start).unwrap_or(at);
@@ -870,11 +879,22 @@ fn expose_active_cell(app: &SheetApp, ui: &egui::Ui, id: egui::Id, wb: &Workbook
         };
         node.set_role(egui::accesskit::Role::Cell);
         node.set_label(address);
-        node.set_value(shown);
+        node.set_value(shown.clone());
         if !description.is_empty() {
             node.set_description(description);
         }
     });
+    if !shown.is_empty() {
+        // AT-SPI doesn't expose a string value for table cells; a child label gives it text.
+        ui.new_child(
+            egui::UiBuilder::new()
+                .id_salt(("active-cell-value", id))
+                .max_rect(rect)
+                .accessibility_parent(id)
+                .accessibility_role(egui::accesskit::Role::Label)
+                .accessibility_label(shown),
+        );
+    }
 }
 
 #[cfg(test)]
