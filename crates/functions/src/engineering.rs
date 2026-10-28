@@ -615,6 +615,7 @@ mod tests {
             ("BESSELI", 1.0, 20.0, 3.96683589270741e-25),
             ("BESSELI", 50.0, 40.0, 60071771937893.328),
             ("BESSELI", 1e-10, 3.0, 2.0833333333333328e-32),
+            ("BESSELI", 1e-20, 2.0, 1.25e-41),
             ("BESSELI", 1.0, 2.9, 0.13574766658069928),
             ("BESSELI", -3.0, 2.0, 2.2452124313471509),
             ("BESSELI", -3.0, 3.0, -0.95975362539967934),
@@ -642,6 +643,9 @@ mod tests {
             ("BESSELI", 800.0, 0.0),
             ("BESSELI", -800.0, 1.0),
             ("BESSELI", 1.0, -1.0),
+            // Excel's Miller recurrence overflows for a tiny x at order 2 and up, so it gives #NUM!.
+            ("BESSELI", 1e-32, 2.0),
+            ("BESSELI", 1e-100, 3.0),
             ("BESSELK", 1e-300, 2.0),
             ("BESSELK", 0.0, 0.0),
             ("BESSELK", -1.0, 0.0),
