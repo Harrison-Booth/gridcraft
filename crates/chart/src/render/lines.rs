@@ -1,6 +1,7 @@
 use super::frame::Bx;
-use super::*;
+use super::{Ctx, MAX_LINE_PTS, MAX_MARKERS, Prim, Rgba, WHITE};
 use crate::points;
+use std::collections::HashSet;
 
 // ---------------------------------------------------------------- helpers
 
