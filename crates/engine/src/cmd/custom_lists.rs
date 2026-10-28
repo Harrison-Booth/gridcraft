@@ -3,7 +3,7 @@
 use gridcraft_core::{CellRef, Value};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, cmd, has_doc, ok, target_ranges, target_sheet};
 
 const MAX_ITEMS: usize = 10_000;
 const MAX_LISTS: usize = 255;
@@ -32,8 +32,11 @@ fn parse_items(p: &Json, cmd: &str) -> Result<Vec<String>> {
     let mut total = 0usize;
     let mut out = Vec::with_capacity(items.len());
     for item in items {
-        let text = item.as_str().ok_or_else(|| bad(cmd, "list items must be text"))?;
-        let text = text.trim();
+        let raw_text = item.as_str().ok_or_else(|| bad(cmd, "list items must be text"))?;
+        if raw_text.contains('\n') || raw_text.contains('\r') {
+            return Err(bad(cmd, "list items may not contain line breaks"));
+        }
+        let text = raw_text.trim();
         if text.is_empty() || text.len() > MAX_ITEM_BYTES {
             return Err(bad(cmd, format!("items must contain 1 to {MAX_ITEM_BYTES} bytes")));
         }
