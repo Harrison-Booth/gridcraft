@@ -558,6 +558,57 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         }
                     });
                 }
+                Field::SheetPicker { key, label, options } => {
+                    ui.vertical(|ui| {
+                        let field_label = ui.label(egui::RichText::new(lang.tr(label)).strong());
+                        let mut search = d.search.clone();
+                        let search_response = ui
+                            .add(egui::TextEdit::singleline(&mut search).hint_text("Search sheets…").desired_width(320.0))
+                            .labelled_by(field_label.id);
+                        take_first_focus(d, &search_response);
+                        if search_response.changed() {
+                            d.search = search;
+                            d.list_index = 0;
+                        }
+
+                        let query = d.search.to_lowercase();
+                        let matches: Vec<&String> = options.iter().filter(|name| name.to_lowercase().contains(&query)).collect();
+                        if matches.is_empty() {
+                            d.list_index = 0;
+                        } else {
+                            d.list_index = d.list_index.min(matches.len() - 1);
+                            let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowUp));
+                            let down = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowDown));
+                            if up && d.list_index > 0 {
+                                d.list_index -= 1;
+                            }
+                            if down && d.list_index + 1 < matches.len() {
+                                d.list_index += 1;
+                            }
+                            if up || down {
+                                d.values.insert(key.into(), json!(matches[d.list_index]));
+                            }
+                            let row_height = ui.text_style_height(&egui::TextStyle::Body);
+                            let area = egui::ScrollArea::vertical().max_height(180.0);
+                            let area = if up || down { area.vertical_scroll_offset(row_height * d.list_index as f32) } else { area };
+                            area.show_rows(ui, row_height, matches.len(), |ui, rows| {
+                                for index in rows {
+                                    let Some(name) = matches.get(index) else { continue };
+                                    let selected = d.list_index == index;
+                                    let response = ui.selectable_label(selected, name.as_str());
+                                    let clicked = response.clicked();
+                                    if clicked {
+                                        d.list_index = index;
+                                        d.values.insert(key.into(), json!(name.as_str()));
+                                    }
+                                }
+                            });
+                            if d.values.get(key).and_then(Json::as_str).is_none_or(|value| !matches.iter().any(|name| name.as_str() == value)) {
+                                d.values.insert(key.into(), json!(matches[d.list_index]));
+                            }
+                        }
+                    });
+                }
                 Field::Check { key, label } => {
                     let mut b = d.values.get(key).and_then(Json::as_bool).unwrap_or(false);
                     if ui.checkbox(&mut b, lang.tr(label)).changed() {
