@@ -151,14 +151,14 @@ fn parse_xml(xml: &str) -> R<(Vec<Node>, usize)> {
                 if stack.len() >= MAX_DEPTH || nodes.len() >= MAX_NODES {
                     return Err(CellError::Value);
                 }
-                let index = add_node(&mut nodes, &stack, &mut root, &element, reader.decoder())?;
+                let index = add_node(&mut nodes, &stack, &mut root, &element)?;
                 stack.push(index);
             }
             Event::Empty(element) => {
                 if nodes.len() >= MAX_NODES {
                     return Err(CellError::Value);
                 }
-                add_node(&mut nodes, &stack, &mut root, &element, reader.decoder())?;
+                add_node(&mut nodes, &stack, &mut root, &element)?;
             }
             Event::End(_) => {
                 stack.pop().ok_or(CellError::Value)?;
@@ -239,13 +239,7 @@ fn is_xml10_char(ch: char) -> bool {
     matches!(ch, '\u{9}' | '\u{A}' | '\u{D}' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
 }
 
-fn add_node(
-    nodes: &mut Vec<Node>,
-    stack: &[usize],
-    root: &mut Option<usize>,
-    element: &quick_xml::events::BytesStart<'_>,
-    decoder: quick_xml::encoding::Decoder,
-) -> R<usize> {
+fn add_node(nodes: &mut Vec<Node>, stack: &[usize], root: &mut Option<usize>, element: &quick_xml::events::BytesStart<'_>) -> R<usize> {
     let name = local_name(element.name());
     if name.is_empty() {
         return Err(CellError::Value);
@@ -257,7 +251,7 @@ fn add_node(
             continue;
         }
         let key = local_name(attribute.key);
-        let value = attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder).map_err(|_| CellError::Value)?.into_owned();
+        let value = attribute.normalized_value(XmlVersion::Implicit1_0).map_err(|_| CellError::Value)?.into_owned();
         node.attrs.push((key, value));
     }
     let index = nodes.len();
