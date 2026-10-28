@@ -36,21 +36,31 @@ fn subtract_range(r: RangeRef, cut: &RangeRef) -> Vec<RangeRef> {
 
 /// Removes the cells of `cuts` from every validation, keeping the rest of each rule's ranges.
 pub(in super::super) fn remove_validation_cells(validations: &mut Vec<Validation>, cuts: &[RangeRef]) {
-    for dv in validations.iter_mut() {
+    let mut remaining = Vec::with_capacity(validations.len());
+    for mut dv in validations.drain(..) {
         let first = dv.ranges.first().map(|r| r.start);
         for cut in cuts {
             dv.ranges = dv.ranges.iter().flat_map(|r| subtract_range(*r, cut)).collect();
         }
-        if let (Some(first), Some(next)) = (first, dv.ranges.first().map(|r| r.start))
-            && first != next
-        {
-            dv.f1 = move_rule_formula(&dv.f1, first, next);
-            if let Some(f2) = &mut dv.f2 {
-                *f2 = move_rule_formula(f2, first, next);
+        let Some(first) = first else { continue };
+        if dv.ranges.is_empty() {
+            continue;
+        }
+        if dv.ranges.first().is_some_and(|r| r.start == first) {
+            remaining.push(dv);
+            continue;
+        }
+        for range in std::mem::take(&mut dv.ranges) {
+            let mut split = dv.clone();
+            split.ranges.push(range);
+            split.f1 = move_rule_formula(&dv.f1, first, range.start);
+            if let Some(f2) = &dv.f2 {
+                split.f2 = Some(move_rule_formula(f2, first, range.start));
             }
+            remaining.push(split);
         }
     }
-    validations.retain(|d| !d.ranges.is_empty());
+    *validations = remaining;
 }
 
 pub(super) fn validation(s: &mut Session, p: &Json) -> Result<Json> {

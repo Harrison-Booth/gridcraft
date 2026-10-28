@@ -528,6 +528,30 @@ fn list_validation_shifts_relative_references_for_each_cell() {
 }
 
 #[test]
+fn list_validation_disjoint_ranges_keep_their_formula_anchors_when_first_is_cleared() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1", "values": [["Alpha", "Beta"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "C1,A1,D1", "type": "list", "formula1": "=B1"})).unwrap();
+
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.first().unwrap();
+    let c1 = CellRef::parse("C1").unwrap();
+    let d1 = CellRef::parse("D1").unwrap();
+    assert_eq!(list_items(&wb, 0, dv, c1), ["Alpha"]);
+    assert_eq!(list_items(&wb, 0, dv, d1), ["Beta"]);
+
+    s.execute("data.validation", json!({"range": "C1", "clear": true})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(d1))).unwrap();
+    assert_eq!(dv.ranges.len(), 1);
+    assert_eq!(dv.ranges.first().copied(), Some(RangeRef::new(d1, d1)));
+    assert_eq!(list_items(&wb, 0, dv, d1), ["Beta"]);
+    assert!(check_validation(&wb, 0, d1, "Beta").is_none());
+    assert!(check_validation(&wb, 0, d1, "Alpha").is_some());
+}
+
+#[test]
 fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     // A typo used to give a rule that validates nothing (`type="none"`) or the wrong check,
     // with no error.
