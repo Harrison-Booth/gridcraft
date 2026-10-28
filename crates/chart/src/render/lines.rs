@@ -1,6 +1,6 @@
 use super::frame::Bx;
 use super::{Ctx, MAX_LINE_PTS, MAX_MARKERS, Prim, Rgba, WHITE};
-use crate::points;
+use crate::{ChartData, SeriesData, points};
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------- helpers
