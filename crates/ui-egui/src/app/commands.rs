@@ -228,7 +228,7 @@ impl SheetApp {
             "ui.selectionMode" => {
                 // `{"mode": "extend"}` (F8), `"add"` (Shift+F8) or `"off"`; `{}` reports the mode.
                 match p.get("mode").and_then(Json::as_str) {
-                    Some(id) => match grid::SelectionMode::parse(id) {
+                    Some(id) => match crate::grid::SelectionMode::parse(id) {
                         Some(mode) => self.grid.set_selection_mode(mode),
                         None => return Some(Err(format!("unknown selection mode {id:?} (use \"extend\", \"add\" or \"off\")"))),
                     },

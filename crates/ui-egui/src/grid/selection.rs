@@ -3,7 +3,7 @@ use super::geo::Geo;
 use super::interact::{hidden_col_edge, hidden_row_edge};
 #[cfg(test)]
 use super::show::hidden_around;
-use super::{CellRef, Color32, Painter, RangeRef, Rect, Sheet, SheetApp, Stroke, StrokeKind, Tokens, json, pos2, vec2};
+use super::{CellRef, Color32, Painter, RangeRef, Rect, SelectionMode, Sheet, SheetApp, Stroke, StrokeKind, Tokens, json, pos2, vec2};
 
 /// Where the active cell is on screen: the whole merged cell when it is part of one.
 fn active_rect(geo: &Geo, sh: &Sheet, sel: &gridcraft_engine::Selection) -> Rect {
