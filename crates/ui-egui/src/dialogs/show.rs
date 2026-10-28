@@ -593,8 +593,8 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                             if up || down {
                                 d.values.insert(key.into(), json!(matches[d.list_index]));
                             }
-                            let row_height = ui.text_style_height(&egui::TextStyle::Body);
-                            let row_pitch = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+                            let row_height = ui.spacing().interact_size.y;
+                            let row_pitch = row_height + ui.spacing().item_spacing.y;
                             let area = egui::ScrollArea::vertical().max_height(180.0);
                             let area = if search_changed {
                                 area.vertical_scroll_offset(0.0)
