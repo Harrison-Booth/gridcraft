@@ -123,7 +123,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-28 | minor | MATCH, VLOOKUP and HLOOKUP reject scalar lookup arrays; AGGREGATE reference form rejects scalar and array-value arguments; HYPERLINK converts its default display value to text. Excel cases were not remeasured in this change. |
+| 2026-10-28 | minor | MATCH, VLOOKUP and HLOOKUP reject scalar lookup arrays; AGGREGATE reference form rejects scalar and array-value arguments; HYPERLINK converts its default display value to text. Checked the listed scalar cases in Excel for Microsoft 365 on Windows. |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |
 | 2026-10-23 | minor | Number text coercion (VALUE, arithmetic, typed entry): a dollar sign before accounting parentheses (`$(1,234)`, `$ (5)`) and a percent sign after them (`(5)%`) read as negatives; `(-5)`, `((5))`, `($-5)`, `$5%`, `$(5)%` and dates or times in parentheses are `#VALUE!`, as observed in Excel 365 |
 | 2026-10-23 | minor | INDEX with only a row index on a reference of several rows and columns (`INDEX(A1:C3,2)`, `INDEX(A1:C3,0)`) is `#REF!`, as observed in Excel, so it also fails as a range endpoint and inside other functions; an empty column argument (`INDEX(A1:C3,2,)`) still gives the row. Checked that a column array with one index stays a 1×1 array (`TYPE` 64), which is what Excel returns |
