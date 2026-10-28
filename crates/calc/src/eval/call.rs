@@ -2,6 +2,7 @@ use super::array::{Acc, Agg, zip2, zip3};
 use super::format::same_kind;
 use super::special::{ev_shape, resized_sum_range, resizes_sum_range};
 use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, Lambda, Pipe, Value, compare, err};
+use gridcraft_core::{CellRef, RangeRef};
 use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
