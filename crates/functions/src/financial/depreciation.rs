@@ -140,7 +140,7 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Num);
     }
     let life = 1.0 / rate;
-    if (life > 2.0 && life < 3.0) || (life > 4.0 && life < 5.0) {
+    if life <= 2.0 {
         return Err(CellError::Num);
     }
     if first == purchased {
