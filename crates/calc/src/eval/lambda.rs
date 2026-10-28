@@ -2,6 +2,7 @@ use super::MAX_LAMBDA_CALLS;
 use super::array::{broadcast_len, single};
 use super::special::is_special;
 use super::{Array, CellError, Ev, Evaluator, Expr, Lambda, MAX_CELLS, MAX_TAIL_CALLS, Tail, Value, err};
+use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
     pub fn apply_lambda(&mut self, l: &Lambda, args: &[Expr]) -> Ev {
