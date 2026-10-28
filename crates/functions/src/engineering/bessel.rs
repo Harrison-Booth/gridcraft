@@ -200,6 +200,8 @@ fn bessel_i(n: u32, x: f64) -> Option<f64> {
 }
 
 /// K_0(x) for x > 0 (A&S 9.8.5, 9.8.6).
+// The first coefficient is A&S's 8-digit −γ, which Excel reproduces; the exact constant would differ.
+#[allow(clippy::approx_constant)]
 fn bessel_k0(x: f64) -> f64 {
     if x <= 2.0 {
         let t = (x / 2.0) * (x / 2.0);
