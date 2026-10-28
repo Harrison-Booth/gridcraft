@@ -423,6 +423,7 @@ fn remove_duplicates_without_a_valid_column_is_refused() {
 }
 
 #[test]
+/// Typed list normalization stays literal while formula references drive validation and dropdown items.
 fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     // In a file an inline list is a string literal (`"a,b"`); unquoted it reads as a formula.
     // References, names and formulas stay unquoted, and every rule survives a save and reopen.
