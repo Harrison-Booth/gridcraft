@@ -1183,6 +1183,19 @@ fn a_kept_pivot_table_whose_cache_is_not_listed_is_dropped() {
     assert!(written_pivot_caches(&u).is_empty());
 }
 
+#[test]
+fn a_kept_pivot_table_with_an_unlisted_cache_id_is_dropped_even_with_a_cache_relationship() {
+    let src = ext_pivot_package(false, false, "externalLinkPath");
+    let mut parts = Unpacked::new(&src).parts;
+    let table = String::from_utf8(parts.remove("xl/pivotTables/pivotTable1.xml").unwrap()).unwrap().replace(r#"cacheId="1""#, r#"cacheId="99""#);
+    parts.insert("xl/pivotTables/pivotTable1.xml".into(), table.into_bytes());
+    let list: Vec<(&str, &[u8])> = parts.iter().map(|(n, d)| (n.as_str(), d.as_slice())).collect();
+    let (wb, _) = read_xlsx(&make_zip(&list)).unwrap();
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    assert!(written_pivot_tables(&u, "Report").is_empty());
+}
+
 // ---------------------------------------------------------------- PivotTables on a data connection or the Data Model
 
 /// Bytes standing in for the Data Model (Excel's `xl/model/item.data`).

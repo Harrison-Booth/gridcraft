@@ -25,8 +25,8 @@ impl<'a> SheetKept<'a> {
                     q.content_type == CT_PIVOT_TABLE
                         && crate::xml::parse(&q.data).ok().and_then(|x| x.attr_u32("cacheId")).is_some_and(|id| !cache_ids.contains(&id))
                 };
-                let mut direct = direct.peekable();
-                if direct.peek().is_some() { direct.any(|r| !wb_names.contains_key(&normalize(&r.target))) } else { by_id() }
+                let direct_is_orphan = direct.into_iter().any(|r| !wb_names.contains_key(&normalize(&r.target)));
+                direct_is_orphan || by_id()
             })
             .map(|q| normalize(&q.name))
             .collect();
