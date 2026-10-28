@@ -1437,6 +1437,13 @@ fn aggregate_ref_form_rejects_scalar_and_array_values() {
 }
 
 #[test]
+fn aggregate_ref_form_preserves_reference_errors() {
+    let mut t = T::new();
+    t.set("A1", "=AGGREGATE(9,4,INDIRECT(\"XFE1\"))");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Ref));
+}
+
+#[test]
 fn recalc_all_after_load() {
     let mut t = T::new();
     let s = t.wb.sheet_mut(0).unwrap();
