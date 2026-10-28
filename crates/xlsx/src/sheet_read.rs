@@ -115,6 +115,15 @@ fn read_sheet_format(e: &El, sheet: &mut Sheet) {
     }
 }
 
+fn read_page_margins(e: &El, sheet: &mut Sheet) {
+    let margins = &mut sheet.print.margins;
+    for (i, key) in ["left", "right", "top", "bottom", "header", "footer"].iter().enumerate() {
+        if let (Some(value), Some(slot)) = (e.attr_f64(key), margins.get_mut(i)) {
+            *slot = value.clamp(0.0, 50.0) as f32;
+        }
+    }
+}
+
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
@@ -186,14 +195,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 sheet.print.center_h = e.flag("horizontalCentered", false);
                 sheet.print.center_v = e.flag("verticalCentered", false);
             }
-            "pageMargins" => {
-                let m = &mut sheet.print.margins;
-                for (i, k) in ["left", "right", "top", "bottom", "header", "footer"].iter().enumerate() {
-                    if let (Some(v), Some(slot)) = (e.attr_f64(k), m.get_mut(i)) {
-                        *slot = v.clamp(0.0, 50.0) as f32;
-                    }
-                }
-            }
+            "pageMargins" => read_page_margins(e, &mut sheet),
             "pageSetup" => {
                 if e.attr("orientation") == Some("landscape") {
                     sheet.print.orientation = Orientation::Landscape;
