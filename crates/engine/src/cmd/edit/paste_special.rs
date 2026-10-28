@@ -249,17 +249,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             }
             // The copied cell's validation rule replaces whatever rule the destination had.
             if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
-                let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(sc))).cloned();
-                let sh = cx.sheet_mut(dest_sheet)?;
-                crate::cmd::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);
-                if let Some(mut dv) = rule {
-                    // Relative references move with the rule, as pasted formulas do.
-                    let first = dv.ranges.first().map_or(sc, |r| r.start);
-                    dv.f1 = crate::cmd::data::move_rule_formula(&dv.f1, first, dest);
-                    dv.f2 = dv.f2.map(|f| crate::cmd::data::move_rule_formula(&f, first, dest));
-                    dv.ranges = vec![RangeRef::new(dest, dest)];
-                    sh.validations.push(dv);
-                }
+                copy_validation(cx, dest_sheet, src_sheet, sc, dest)?;
             }
             match what {
                 What::Comments => {
@@ -323,6 +313,21 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
         s.clipboard = None;
     }
     Ok(json!({"pasted": s.doc()?.selection.a1()}))
+}
+
+fn copy_validation(cx: &mut crate::cmd::Ctx<'_>, dest_sheet: usize, src_sheet: &gridcraft_model::Sheet, src: CellRef, dest: CellRef) -> Result<()> {
+    let rule = src_sheet.validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(src))).cloned();
+    let sh = cx.sheet_mut(dest_sheet)?;
+    crate::cmd::data::remove_validation_cells(&mut sh.validations, &[RangeRef::new(dest, dest)]);
+    if let Some(mut dv) = rule {
+        // Relative references move with the rule, as pasted formulas do.
+        let first = dv.ranges.first().map_or(src, |r| r.start);
+        dv.f1 = crate::cmd::data::move_rule_formula(&dv.f1, first, dest);
+        dv.f2 = dv.f2.map(|f| crate::cmd::data::move_rule_formula(&f, first, dest));
+        dv.ranges = vec![RangeRef::new(dest, dest)];
+        sh.validations.push(dv);
+    }
+    Ok(())
 }
 
 /// Applies a reference adjustment to every cell formula and defined name in the workbook.
