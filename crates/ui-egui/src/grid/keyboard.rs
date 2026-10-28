@@ -6,33 +6,9 @@ use super::{CellRef, Drag, SelectionMode, Sheet, SheetApp, json};
 
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
-    // Focus left on an editor that no longer exists goes back to the grid.
-    let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
-    let editing = app.editor.is_some() || app.text_box_editor.is_some();
-    if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
-        resp.request_focus();
-    }
-    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
-    // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
-    // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
-    // arrow key would move the selection the menu fills from).
-    if editing
-        || app.dialog.is_some()
-        || other_focus
-        || app.message.is_some()
-        || app.grid.filter_menu.is_some()
-        || app.grid.fill_menu.is_some()
-        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
-    {
+    if !claim_grid_keyboard(app, ctx, resp) {
         return;
     }
-    if ctx.memory(|m| m.focused()).is_none() {
-        resp.request_focus();
-    }
-    // The grid owns arrows, Tab and Escape (egui would otherwise move focus between widgets).
-    ctx.memory_mut(|m| {
-        m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
-    });
     let events = ctx.input(|i| i.events.clone());
     // A shortcut key that also types a character (Shift+Space sends Text(" ")) must not start an edit.
     let shortcut_pressed = events.iter().any(|e| {
@@ -179,4 +155,35 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+fn claim_grid_keyboard(app: &SheetApp, ctx: &egui::Context, resp: &egui::Response) -> bool {
+    // Focus left on an editor that no longer exists goes back to the grid.
+    let stale = [egui::Id::unique("gridcraft.cell_editor"), egui::Id::unique("gridcraft.formula_bar"), crate::text_box::editor_id()];
+    let editing = app.editor.is_some() || app.text_box_editor.is_some();
+    if !editing && ctx.memory(|m| m.focused()).is_some_and(|f| stale.contains(&f)) {
+        resp.request_focus();
+    }
+    let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
+    // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
+    // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
+    // arrow key would move the selection the menu fills from).
+    if editing
+        || app.dialog.is_some()
+        || other_focus
+        || app.message.is_some()
+        || app.grid.filter_menu.is_some()
+        || app.grid.fill_menu.is_some()
+        || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
+    {
+        return false;
+    }
+    if ctx.memory(|m| m.focused()).is_none() {
+        resp.request_focus();
+    }
+    // The grid owns arrows, Tab and Escape (egui would otherwise move focus between widgets).
+    ctx.memory_mut(|m| {
+        m.set_focus_lock_filter(resp.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
+    });
+    true
 }
