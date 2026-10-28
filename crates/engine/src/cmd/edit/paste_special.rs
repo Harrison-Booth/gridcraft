@@ -82,9 +82,14 @@ fn copy_merges(
         let col_offset = at.col as i64 - src.start.col as i64;
         if let (Some(start), Some(end)) = (merge.start.offset(row_offset, col_offset), merge.end.offset(row_offset, col_offset)) {
             let moved = RangeRef::new(start, end);
+            let anchors: Vec<CellRef> =
+                cx.sheet_mut(dest_sheet)?.spill_ranges.iter().filter(|(_, spill)| spill.intersects(&moved)).map(|(anchor, _)| *anchor).collect();
             let sheet = cx.sheet_mut(dest_sheet)?;
             sheet.merges.retain(|existing| !existing.intersects(&moved));
             sheet.merges.push(moved);
+            for anchor in anchors {
+                cx.touch(dest_sheet, anchor);
+            }
         }
     }
     Ok(())

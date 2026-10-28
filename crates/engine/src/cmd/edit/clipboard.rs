@@ -3,11 +3,20 @@ use super::paste_special::paste_special;
 use super::{
     Cell, Clipboard, EngineError, Json, RangeRef, Result, Session, Value, cell_param_on, edit, json, ok, str_param, target_ranges, target_sheet,
 };
+use gridcraft_core::CellRef;
 
 // ---------------------------------------------------------------- clipboard
 
 /// Largest copied block a paste walks without trimming, so a hostile range can't run the process out of memory.
 pub(super) const CLIP_WALK_CAP: u64 = 16_000_000;
+
+fn used_bounds(sheet: &gridcraft_model::Sheet, range: RangeRef) -> Option<RangeRef> {
+    let cells = sheet.cells.iter().map(|(cell, _)| RangeRef::cell(cell)).filter(|cell| range.contains_range(cell));
+    let spills = sheet.spill_ranges.values().filter_map(|spill| range.intersection(spill));
+    let merges = sheet.merges.iter().filter(|merge| range.contains_range(merge)).copied();
+    let comments = sheet.comments.keys().map(|cell| RangeRef::cell(*cell)).filter(|cell| range.contains_range(cell));
+    cells.chain(spills).chain(merges).chain(comments).reduce(|bound, item| bound.union(&item))
+}
 
 fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
     let multiple = || EngineError::Other("This action won't work on multiple selections.".into());
@@ -21,21 +30,32 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
     let d = s.doc()?;
     let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
     let trim = |range: RangeRef| {
-        if range.is_full_cols() || range.is_full_rows() || range.count() > CLIP_WALK_CAP {
-            // Bounded by the cells inside this range: a distant used cell must not stretch the block over it.
-            let used = sh
-                .cells
-                .iter()
-                .map(|(c, _)| c)
-                .filter(|c| range.contains(*c))
-                .fold(RangeRef::cell(range.start), |acc, c| acc.union(&RangeRef::cell(c)));
-            range.intersection(&used).unwrap_or(range)
-        } else {
-            range
-        }
+        if range.is_full_cols() || range.is_full_rows() || range.count() > CLIP_WALK_CAP { used_bounds(sh, range).unwrap_or(range) } else { range }
     };
     let (wb, range, areas) = if ranges.len() > 1 {
-        let areas: Vec<RangeRef> = ranges.iter().map(|r| trim(*r)).collect();
+        let across = ranges.iter().all(|area| area.start.row == selected.start.row && area.end.row == selected.end.row);
+        let down = ranges.iter().all(|area| area.start.col == selected.start.col && area.end.col == selected.end.col);
+        let needs_trim = ranges.iter().any(|range| range.is_full_cols() || range.is_full_rows() || range.count() > CLIP_WALK_CAP);
+        let shared = if needs_trim && (across || down) {
+            ranges.iter().filter_map(|area| used_bounds(sh, *area)).reduce(|bound, area| bound.union(&area))
+        } else {
+            None
+        };
+        let areas: Vec<RangeRef> = ranges
+            .iter()
+            .map(|range| {
+                if let Some(shared) = shared {
+                    let local = used_bounds(sh, *range).unwrap_or(*range);
+                    if across {
+                        RangeRef::new(CellRef { row: shared.start.row, col: local.start.col }, CellRef { row: shared.end.row, col: local.end.col })
+                    } else {
+                        RangeRef::new(CellRef { row: local.start.row, col: shared.start.col }, CellRef { row: local.end.row, col: shared.end.col })
+                    }
+                } else {
+                    trim(*range)
+                }
+            })
+            .collect();
         let (wb, block) = slide_together(&d.wb, sheet, &areas).ok_or_else(multiple)?;
         (std::sync::Arc::new(wb), block, areas)
     } else {
