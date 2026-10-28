@@ -487,7 +487,8 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     for (cell, _, saved) in rules {
         assert!(xml.contains(&format!(r#"sqref="{cell}"><formula1>{saved}</formula1>"#)), "{cell}: {saved} missing from {xml}");
     }
-    let (reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    let (mut reopened, _) = gridcraft_xlsx::read_xlsx(&gridcraft_xlsx::write_xlsx(&wb).unwrap()).unwrap();
+    gridcraft_calc::Calc::new().recalc_all(&mut reopened);
     check(&reopened);
     assert_eq!(sheet_xml(&reopened), xml, "a second save writes the same rules");
 }
