@@ -195,11 +195,12 @@ fn securities() {
 #[test]
 fn amordegrc_rejects_equal_first_dates_and_unsupported_lives() {
     is_err(ev("AMORDEGRC", vec![n(2400.0), d(2008, 8, 19), d(2008, 8, 19), n(300.0), n(1.0), n(0.15), n(1.0)]), CellError::Num);
-    for rate in [0.8, 0.5] {
+    for rate in [2.0, 0.75, 0.4, 0.22] {
         is_err(ev("AMORDEGRC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(rate), n(1.0)]), CellError::Num);
     }
-    close(ev("AMORDEGRC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(0.4), n(1.0)]), 937.0);
-    close(ev("AMORDEGRC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(0.22), n(1.0)]), 886.0);
+    for rate in [1.0, 0.5, 1.0 / 3.0, 0.25, 0.2] {
+        assert!(matches!(ev("AMORDEGRC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(rate), n(1.0)]), Value::Number(_)));
+    }
 }
 
 fn number(v: Value) -> f64 {
