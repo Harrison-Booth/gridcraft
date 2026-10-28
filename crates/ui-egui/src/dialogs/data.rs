@@ -250,17 +250,14 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
                     .and_then(Json::as_u64)
                     .and_then(|n| usize::try_from(n).ok())
                     .filter(|n| *n > 0 && *n <= app.session.prefs.custom_lists.len());
-                let label = custom_list
-                    .and_then(|n| app.session.prefs.custom_lists.get(n - 1))
-                    .map(|items| items.iter().take(3).map(String::as_str).collect::<Vec<_>>().join(", "))
-                    .unwrap_or_else(|| "Cell Values".into());
+                let label = custom_list.map_or_else(|| "Cell Values".into(), |n| format!("Custom List {n}"));
                 craft_ui::ComboBox::from_id_salt(("sort_custom_list", i))
                     .selected_text(label)
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut custom_list, None, "Cell Values");
                         for (index, items) in app.session.prefs.custom_lists.iter().enumerate() {
-                            let label = items.iter().take(3).map(String::as_str).collect::<Vec<_>>().join(", ");
-                            ui.selectable_value(&mut custom_list, Some(index + 1), label);
+                            let label = format!("Custom List {}", index + 1);
+                            ui.selectable_value(&mut custom_list, Some(index + 1), label).on_hover_text(items.join(", "));
                         }
                     })
                     .response
