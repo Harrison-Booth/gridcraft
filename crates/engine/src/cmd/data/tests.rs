@@ -472,7 +472,7 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
     check(&wb);
     for (cell, expected) in [("I1", vec!["Red", "Green", "Blue"]), ("J1", vec!["Red", "Green", "Blue"]), ("L1", vec!["1", "2", "3"])] {
         let dv = wb.active().unwrap().validations.iter().find(|dv| dv.ranges.iter().any(|r| r.contains(CellRef::parse(cell).unwrap()))).unwrap();
-        assert_eq!(list_items(&wb, 0, dv), expected, "dropdown items for {cell}");
+        assert_eq!(list_items(&wb, 0, dv, CellRef::parse(cell).unwrap()), expected, "dropdown items for {cell}");
         assert!(check_validation(&wb, 0, CellRef::parse(cell).unwrap(), "0").is_some(), "{cell} accepts 0");
     }
 
