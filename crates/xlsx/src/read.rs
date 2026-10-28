@@ -256,13 +256,7 @@ pub fn read_xlsx(bytes: &[u8]) -> Result<(Workbook, ReadReport), IoError> {
             vec![]
         }
     };
-    cx.linked_records = match crate::richdata::read_linked(&mut cx, &wb_rels) {
-        Ok(records) => records,
-        Err(error) => {
-            cx.warn(format!("linked data type records could not be read ({error}); their displayed text was retained"));
-            vec![]
-        }
-    };
+    cx.linked_records = crate::richdata::read_linked(&mut cx, &wb_rels)?;
     let mut wb = Workbook::new();
     wb.sheets.clear();
 

@@ -66,7 +66,11 @@ impl<'h> Evaluator<'h> {
                 if args.len() != 2 {
                     return err(CellError::Value);
                 }
-                let Some(Value::Text(field)) = self.arg_val(args, 1) else { return err(CellError::Value) };
+                let field = match self.arg_val(args, 1) {
+                    Some(Value::Text(field)) => field,
+                    Some(Value::Error(error)) => return err(error),
+                    _ => return err(CellError::Value),
+                };
                 let areas = match self.eval(&args[0]) {
                     Ev::R(areas) => areas,
                     Ev::V(Value::Error(e)) => return err(e),
