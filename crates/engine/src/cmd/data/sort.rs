@@ -6,6 +6,7 @@ struct SortKey {
     desc: bool,
     by: String,
     list: Option<Vec<String>>,
+    list_ranks: Option<std::collections::HashMap<String, usize>>,
 }
 
 /// The sheet and range a sort works on: the sheet `sheet` or a `Sheet!` prefix on `range` names,
@@ -31,7 +32,7 @@ pub(super) fn quick_sort(s: &mut Session, p: &Json, asc: bool) -> Result<Json> {
     let d = s.doc()?;
     let sh = d.wb.sheet(sheet).ok_or(EngineError::NoDocument)?;
     let header = guess_header(&d.wb, sh, r);
-    do_sort(s, sheet, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None }], false, false)
+    do_sort(s, sheet, r, header, vec![SortKey { col, desc: !asc, by: "values".into(), list: None, list_ranks: None }], false, false)
 }
 
 pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
@@ -74,6 +75,7 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
             desc: k.get("order").and_then(Json::as_str) == Some("desc"),
             by: k.get("by").and_then(Json::as_str).unwrap_or("values").to_string(),
             list,
+            list_ranks: None,
         });
     }
     if keys.is_empty() {
@@ -98,6 +100,16 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
     };
     if body.count() > 20_000_000 {
         return Err(bad("data.sort", "range too large"));
+    }
+    let mut keys = keys;
+    for key in &mut keys {
+        key.list_ranks = key.list.as_ref().map(|list| {
+            let mut ranks = std::collections::HashMap::with_capacity(list.len());
+            for (rank, item) in list.iter().enumerate() {
+                ranks.entry(item.to_ascii_lowercase()).or_insert(rank);
+            }
+            ranks
+        });
     }
     edit(s, |cx| {
         let Some(sh) = cx.wb.sheet(sheet) else { return Ok(Json::Null) };
@@ -130,8 +142,9 @@ fn do_sort(s: &mut Session, sheet: usize, r: RangeRef, header: bool, keys: Vec<S
                 let (vb, cb) = &keyed[b as usize][ki];
                 let o = if k.by != "values" {
                     ca.cmp(cb)
-                } else if let Some(list) = &k.list {
-                    let pos = |v: &Value| v.as_text().and_then(|t| list.iter().position(|x| x.eq_ignore_ascii_case(t))).unwrap_or(usize::MAX);
+                } else if k.list.is_some() {
+                    let pos =
+                        |v: &Value| v.as_text().and_then(|t| k.list_ranks.as_ref()?.get(&t.to_ascii_lowercase()).copied()).unwrap_or(usize::MAX);
                     pos(va).cmp(&pos(vb))
                 } else if case && va.is_text() && vb.is_text() {
                     sort_compare(va, vb).then_with(|| case_order(va.as_text().unwrap_or(""), vb.as_text().unwrap_or("")))

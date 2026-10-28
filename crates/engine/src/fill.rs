@@ -87,8 +87,7 @@ pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
 
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
-    let mut custom = cx.custom_lists.clone();
-    custom.extend(cx.wb.custom_lists.iter().cloned());
+    let custom: Vec<&[String]> = cx.custom_lists.iter().chain(cx.wb.custom_lists.iter()).map(Vec::as_slice).collect();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     // Direction: down/up if target extends rows, else right/left.
     let vertical = target.height() != src.height() || target.width() == src.width();
@@ -295,7 +294,7 @@ impl Pattern {
         })
     }
 
-    fn detect(cells: &[(CellRef, Option<Cell>)], custom: &[Vec<String>], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
+    fn detect(cells: &[(CellRef, Option<Cell>)], custom: &[&[String]], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
         let vals: Vec<Value> = cells.iter().map(|(_, c)| c.as_ref().map(|c| c.value.clone()).unwrap_or_default()).collect();
         if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some())) {
             return Pattern::Copy;
@@ -346,8 +345,8 @@ impl Pattern {
         // Text.
         if !vals.is_empty() && vals.iter().all(|v| v.is_text()) {
             let texts: Vec<String> = vals.iter().filter_map(|v| v.as_text().map(str::to_string)).collect();
-            let all_lists: Vec<Vec<String>> = custom.iter().cloned().chain(lists()).collect();
-            for list in &all_lists {
+            let builtins = lists();
+            for list in custom.iter().copied().chain(builtins.iter().map(Vec::as_slice)) {
                 let idx: Vec<Option<usize>> = texts.iter().map(|t| list.iter().position(|l| l.eq_ignore_ascii_case(t))).collect();
                 if idx.iter().all(Option::is_some) {
                     let idx: Vec<usize> = idx.into_iter().flatten().collect();
@@ -357,7 +356,7 @@ impl Pattern {
                     let t0 = texts.first().cloned().unwrap_or_default();
                     let upper = t0.chars().all(|c| !c.is_lowercase()) && t0.chars().any(char::is_alphabetic) && t0.len() > 1;
                     let lower = t0.chars().all(|c| !c.is_uppercase());
-                    return Pattern::List { list: list.clone(), last, first, step, upper, lower };
+                    return Pattern::List { list: list.to_vec(), last, first, step, upper, lower };
                 }
             }
             // Text with a number at the end (or start).

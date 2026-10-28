@@ -117,6 +117,7 @@ pub struct Backstage {
     /// Custom Lists editor selection and draft, kept while Options is open.
     custom_list_index: usize,
     custom_list_draft: String,
+    custom_list_draft_initialized: bool,
     /// Print: the whole workbook rather than the active sheet.
     pub print_all: bool,
     /// Print: fit each sheet on one page.
@@ -143,6 +144,7 @@ impl Backstage {
             props: Default::default(),
             custom_list_index: 0,
             custom_list_draft: String::new(),
+            custom_list_draft_initialized: false,
             print_all: false,
             fit_to_page: false,
             preview_page: 0,

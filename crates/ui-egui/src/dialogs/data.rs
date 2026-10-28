@@ -270,6 +270,8 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
                 } else if let Some(object) = lv.as_object_mut() {
                     object.remove("customList");
                 }
+            } else if let Some(object) = lv.as_object_mut() {
+                object.remove("customList");
             }
             let mut desc = lv["order"].as_str() == Some("desc");
             ui.radio_value(&mut desc, false, "A to Z");

@@ -51,12 +51,14 @@ fn custom_lists(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
                     if ui.selectable_label(bs.custom_list_index == i, items.first().map(String::as_str).unwrap_or("Custom List")).clicked() {
                         bs.custom_list_index = i;
                         bs.custom_list_draft = items.join("\n");
+                        bs.custom_list_draft_initialized = true;
                     }
                 }
             },
         );
-        if bs.custom_list_draft.is_empty() {
+        if !bs.custom_list_draft_initialized {
             bs.custom_list_draft = lists.get(bs.custom_list_index).map(|l| l.join("\n")).unwrap_or_default();
+            bs.custom_list_draft_initialized = true;
         }
     }
     let label = ui.label("Enter one item per line:");
@@ -79,6 +81,7 @@ fn custom_lists(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
             app.run_or_alert("options.deleteCustomList", json!({"index": bs.custom_list_index + 1}));
             bs.custom_list_index = bs.custom_list_index.min(app.session.prefs.custom_lists.len().saturating_sub(1));
             bs.custom_list_draft = app.session.prefs.custom_lists.get(bs.custom_list_index).map(|l| l.join("\n")).unwrap_or_default();
+            bs.custom_list_draft_initialized = true;
         }
         if ui.add_enabled(app.session.active().is_some(), egui::Button::new("Import Selection")).clicked() {
             let before = app.session.prefs.custom_lists.len();
@@ -86,6 +89,7 @@ fn custom_lists(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
             if app.session.prefs.custom_lists.len() > before {
                 bs.custom_list_index = app.session.prefs.custom_lists.len() - 1;
                 bs.custom_list_draft = app.session.prefs.custom_lists[bs.custom_list_index].join("\n");
+                bs.custom_list_draft_initialized = true;
             }
         }
     });
