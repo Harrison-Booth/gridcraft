@@ -540,6 +540,7 @@ mod tests {
     /// higher orders), so they differ from the true values in the 7th to 9th digit. These are
     /// Excel's own results, read back from a workbook.
     #[test]
+    #[allow(clippy::excessive_precision)] // Excel's values as it prints them (17 digits)
     fn bessel_i_k_match_excel() {
         let table: &[(&str, f64, f64, f64)] = &[
             ("BESSELI", 0.05, 0.0, 1.0006250972908861),
