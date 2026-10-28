@@ -2406,8 +2406,7 @@ fn ods_import_keeps_cached_values_and_reports_limits() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn ods_import_never_reuses_source_as_save_target() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-ods-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let bytes = ods_fixture();
@@ -2437,8 +2436,7 @@ fn ods_import_never_reuses_source_as_save_target() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn saving_an_opened_semicolon_csv_keeps_semicolons() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-csv-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("cut list.csv");
@@ -2512,8 +2510,7 @@ fn link_target(path: &std::path::Path) -> String {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn save_as_into_another_folder_keeps_linked_workbooks_on_the_same_file() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let a = std::env::temp_dir().join(format!("gridcraft-links-{}-{nonce}", std::process::id()));
     let b = a.join("b");
     std::fs::create_dir_all(&b).unwrap();
@@ -2541,8 +2538,7 @@ fn save_as_into_another_folder_keeps_linked_workbooks_on_the_same_file() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn saving_to_an_unknown_extension_is_refused() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-unknown-ext-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let mut s = s();
@@ -2566,8 +2562,7 @@ fn saving_to_an_unknown_extension_is_refused() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn an_xlsx_opened_under_an_unknown_extension_saves_back_as_xlsx() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-dat-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("budget.dat");
@@ -3240,8 +3235,7 @@ fn xlsb_import_keeps_cached_values_and_reports_limits() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn xlsb_import_never_reuses_source_as_save_target() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-xlsb-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let bytes = xlsb_fixture();
@@ -4410,8 +4404,7 @@ fn encrypted_workbooks_open_with_their_password() {
 #[cfg(not(target_arch = "wasm32"))]
 fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     const PW: &str = "synthetic-pw-5522";
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-encrypted-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("Secret.xlsx");
@@ -4544,8 +4537,7 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn cell_filename_follows_the_file_the_workbook_lives_in() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-cellname-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let name = "=CELL(\"filename\",A1)";
@@ -5116,4 +5108,86 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     saved.execute("cell.set", json!({"cell": "A1", "input": "3"})).unwrap();
     assert_eq!(v(&saved, "B1"), Value::Number(6.0));
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
+}
+
+/// A key a command's params doc does not list is refused by name, so a typo is not a command that
+/// ran with its defaults (#2256); the keys it lists, and the ones that choose where it acts, pass.
+#[test]
+fn check_params_names_the_keys_a_command_does_not_take() {
+    use crate::cmd::check_params;
+    let err = |id: &str, params: serde_json::Value| check_params(id, &params).unwrap_err().to_string();
+    let e = err("home.insertSheet", json!({"nam": "Report3"}));
+    assert!(e.contains("unknown key `nam`") && e.contains("{name?, before?: index}"), "{e}");
+    let e = err("home.insertSheet", json!({"name": "R", "colour": 1, "args": {}}));
+    assert!(e.contains("unknown keys `args`, `colour`"), "{e}");
+    for (id, params) in [
+        ("home.insertSheet", json!({"name": "R", "before": 0})),
+        ("home.insertSheet", json!({})),
+        ("cell.set", json!({"cell": "A1", "input": "1", "sheet": 0})),
+        ("home.bold", json!({"range": "A1", "sheet": "Sheet1", "on": true})),
+        ("home.alignLeft", json!({"range": "A1", "on": true})),
+        ("home.insertRows", json!({"rows": "2:3", "count": 2})),
+        ("home.deleteColumns", json!({"cols": "B", "count": 2})),
+        ("file.open", json!({"base64": "", "name": "a.csv", "csvAsText": true})),
+        ("home.insertSheet", json!({"window": 1, "doc": 1})),
+        // Commands with free-form params, ids that are not engine commands and a params value
+        // that is not an object are left to the command.
+        ("insert.textBox", json!({"fill": "red"})),
+        ("ui.dialog", json!({"anything": 1})),
+        ("home.insertSheet", serde_json::Value::Null),
+    ] {
+        check_params(id, &params).unwrap_or_else(|e| panic!("{id} {params}: {e}"));
+    }
+}
+
+/// The keys are the names a params doc lists inside its braces, not the words of their values.
+#[test]
+fn documented_keys_reads_the_words_in_braces() {
+    use crate::cmd::documented_keys;
+    assert_eq!(documented_keys(r#"{a?: "skip me", b_2?: bool} → {c} then prose"#), ["a", "b_2"]);
+    // `|` between names gives alternatives; after a colon it separates the words of a value.
+    assert_eq!(documented_keys("{input | value: \"text\", mode?: a|b, path? | base64?: \"..\"}"), ["input", "value", "mode", "path", "base64"]);
+    assert_eq!(documented_keys("{name?, before?: index}"), ["name", "before"]);
+    assert_eq!(documented_keys("{v: [[1, two], [3]], w?}"), ["v", "w"]);
+    assert_eq!(documented_keys("{} no params"), Vec::<&str>::new());
+    assert_eq!(documented_keys("{x?: `not this`}"), ["x"]);
+    // An escaped quote does not end the quoted text: the keys after it still count.
+    assert_eq!(documented_keys(r#"{q?: "\"", after?}"#), ["q", "after"]);
+    for id in ["cell.set", "insert.picture"] {
+        let key = if id == "cell.set" { "value" } else { "base64" };
+        assert!(documented_keys(crate::cmd::find_command(id).map_or("", |c| c.params)).contains(&key), "{id}");
+    }
+    // Every key a command's doc lists passes, whatever the doc's shape.
+    for spec in crate::cmd::command_specs() {
+        let params: serde_json::Map<String, serde_json::Value> =
+            documented_keys(spec.params).into_iter().map(|k| (k.to_string(), json!(null))).collect();
+        crate::cmd::check_params(spec.id, &serde_json::Value::Object(params)).unwrap_or_else(|e| panic!("{}: {e}", spec.id));
+    }
+}
+
+#[test]
+fn align_on_false_clears_only_the_active_alignment() {
+    let mut s = Session::new();
+    s.new_workbook();
+    let h = |s: &mut Session| s.execute("cell.get", json!({"cell": "A1"})).unwrap()["style"]["align"]["h"].clone();
+    s.execute("home.alignLeft", json!({"range": "A1", "on": true})).unwrap();
+    assert_eq!(h(&mut s), json!("Left"));
+    s.execute("home.alignRight", json!({"range": "A1", "on": false})).unwrap();
+    assert_eq!(h(&mut s), json!("Left"));
+    s.execute("home.alignLeft", json!({"range": "A1", "on": false})).unwrap();
+    assert_eq!(h(&mut s), json!("General"));
+}
+
+#[test]
+fn paste_special_and_insert_sheet_reject_a_misspelled_key() {
+    assert!(crate::cmd::check_params("edit.pasteSpecial", &json!({"waht": "values"})).is_err());
+    assert!(crate::cmd::check_params("edit.pasteSpecial", &json!({"what": "values", "at": "C3"})).is_ok());
+    assert!(crate::cmd::check_params("home.insertSheet", &json!({"index": 0})).is_err());
+}
+
+/// A per-test unique suffix for temp dir names.
+#[cfg(not(target_arch = "wasm32"))]
+fn unique_nonce() -> u64 {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }

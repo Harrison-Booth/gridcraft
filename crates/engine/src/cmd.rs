@@ -89,6 +89,113 @@ pub fn journal_params(params: &Json) -> Json {
     }
 }
 
+/// Params that choose where a command acts, and the alias of `mode` that every object command
+/// reads. The shared helpers read them for commands whose params doc names only `range` or `mode`,
+/// so [`check_params`] always lets them through.
+const SHARED_KEYS: &[&str] = &["range", "cell", "sheet", "window", "doc", "anchorMode"];
+
+/// Commands [`check_params`] leaves alone: they copy their params into another command or read
+/// them in a way a params doc cannot list (found by listing the commands whose code uses `p`
+/// other than to read a named key).
+const FREE_FORM_PARAMS: &[&str] = &[
+    "data.analysisToolPak",
+    "data.removeDuplicates",
+    "data.textToColumns",
+    "data.flashFill",
+    "edit.paste",
+    "chart.changeType",
+    "arrange.group",
+    "table.removeDuplicates",
+    "automate.recordActions",
+    "automate.runScript",
+    "pageLayout.themeColors",
+    "pageLayout.themeFonts",
+    "pageLayout.background",
+    "home.drawBorder",
+    "formulas.recentlyUsed",
+    "formulas.moreFunctions",
+    "file.save",
+    "file.saveAs",
+    "home.doubleUnderline",
+    "home.formatCells",
+    "formulas.selectPrecedents",
+    "formulas.selectDependents",
+    "home.formatAsTable",
+    "insert.recommendedCharts",
+    "insert.textBox",
+    "table.summarizePivot",
+    "pivot.grandTotals",
+    "pivot.subtotals",
+    "pivot.refresh",
+    "data.refreshAll",
+    "pageLayout.pageSetup",
+    "data.solver",
+    "data.solverReport",
+];
+
+/// The names of the params a params doc lists: the words that start a `{…}` group or follow a comma
+/// directly inside one (outside quotes, brackets and parentheses), and the alternative names of
+/// `input | value`. The words of a value, such as `index` in `before?: index` or `a | b` after a
+/// colon, are not names. The doc's response after `→` is not input and is not read.
+pub(crate) fn documented_keys(doc: &str) -> Vec<&str> {
+    let (mut keys, mut depth, mut nest, mut quote, mut start, mut escaped) = (Vec::new(), 0usize, 0usize, None, None, false);
+    let (mut expect, mut is_key, mut in_value) = (false, false, false);
+    for (i, c) in doc.char_indices().chain(std::iter::once((doc.len(), ' '))) {
+        if let Some(from) = start {
+            if c.is_alphanumeric() || c == '_' {
+                continue;
+            }
+            if is_key {
+                keys.extend(doc.get(from..i));
+            }
+            start = None;
+        }
+        match (quote, c) {
+            (Some(_), _) if escaped => escaped = false,
+            (Some(_), '\\') => escaped = true,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '`') => quote = Some(c),
+            (None, '{') => {
+                depth += 1;
+                (expect, in_value) = (true, false);
+            }
+            (None, '→') => break,
+            (None, '}') => depth = depth.saturating_sub(1),
+            (None, '[' | '(') => nest += 1,
+            (None, ']' | ')') => nest = nest.saturating_sub(1),
+            (None, ',') if depth > 0 && nest == 0 => (expect, in_value) = (true, false),
+            (None, ':') if depth > 0 && nest == 0 => in_value = true,
+            (None, '|') if depth > 0 && nest == 0 && !in_value => expect = true,
+            (None, c) if depth > 0 && (c.is_alphabetic() || c == '_') => {
+                (start, is_key, expect) = (Some(i), expect && nest == 0, false);
+            }
+            _ => {}
+        }
+    }
+    keys
+}
+
+/// Refuses a key in `params` that the command's params doc does not list, naming it, so a typo
+/// (`{"nam": "Report"}`) is an error instead of a command that ran with its defaults (#2256).
+/// For callers that take a command and its params from a script, an agent or a person: commands
+/// the engine runs for itself are not checked. A command with no params doc to read, or listed in
+/// [`FREE_FORM_PARAMS`], accepts anything.
+pub fn check_params(id: &str, params: &Json) -> Result<()> {
+    let (Some(spec), Some(given)) = (find_command(id), params.as_object()) else { return Ok(()) };
+    if FREE_FORM_PARAMS.contains(&id) || !spec.params.contains('{') {
+        return Ok(());
+    }
+    let known = documented_keys(spec.params);
+    let mut unknown: Vec<&str> = given.keys().map(String::as_str).filter(|k| !SHARED_KEYS.contains(k) && !known.contains(k)).collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    let (plural, list) = (if unknown.len() == 1 { "key" } else { "keys" }, unknown.join("`, `"));
+    Err(bad(id, format!("unknown {plural} `{list}` (takes {})", spec.params)))
+}
+
 pub fn always(_: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
@@ -205,7 +312,6 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
 }
 
 fn test_commands() -> std::sync::MutexGuard<'static, Vec<&'static CommandSpec>> {
-    #[allow(clippy::unwrap_used)] // a poisoned test registry has no meaningful recovery
     match TEST_COMMANDS.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -349,11 +455,15 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     })
 }
 
+fn wall_clock() -> std::time::Duration {
+    std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
+}
+
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
-    // `GRIDCRAFT_PROFILE` timing. Read the clock only when profiling, and never on wasm: there
-    // `Instant::now` traps (`RuntimeError: unreachable`), which broke every edit in the web app.
-    #[allow(clippy::disallowed_methods)]
-    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| std::time::Instant::now()) };
+    // `GRIDCRAFT_PROFILE` timing, never on wasm where the clock traps. `elapsed` on the epoch
+    // reads the wall clock without the (disallowed) `now`.
+    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| wall_clock()) };
+    let since = |t0: std::time::Duration| wall_clock().saturating_sub(t0);
     let mut sel = d.selection.clone();
     let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
     let r = f(&mut ctx)?;
@@ -368,7 +478,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: edit {:?}, {} changed", t0.elapsed(), changed.len());
+        eprintln!("commit: edit {:?}, {} changed", since(t0), changed.len());
     }
     if structural {
         d.calc.recalc_all(&mut wb);
@@ -376,7 +486,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         d.calc.cells_changed(&mut wb, &changed);
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: + recalc {:?}", t0.elapsed());
+        eprintln!("commit: + recalc {:?}", since(t0));
     }
     fit_rows.sort_unstable();
     fit_rows.dedup();
@@ -384,7 +494,7 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         auto_row_height(&mut wb, si, row);
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: + rows {:?}", t0.elapsed());
+        eprintln!("commit: + rows {:?}", since(t0));
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;

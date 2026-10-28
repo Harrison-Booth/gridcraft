@@ -5,7 +5,7 @@ use gridcraft_core::CellRef;
 use gridcraft_model::{EditRange, PasswordHash, SheetProtection, Visibility, password_hash};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, DocState, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, str_param, target_ranges, target_sheet};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Protect Sheet…",
             ["Review", "Protect"],
             None,
-            "{password?, formatCells?, formatColumns?, formatRows?, insertRows?, insertColumns?, deleteRows?, deleteColumns?, sort?, autofilter?}",
+            "{password?, formatCells?, formatColumns?, formatRows?, insertRows?, insertColumns?, deleteRows?, deleteColumns?, sort?, autofilter?, selectLockedCells?, selectUnlockedCells?}",
             has_doc,
             protect_sheet
         ),

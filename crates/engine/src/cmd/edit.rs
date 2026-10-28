@@ -4,7 +4,10 @@ use gridcraft_core::{CellRef, MAX_ROWS, RangeRef, Value};
 use gridcraft_model::{Cell, Formula, StyleId};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, bad, bool_param, can_redo, can_undo, cell_param, cell_param_on, cmd, edit, f64_param, has_clipboard, has_doc,
+    locked_cell_error, ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
+};
 use crate::selection::{current_region, jump};
 use crate::{Clipboard, Session};
 
@@ -37,7 +40,15 @@ use selection::{select_all, select_col, select_region, select_row, selection_mov
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!("cell.set", "Enter Cell", [], None, "{cell?: \"B2\", input: \"text, number or =formula\", sheet?, array?: bool}", has_doc, cell_set),
+        cmd!(
+            "cell.set",
+            "Enter Cell",
+            [],
+            None,
+            "{cell?: \"B2\", input | value: \"text, number or =formula\", sheet?, array?: bool}",
+            has_doc,
+            cell_set
+        ),
         cmd!(
             "range.setValues",
             "Set Values",
@@ -83,7 +94,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Special…",
             ["Home", "Clipboard"],
             Some("Ctrl+Cmd+V"),
-            "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?}",
+            "{what: all|formulas|values|formats|comments|validation|allExceptBorders|columnWidths|formulasAndNumberFormats|valuesAndNumberFormats, operation?: none|add|subtract|multiply|divide, skipBlanks?, transpose?, link?, at?: \"C3\"}",
             has_clipboard,
             paste_special
         ),
