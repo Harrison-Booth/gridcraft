@@ -1,5 +1,7 @@
 //! The offline XPath subset used by FILTERXML.
 
+use std::collections::HashSet;
+
 use gridcraft_core::parse::parse_input;
 use gridcraft_core::{Array, CellError, Value};
 use quick_xml::Reader;
@@ -59,6 +61,7 @@ pub(crate) fn filterxml(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let mut work = 0usize;
     for (step_index, step) in steps.iter().enumerate() {
         let mut next = Vec::new();
+        let mut seen = HashSet::new();
         if let Test::Attribute(name) = &step.test {
             if step.predicate.is_some() {
                 return Err(CellError::Value);
@@ -68,7 +71,7 @@ pub(crate) fn filterxml(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
                 if work > MAX_WORK {
                     return Err(CellError::Value);
                 }
-                if nodes.get(*current).is_some_and(|node| node.attrs.iter().any(|(key, _)| key == name)) {
+                if nodes.get(*current).is_some_and(|node| node.attrs.iter().any(|(key, _)| key == name)) && seen.insert(*current) {
                     next.push(*current);
                 }
             }
@@ -90,7 +93,9 @@ pub(crate) fn filterxml(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
                 for candidate in candidates {
                     if matches_test(nodes.get(candidate).ok_or(CellError::Value)?, &step.test) {
                         position = position.checked_add(1).ok_or(CellError::Value)?;
-                        if predicate_matches(nodes.get(candidate).ok_or(CellError::Value)?, step.predicate.as_ref(), position) {
+                        if predicate_matches(nodes.get(candidate).ok_or(CellError::Value)?, step.predicate.as_ref(), position)
+                            && seen.insert(candidate)
+                        {
                             next.push(candidate);
                         }
                     }
@@ -317,7 +322,7 @@ fn parse_xpath(xpath: &str) -> R<Vec<Step>> {
             return Err(CellError::Value);
         }
         let test = if let Some(attribute) = raw.strip_prefix('@') {
-            if attribute.is_empty() || at != bytes.len() {
+            if attribute.is_empty() || at != bytes.len() || steps.is_empty() || matches!(axis, Axis::Descendant) {
                 return Err(CellError::Value);
             }
             Test::Attribute(attribute.to_string())
@@ -413,6 +418,7 @@ mod tests {
         assert_eq!(evaluate("<r><v a='x'>1</v><v a='y'>2</v></r>", "//v[@a='y']"), Value::Number(2.0));
         assert_eq!(evaluate("<r><v>1</v></r>", "/r/v"), Value::Number(1.0));
         assert_eq!(evaluate("<r>1</r>", "//r"), Value::Number(1.0));
+        assert_eq!(evaluate("<r><a><a><b>value</b></a></a></r>", "//a//b"), Value::from("value"));
     }
 
     #[test]
@@ -425,6 +431,9 @@ mod tests {
             ("<r><v>1</v></r>", ""),
             ("<r><v>1</v></r>", "count(//v)"),
             ("<r><v>1</v></r>", "//v/text()"),
+            ("<r a='1'/>", "/@a"),
+            ("<r a='1'/>", "//@a"),
+            ("<r><v a='1'/></r>", "/r//@a"),
             ("<r><v><w>1</w></v></r>", "//v"),
         ] {
             assert_eq!(evaluate(xml, xpath), Value::Error(CellError::Value));
