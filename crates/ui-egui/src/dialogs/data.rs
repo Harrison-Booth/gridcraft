@@ -244,6 +244,29 @@ pub(super) fn sort(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog, confir
                 .response
                 .accessible_name(lang.tr("Sort On"));
             lv["by"] = json!(by);
+            if by == "values" {
+                let mut custom_list = lv
+                    .get("customList")
+                    .and_then(Json::as_u64)
+                    .and_then(|n| usize::try_from(n).ok())
+                    .filter(|n| *n > 0 && *n <= app.session.prefs.custom_lists.len());
+                let label = custom_list
+                    .and_then(|n| app.session.prefs.custom_lists.get(n - 1))
+                    .map(|items| items.iter().take(3).map(String::as_str).collect::<Vec<_>>().join(", "))
+                    .unwrap_or_else(|| "Cell Values".into());
+                craft_ui::ComboBox::from_id_salt(("sort_custom_list", i)).selected_text(label).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut custom_list, None, "Cell Values");
+                    for (index, items) in app.session.prefs.custom_lists.iter().enumerate() {
+                        let label = items.iter().take(3).map(String::as_str).collect::<Vec<_>>().join(", ");
+                        ui.selectable_value(&mut custom_list, Some(index + 1), label);
+                    }
+                });
+                if let Some(index) = custom_list {
+                    lv["customList"] = json!(index);
+                } else if let Some(object) = lv.as_object_mut() {
+                    object.remove("customList");
+                }
+            }
             let mut desc = lv["order"].as_str() == Some("desc");
             ui.radio_value(&mut desc, false, "A to Z");
             ui.radio_value(&mut desc, true, "Z to A");

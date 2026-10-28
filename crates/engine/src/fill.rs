@@ -87,7 +87,8 @@ pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
 
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
-    let custom = cx.wb.custom_lists.clone();
+    let mut custom = cx.custom_lists.clone();
+    custom.extend(cx.wb.custom_lists.iter().cloned());
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     // Direction: down/up if target extends rows, else right/left.
     let vertical = target.height() != src.height() || target.width() == src.width();
@@ -831,6 +832,21 @@ mod tests {
             fill(serde_json::json!([["Product 1"], ["On backorder"]]), "E1:E2", "E1:E6"),
             ["Product 1", "On backorder", "Product 2", "On backorder", "Product 3", "On backorder"]
         );
+    }
+
+    #[test]
+    fn saved_custom_list_fills_forward_and_backward_from_middle() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.prefs.custom_lists.push(["Bronze", "Silver", "Gold"].map(str::to_string).to_vec());
+        for (cell, target, expected) in [("A2", "A2:A4", vec!["Silver", "Gold", "Bronze"]), ("B2", "B1:B2", vec!["Bronze", "Silver"])] {
+            s.execute("cell.set", serde_json::json!({"cell": cell, "input": "Silver"})).unwrap();
+            s.execute("edit.autoFill", serde_json::json!({"source": cell, "target": target})).unwrap();
+            let r = RangeRef::parse(target).unwrap();
+            let sh = s.doc().unwrap().wb.active().unwrap();
+            let values: Vec<String> = r.iter().map(|c| crate::display::cell_text(&s.doc().unwrap().wb, sh, c)).collect();
+            assert_eq!(values, expected.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        }
     }
 
     #[test]

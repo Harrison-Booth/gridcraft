@@ -1398,6 +1398,16 @@ fn hidden_formulas_stay_hidden_on_protected_sheets() {
 }
 
 #[test]
+fn sort_uses_saved_custom_list_index() {
+    let mut s = s();
+    s.prefs.custom_lists.push(["Bronze", "Silver", "Gold"].map(str::to_string).to_vec());
+    s.execute("range.setValues", json!({"range": "A1", "values": [["Gold"], ["Bronze"], ["Silver"]]})).unwrap();
+    s.execute("data.sort", json!({"range": "A1:A3", "header": false, "keys": [{"column": "A", "customList": 1}]})).unwrap();
+    let col: Vec<Value> = (1..=3).map(|r| v(&s, &format!("A{r}"))).collect();
+    assert_eq!(col, ["Bronze", "Silver", "Gold"].map(Value::from));
+}
+
+#[test]
 fn case_sensitive_sort_puts_lowercase_first() {
     let mut s = s();
     s.execute("range.setValues", json!({"range": "A1", "values": [["b"], ["B"], ["Ab"], ["a"], ["aB"], ["A"]]})).unwrap();

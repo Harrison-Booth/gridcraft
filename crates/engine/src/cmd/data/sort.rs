@@ -57,11 +57,23 @@ pub(super) fn sort(s: &mut Session, p: &Json) -> Result<Json> {
             col_param(k.get("column"), r.start.col)
         };
         let Some(col) = col else { continue };
+        let list = match k.get("customList") {
+            None => None,
+            Some(list) if let Some(items) = list.as_array() => Some(items.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()),
+            Some(value) => {
+                let index = value
+                    .as_u64()
+                    .and_then(|i| usize::try_from(i).ok())
+                    .and_then(|i| i.checked_sub(1))
+                    .ok_or_else(|| bad("data.sort", "`customList` must be an array or a 1-based saved list index"))?;
+                Some(s.prefs.custom_lists.get(index).cloned().ok_or_else(|| bad("data.sort", "no saved Custom List at that index"))?)
+            }
+        };
         keys.push(SortKey {
             col,
             desc: k.get("order").and_then(Json::as_str) == Some("desc"),
             by: k.get("by").and_then(Json::as_str).unwrap_or("values").to_string(),
-            list: k.get("customList").and_then(Json::as_array).map(|l| l.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()),
+            list,
         });
     }
     if keys.is_empty() {
