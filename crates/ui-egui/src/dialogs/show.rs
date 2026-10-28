@@ -354,6 +354,9 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     if ctx.input(|i| i.key_pressed(Key::Escape)) || !win_open {
         open = false;
     }
+    if confirm && d.name == "unhideSheet" && d.values.get("sheet").and_then(Json::as_str).is_none() {
+        confirm = false;
+    }
     if confirm && d.name == "insertPicture" && d.picture_target != app.view_key() {
         app.message = Some((d.title.clone(), "Return to the original worksheet to insert this picture, or cancel and choose another cell.".into()));
         confirm = false;
@@ -575,6 +578,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                         let matches: Vec<&String> = options.iter().filter(|name| name.to_lowercase().contains(&query)).collect();
                         if matches.is_empty() {
                             d.list_index = 0;
+                            d.values.remove(key);
                         } else {
                             d.list_index = d.list_index.min(matches.len() - 1);
                             let up = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::ArrowUp));
@@ -603,9 +607,7 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                                     }
                                 }
                             });
-                            if d.values.get(key).and_then(Json::as_str).is_none_or(|value| !matches.iter().any(|name| name.as_str() == value)) {
-                                d.values.insert(key.into(), json!(matches[d.list_index]));
-                            }
+                            d.values.insert(key.into(), json!(matches[d.list_index]));
                         }
                     });
                 }
