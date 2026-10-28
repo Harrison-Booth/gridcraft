@@ -2,6 +2,7 @@ use super::{
     CellRef, Chart, Color, EngineError, Json, LegendPos, RangeRef, Result, Session, Trendline, TrendlineKind, bad, bool_param, cell_param_on, edit,
     f64_param, json, split_sheet, str_param, u32_param,
 };
+use gridcraft_model::{ChartKind, ErrorAmount, ErrorBarDirection, ErrorBarSides, ErrorBars};
 
 fn find_chart(s: &Session, p: &Json) -> Result<(usize, usize)> {
     let d = s.doc()?;
@@ -208,7 +209,7 @@ fn error_bars_param(p: &Json) -> Result<ErrorBars> {
     };
     let color = match given("color") {
         None => None,
-        Some(v) => Some(super::format::color_param(Some(v)).ok_or_else(|| bad("chart.addElement", "`color` is not a colour"))?),
+        Some(v) => Some(crate::cmd::format::color_param(Some(v)).ok_or_else(|| bad("chart.addElement", "`color` is not a colour"))?),
     };
     let width = match given("width") {
         None => None,
