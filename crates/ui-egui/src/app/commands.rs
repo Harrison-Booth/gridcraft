@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
+    formula_locale, i18n, json, now_ms, printing,
+};
 
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
@@ -221,6 +224,18 @@ impl SheetApp {
                 let name = p.get("name").and_then(Json::as_str).unwrap_or("");
                 self.open_dialog(name, p.clone());
                 Ok(json!({"dialog": self.dialog.as_ref().map(|d| d.name())}))
+            }
+            "ui.selectionMode" => {
+                // `{"mode": "extend"}` (F8), `"add"` (Shift+F8) or `"off"`; `{}` reports the mode.
+                match p.get("mode").and_then(Json::as_str) {
+                    Some(id) => match crate::grid::SelectionMode::parse(id) {
+                        Some(mode) => self.grid.set_selection_mode(mode),
+                        None => return Some(Err(format!("unknown selection mode {id:?} (use \"extend\", \"add\" or \"off\")"))),
+                    },
+                    None if p.get("mode").is_some_and(|v| !v.is_null()) => return Some(Err("`mode` must be \"extend\", \"add\" or \"off\"".into())),
+                    None => {}
+                }
+                Ok(json!({"mode": self.grid.selection_mode.id()}))
             }
             "ui.message.dismiss" => {
                 self.message = None;

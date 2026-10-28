@@ -15,6 +15,13 @@ use crate::SheetApp;
 use crate::editor::EditState;
 use crate::theme::{self, Tokens};
 
+/// A painted pane: its row span, column span and screen rectangle.
+pub(crate) type PaneQuad = ((u32, u32), (u32, u32), Rect);
+/// Cached Page Break Preview ranges, keyed by (doc uid, revision, sheet).
+type PagesCache = ((u64, u64, usize), Vec<(RangeRef, u32)>);
+/// Cached Show Details cells, keyed by (doc uid, revision, sheet, pivot).
+type DetailsCache = ((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>);
+
 mod cell_paint;
 mod cursor;
 mod editor;
@@ -37,9 +44,9 @@ pub use editor::validation_arrow;
 use editor::{editor_slack, editor_width, list_picker_height};
 pub use geo::Geo;
 pub use interact::{follow_link, freeze_handles, point_move};
-pub(crate) use quadrant::paint_quadrant;
-pub(crate) use selection::paint_selection;
+pub(crate) use quadrant::{QuadrantPaint, paint_quadrant};
 pub use selection::selection_fill;
+pub(crate) use selection::{SelectionPaintInput, paint_selection};
 pub(crate) use show::horizontal_scrollbar;
 pub use show::show;
 #[cfg(test)]
@@ -210,7 +217,7 @@ pub struct GridState {
     /// Ink stroke being drawn (sheet points).
     pub ink: Vec<[f32; 2]>,
     /// Page ranges for Page Break Preview, cached per (doc uid, revision, sheet).
-    pub pages: Option<((u64, u64, usize), Vec<(RangeRef, u32)>)>,
+    pub pages: Option<PagesCache>,
     /// The PivotTable Fields pane's `pivot.fields` answer, cached per (doc uid, revision, pivot):
     /// it scans the whole source list, far too slow to repeat every frame (#2113).
     pub pivot_fields: Option<((u64, u64, String), serde_json::Value)>,
@@ -218,7 +225,7 @@ pub struct GridState {
     /// report's top-left and cached per (doc uid, revision, sheet, pivot): finding them computes
     /// the whole report. `None` when the report can't be computed or is out of date: every cell
     /// of it offers Show Details, and running it says why.
-    pub show_details_cells: Option<((u64, u64, usize, usize), Option<std::collections::HashSet<(u32, u32)>>)>,
+    pub show_details_cells: Option<DetailsCache>,
     pub header_menu: Option<(Pos2, bool)>,
     /// Page Layout view pagination, cached per (doc uid, revision, sheet, rows, columns).
     pub paper: Option<crate::paper_view::PaperCache>,
@@ -241,6 +248,67 @@ pub struct GridState {
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
+    /// F8 Extend Selection or Shift+F8 Add or Remove Selection mode (see [`SelectionMode`]).
+    pub selection_mode: SelectionMode,
+    /// Add mode: the last area is the cell an arrow key moved to, not yet extended, so the next
+    /// arrow moves it again instead of keeping it.
+    pub add_pending: Option<RangeRef>,
+    /// Add mode header drag: the areas kept from before the drag, which the dragged range joins.
+    pub header_drag_base: Vec<String>,
+}
+
+/// Excel's keyboard selection modes, shown in the status bar. In Extend mode (F8) arrow keys and
+/// clicks extend from the anchor as if Shift were held. In Add mode (Shift+F8) arrow keys move the
+/// active cell without dropping the selected areas, Shift+arrows grow a new area from there, and a
+/// click adds an area (or removes one already selected) as Ctrl+click does. Esc, the same key
+/// again, or editing a cell turns the mode off.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectionMode {
+    #[default]
+    Off,
+    Extend,
+    Add,
+}
+
+impl SelectionMode {
+    /// The id the `ui.selectionMode` command takes and returns.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Extend => "extend",
+            Self::Add => "add",
+        }
+    }
+
+    pub fn parse(id: &str) -> Option<Self> {
+        match id.trim().to_ascii_lowercase().as_str() {
+            "off" | "none" => Some(Self::Off),
+            "extend" => Some(Self::Extend),
+            "add" => Some(Self::Add),
+            _ => None,
+        }
+    }
+
+    /// The status bar text (an i18n catalog key), when the mode shows one.
+    pub fn status_text(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Extend => Some("Extend Selection"),
+            Self::Add => Some("Add or Remove Selection"),
+        }
+    }
+}
+
+impl GridState {
+    /// Turns `mode` on, or off when it is already on (F8 / Shift+F8); the other mode ends.
+    pub fn toggle_selection_mode(&mut self, mode: SelectionMode) {
+        self.set_selection_mode(if self.selection_mode == mode { SelectionMode::Off } else { mode });
+    }
+
+    pub fn set_selection_mode(&mut self, mode: SelectionMode) {
+        self.selection_mode = mode;
+        self.add_pending = None;
+    }
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
