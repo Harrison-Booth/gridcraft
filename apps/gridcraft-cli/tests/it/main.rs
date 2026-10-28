@@ -2,4 +2,5 @@
 
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod cli;
+mod help;
 mod text_to_columns_quotes;

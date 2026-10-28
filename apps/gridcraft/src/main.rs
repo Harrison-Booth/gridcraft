@@ -234,6 +234,13 @@ fn icon() -> Option<egui::IconData> {
 }
 
 fn main() -> eframe::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        println!(
+            "usage: gridcraft [--control <port> [--control-token <token>]] [--sample <name>] [files…]\n\nOptions:\n  --control <port>       Start the localhost JSON-lines control server\n  --control-token <token>  Authenticate control connections\n  --sample <name>        Open a sample workbook (sales, grades, budget)\n  -h, --help             Print this help and exit\n  -V, --version          Print version and exit"
+        );
+        return Ok(());
+    }
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     // Commands catch their panics (`Session::execute`), but the default hook only prints to
@@ -254,7 +261,6 @@ fn main() -> eframe::Result<()> {
             let _ = std::io::Write::write_fmt(&mut std::io::stderr(), format_args!("gridcraft: {report}\n"));
         }
     }));
-    let args: Vec<String> = std::env::args().skip(1).collect();
     // The restart helper a self-update spawns: it finishes the swap and relaunches, then exits.
     if let Some(done) = craft_update::self_update::finish(&craft_update::suite::GRIDCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         if let Err(e) = done {

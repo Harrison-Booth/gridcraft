@@ -63,6 +63,10 @@ fn stdout_failed(e: std::io::Error) -> ! {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.iter().any(|a| a == "--help" || a == "-h") {
+        outln!("{USAGE}");
+        return ExitCode::SUCCESS;
+    }
     let rest = args.get(1..).unwrap_or_default();
     let r = match args.first().map(String::as_str) {
         Some("--version" | "-V" | "version") => {
