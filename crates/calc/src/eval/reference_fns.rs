@@ -356,6 +356,9 @@ impl<'h> Evaluator<'h> {
                     }
                 }
                 Ev::V(v) => {
+                    if name == "AGGREGATE" && func <= 13 {
+                        return err(CellError::Value);
+                    }
                     let n = match &v {
                         Value::Array(a) => u64::try_from(a.data.len()).unwrap_or(u64::MAX),
                         _ => 1,
