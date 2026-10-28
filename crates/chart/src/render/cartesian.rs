@@ -1,4 +1,3 @@
-use super::errbars::supports_error_bars;
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, plot_kind};
 use super::lines::{decimate, draw_markers, draw_runs};
@@ -7,6 +6,7 @@ use super::{
     Chart, ChartData, ChartKind, Ctx, ErrSeg, ErrorBarData, ErrorBarDirection, Fmt, HAlign, LABEL_SIZE, MAX_CATS, MAX_ERR_BARS, MAX_LABELS,
     MAX_LINE_PTS, MAX_MARKERS, Prim, Scale, SeriesData, TEXT, VAlign, WHITE, clean, draw_error_bar, error_segments, fixed_scale, nice_scale,
 };
+use crate::errbars::supports_error_bars;
 
 // ---------------------------------------------------------------- cartesian (column/bar/line/area/combo)
 
