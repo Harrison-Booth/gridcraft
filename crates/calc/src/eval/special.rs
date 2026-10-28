@@ -1,4 +1,5 @@
-use super::*;
+use super::{Area, BinOp, Ev, Expr, Reference, SheetSel, Value, Workbook};
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 
 /// SUMIF and AVERAGEIF with a sum range: Excel sizes the sum range like the criteria range.
 pub(super) fn resizes_sum_range(name: &str, args: usize) -> bool {
@@ -84,7 +85,7 @@ pub fn precedents(wb: &Workbook, sheet: usize, e: &Expr) -> (Vec<Area>, bool) {
     (out, dynamic)
 }
 
-fn is_special(n: &str) -> bool {
+pub(super) fn is_special(n: &str) -> bool {
     matches!(
         n,
         "IF" | "IFS"
@@ -162,6 +163,3 @@ pub const SPECIAL_FUNCTIONS: &[&str] = &[
 pub fn is_known_function(n: &str) -> bool {
     is_special(&n.to_ascii_uppercase()) || gridcraft_functions::lookup(n).is_some()
 }
-
-#[allow(dead_code)]
-fn unused(_: RefKind) {}
