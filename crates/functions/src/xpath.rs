@@ -394,7 +394,7 @@ mod tests {
     }
 
     fn evaluate(xml: &str, xpath: &str) -> Value {
-        filterxml(&[Arg::val(xml), Arg::val(xpath)], &mut TestCtx).unwrap_or(Value::Error(CellError::Calc))
+        filterxml(&[Arg::val(xml), Arg::val(xpath)], &mut TestCtx).unwrap_or_else(Value::Error)
     }
 
     #[test]
