@@ -264,7 +264,8 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
         _ => ShapeTextAlign::Left,
     });
     f.rtl = ppr.is_some_and(|p| p.flag("rtl", false));
-    let rpr = body.kids("p").flat_map(|p| p.children.iter()).filter(|r| r.name == "r" || r.name == "fld").find_map(|r| r.child("rPr"));
+    let rpr =
+        body.kids("p").next().into_iter().flat_map(|p| p.children.iter()).filter(|r| r.name == "r" || r.name == "fld").find_map(|r| r.child("rPr"));
     if let Some(r) = rpr {
         // `sz` is in hundredths of a point (100..=400000 in the schema).
         f.font_size = r.attr_f64("sz").filter(|v| v.is_finite()).map(|v| (v / 100.0).clamp(1.0, 4000.0) as f32);
@@ -280,6 +281,25 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
         });
     }
     f
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::read_text_format;
+    use crate::xml;
+
+    #[test]
+    fn text_format_uses_only_first_paragraph() {
+        let body = xml::parse(
+            br#"<a:txBody><a:p><a:r><a:t>first</a:t></a:r></a:p><a:p><a:r><a:rPr b="1" sz="2000"/><a:t>later</a:t></a:r></a:p></a:txBody>"#,
+        )
+        .unwrap();
+        let format = read_text_format(Some(&body));
+        assert!(!format.bold);
+        assert_eq!(format.font_size, None);
+    }
 }
 
 // ---------------------------------------------------------------- writing
