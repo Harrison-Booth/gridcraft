@@ -225,12 +225,25 @@ fn read_shape(obj: &El, anchor: Anchor) -> Option<Shape> {
     let text = obj
         .child("txBody")
         .map(|tb| {
-            tb.kids("p").map(|p| p.kids("r").filter_map(|r| r.child("t")).map(|t| t.text.as_str()).collect::<String>()).collect::<Vec<_>>().join("\n")
+            tb.kids("p")
+                .map(|p| {
+                    p.children
+                        .iter()
+                        .filter_map(|el| match el.name.as_str() {
+                            "r" | "fld" => el.child("t").map(|t| t.text.as_str()),
+                            _ => None,
+                        })
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
         })
         .unwrap_or_default();
+    let name = obj.path(&["nvSpPr", "cNvPr"]).and_then(|c| c.attr("name")).map(str::to_string);
+    let text_link = obj.attr("textlink").filter(|s| !s.is_empty()).map(str::to_string);
     let mut format = read_text_format(obj.child("txBody"));
     format.no_line = ln.is_some_and(|l| l.child("noFill").is_some());
-    Some(Shape { id: 0, kind, anchor, fill, line, text, format })
+    Some(Shape { id: 0, name, text_link, kind, anchor, fill, line, text, format })
 }
 
 /// A shape's text formatting: vertical anchor (`a:bodyPr anchor`), the first paragraph's
@@ -387,8 +400,9 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                 };
                 let _ = write!(
                     s,
-                    "<xdr:sp macro=\"\" textlink=\"\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"Shape {}\"/><xdr:cNvSpPr{}/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"{prst}\"><a:avLst/></a:prstGeom>",
-                    id - 1,
+                    "<xdr:sp macro=\"\" textlink=\"{}\"><xdr:nvSpPr><xdr:cNvPr id=\"{id}\" name=\"{}\"/><xdr:cNvSpPr{}/></xdr:nvSpPr><xdr:spPr>{}<a:prstGeom prst=\"{prst}\"><a:avLst/></a:prstGeom>",
+                    esc_attr(sh.text_link.as_deref().unwrap_or("")),
+                    esc_attr(sh.name.as_deref().unwrap_or(&format!("Shape {}", id - 1))),
                     if tx { " txBox=\"1\"" } else { "" },
                     xfrm(&sh.anchor, "a:xfrm")
                 );
@@ -432,7 +446,13 @@ pub fn write_drawing(sheet: &Sheet, theme: &Theme, objs: &[Obj<'_>]) -> String {
                     let ppr = if algn.is_empty() && rtl.is_empty() { String::new() } else { format!("<a:pPr{algn}{rtl}/>") };
                     let (rpr_attrs, rpr_body) = run_props(f, theme);
                     for line in sh.text.split('\n') {
-                        if line.is_empty() {
+                        if sh.text_link.is_some() {
+                            let _ = write!(
+                                s,
+                                "<a:p>{ppr}<a:fld id=\"{{00000000-0000-0000-0000-000000000000}}\" type=\"TxLink\"><a:rPr lang=\"en-US\"{rpr_attrs}/><a:pPr/><a:t>{}</a:t></a:fld></a:p>",
+                                esc(line)
+                            );
+                        } else if line.is_empty() {
                             let _ = write!(s, "<a:p>{ppr}<a:endParaRPr lang=\"en-US\"{rpr_attrs}/></a:p>");
                         } else if rpr_body.is_empty() {
                             let _ = write!(s, "<a:p>{ppr}<a:r><a:rPr lang=\"en-US\"{rpr_attrs}/><a:t>{}</a:t></a:r></a:p>", esc(line));

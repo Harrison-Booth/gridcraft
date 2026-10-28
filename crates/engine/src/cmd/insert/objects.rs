@@ -137,6 +137,8 @@ pub(super) fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
     });
     let shape = Shape {
         id,
+        name: None,
+        text_link: None,
         kind,
         anchor: Anchor {
             cell: at,

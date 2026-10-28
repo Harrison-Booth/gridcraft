@@ -421,6 +421,15 @@ fn shape_text_edit_undo_redo_and_noop() {
 }
 
 #[test]
+fn linked_text_box_reference_moves_with_inserted_rows() {
+    let mut s = s();
+    s.execute("insert.textBox", json!({"text": "linked"})).unwrap();
+    std::sync::Arc::make_mut(&mut s.doc_mut().unwrap().wb).sheet_mut(0).unwrap().shapes[0].text_link = Some("$A$2".into());
+    s.execute("home.insertRows", json!({"rows": "2:2"})).unwrap();
+    assert_eq!(s.doc().unwrap().wb.active().unwrap().shapes[0].text_link.as_deref(), Some("$A$3"));
+}
+
+#[test]
 fn shape_text_rejects_invalid_targets_and_params() {
     let mut s = s();
     let id = s.execute("insert.textBox", json!({"text": "Original"})).unwrap()["shape"].clone();
