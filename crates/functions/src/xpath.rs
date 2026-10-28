@@ -1,8 +1,9 @@
 //! The offline XPath subset used by FILTERXML.
 
 use gridcraft_core::parse::parse_input;
-use gridcraft_core::{Array, CellError, DateSystem, Value};
+use gridcraft_core::{Array, CellError, Value};
 use quick_xml::Reader;
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::name::QName;
 
@@ -243,7 +244,7 @@ fn add_node(
             continue;
         }
         let key = local_name(attribute.key);
-        let value = attribute.decode_and_unescape_value(decoder).map_err(|_| CellError::Value)?.into_owned();
+        let value = attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, decoder).map_err(|_| CellError::Value)?.into_owned();
         node.attrs.push((key, value));
     }
     let index = nodes.len();
@@ -293,7 +294,6 @@ fn parse_xpath(xpath: &str) -> R<Vec<Step>> {
     let bytes = xpath.as_bytes();
     let mut at = 0usize;
     let mut steps = Vec::new();
-    let mut axis = Axis::Child;
     if bytes.first() != Some(&b'/') {
         return Err(CellError::Value);
     }
@@ -302,7 +302,7 @@ fn parse_xpath(xpath: &str) -> R<Vec<Step>> {
             return Err(CellError::Value);
         }
         at += 1;
-        axis = if bytes.get(at) == Some(&b'/') {
+        let axis = if bytes.get(at) == Some(&b'/') {
             at += 1;
             Axis::Descendant
         } else {
@@ -377,6 +377,7 @@ fn parse_predicate(raw: &str) -> R<Predicate> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gridcraft_core::DateSystem;
 
     struct TestCtx;
 

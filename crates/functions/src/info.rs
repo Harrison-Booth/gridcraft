@@ -331,6 +331,10 @@ fn encodeurl(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     Ok(Value::from(out))
 }
 
+fn value_err(_a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
+    Err(CellError::Value)
+}
+
 pub(crate) fn specs() -> Vec<FnSpec> {
     vec![
         f!("ISBLANK", 1, 1, Information, S, "ISBLANK(value)", "TRUE when the value refers to an empty cell.", is_blank),
