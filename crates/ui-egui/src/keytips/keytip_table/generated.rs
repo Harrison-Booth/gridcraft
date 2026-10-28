@@ -143,10 +143,10 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("HTN", Entry::Finish(Action::Command("table.style"))), // Excel: New Table Style
     ("HTP", Entry::Finish(Action::Command("table.style"))), // Excel: New Pivot Table Style
     ("HU", Entry::Continue),  // Excel: AutoSum; group level:
-    ("HUA", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Auto Average; AutoSum: Average (variant TBD)
-    ("HUC", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Auto Count Numbers; AutoSum: Count (variant TBD)
-    ("HUI", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Auto Min; AutoSum: Min (variant TBD)
-    ("HUM", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Auto Max; AutoSum: Max (variant TBD)
+    ("HUA", Entry::Finish(Action::CommandWith("formulas.autoSum", "{\"function\":\"AVERAGE\"}"))), // Excel: Auto Average; AutoSum: Average
+    ("HUC", Entry::Finish(Action::CommandWith("formulas.autoSum", "{\"function\":\"COUNT\"}"))), // Excel: Auto Count Numbers; AutoSum: Count
+    ("HUI", Entry::Finish(Action::CommandWith("formulas.autoSum", "{\"function\":\"MIN\"}"))), // Excel: Auto Min; AutoSum: Min
+    ("HUM", Entry::Finish(Action::CommandWith("formulas.autoSum", "{\"function\":\"MAX\"}"))), // Excel: Auto Max; AutoSum: Max
     ("HV", Entry::Continue),  // Excel: Paste; group level:
     ("HVP", Entry::Finish(Action::Command("edit.paste"))), // Excel: Paste
     ("HW", Entry::Continue),  // Excel: Wrap Text Menu; group level: containment(Wrap Text)
@@ -246,11 +246,11 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("MSP", Entry::Finish(Action::Dialog("pasteName"))),       // Excel: Paste Names
     ("MT", Entry::Finish(Action::Control("formulas.text"))),   // Excel: Text Menu; group level: containment(Text)
     ("MU", Entry::Continue),                                   // Excel: AutoSum Menu; group level:
-    ("MUA", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Average; AutoSum: Average (variant TBD)
-    ("MUC", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Count Numbers; AutoSum: Count (variant TBD)
+    ("MUA", Entry::Finish(Action::CommandWith("formulas.autoSum", "{\"function\":\"AVERAGE\"}"))), // Excel: Average; AutoSum: Average
+    ("MUC", Entry::Finish(Action::CommandWith("formulas.autoSum", "{\"function\":\"COUNT\"}"))), // Excel: Count Numbers; AutoSum: Count
     ("MUF", Entry::Finish(Action::Command("formulas.moreFunctions"))), // Excel: More Functions (AutoSum); containment(More Functions)
-    ("MUI", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Min; AutoSum: Min (variant TBD)
-    ("MUM", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Max; AutoSum: Max (variant TBD)
+    ("MUI", Entry::Finish(Action::CommandWith("formulas.autoSum", "{\"function\":\"MIN\"}"))), // Excel: Min; AutoSum: Min
+    ("MUM", Entry::Finish(Action::CommandWith("formulas.autoSum", "{\"function\":\"MAX\"}"))), // Excel: Max; AutoSum: Max
     ("MUS", Entry::Finish(Action::Command("formulas.autoSum"))), // Excel: Sum
     ("MV", Entry::Finish(Action::Dialog("evaluateFormula"))),  // Excel: Evaluate Formula
     ("MW", Entry::Finish(Action::Command("formulas.watchWindow"))), // Excel: Watch Window

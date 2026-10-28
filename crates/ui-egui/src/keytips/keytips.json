@@ -978,29 +978,41 @@
    "seq": "HUA",
    "kind": "command",
    "target": "formulas.autoSum",
+   "params": {
+    "function": "AVERAGE"
+   },
    "excel": "Auto Average",
-   "note": "AutoSum: Average (variant TBD)"
+   "note": "AutoSum: Average"
   },
   {
    "seq": "HUC",
    "kind": "command",
    "target": "formulas.autoSum",
+   "params": {
+    "function": "COUNT"
+   },
    "excel": "Auto Count Numbers",
-   "note": "AutoSum: Count (variant TBD)"
+   "note": "AutoSum: Count"
   },
   {
    "seq": "HUI",
    "kind": "command",
    "target": "formulas.autoSum",
+   "params": {
+    "function": "MIN"
+   },
    "excel": "Auto Min",
-   "note": "AutoSum: Min (variant TBD)"
+   "note": "AutoSum: Min"
   },
   {
    "seq": "HUM",
    "kind": "command",
    "target": "formulas.autoSum",
+   "params": {
+    "function": "MAX"
+   },
    "excel": "Auto Max",
-   "note": "AutoSum: Max (variant TBD)"
+   "note": "AutoSum: Max"
   },
   {
    "seq": "HV",
@@ -1688,15 +1700,21 @@
    "seq": "MUA",
    "kind": "command",
    "target": "formulas.autoSum",
+   "params": {
+    "function": "AVERAGE"
+   },
    "excel": "Average",
-   "note": "AutoSum: Average (variant TBD)"
+   "note": "AutoSum: Average"
   },
   {
    "seq": "MUC",
    "kind": "command",
    "target": "formulas.autoSum",
+   "params": {
+    "function": "COUNT"
+   },
    "excel": "Count Numbers",
-   "note": "AutoSum: Count (variant TBD)"
+   "note": "AutoSum: Count"
   },
   {
    "seq": "MUF",
@@ -1709,15 +1727,21 @@
    "seq": "MUI",
    "kind": "command",
    "target": "formulas.autoSum",
+   "params": {
+    "function": "MIN"
+   },
    "excel": "Min",
-   "note": "AutoSum: Min (variant TBD)"
+   "note": "AutoSum: Min"
   },
   {
    "seq": "MUM",
    "kind": "command",
    "target": "formulas.autoSum",
+   "params": {
+    "function": "MAX"
+   },
    "excel": "Max",
-   "note": "AutoSum: Max (variant TBD)"
+   "note": "AutoSum: Max"
   },
   {
    "seq": "MUS",
