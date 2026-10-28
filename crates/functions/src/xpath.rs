@@ -121,11 +121,7 @@ pub(crate) fn filterxml(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
         if raw.is_empty() {
             return Err(CellError::Value);
         }
-        let parsed = if raw.eq_ignore_ascii_case("TRUE") || raw.eq_ignore_ascii_case("FALSE") {
-            Value::from(raw)
-        } else {
-            parse_input(raw, ctx.date_system()).value
-        };
+        let parsed = parse_input(raw, ctx.date_system()).value;
         if matches!(parsed, Value::Empty | Value::Error(_)) {
             return Err(CellError::Value);
         }
@@ -418,7 +414,7 @@ mod tests {
         assert_eq!(evaluate("<r xmlns='urn:x'><v>1</v></r>", "//v"), Value::Number(1.0));
         assert_eq!(evaluate("<r><v> 3 </v></r>", "//v"), Value::Number(3.0));
         assert_eq!(evaluate("<r>&amp;lt;</r>", "/r"), Value::from("&lt;"));
-        assert_eq!(evaluate("<r><v>TRUE</v></r>", "//v"), Value::from("TRUE"));
+        assert_eq!(evaluate("<r><v>TRUE</v></r>", "//v"), Value::Bool(true));
         assert_eq!(evaluate("<r><v>1.5</v></r>", "//v"), Value::Number(1.5));
         assert_eq!(evaluate("<r><v>1,5</v></r>", "//v"), Value::from("1,5"));
         assert_eq!(evaluate("<r><v>2026-01-02</v></r>", "//v"), Value::Number(46_024.0));
