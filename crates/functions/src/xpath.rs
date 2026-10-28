@@ -102,6 +102,7 @@ pub(crate) fn filterxml(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
                 }
             }
         }
+        next.sort_unstable();
         selected = next;
         if selected.len() > MAX_NODES {
             return Err(CellError::Value);
@@ -194,6 +195,9 @@ fn parse_xml(xml: &str) -> R<(Vec<Node>, usize)> {
                             _ => None,
                         })
                         .ok_or(CellError::Value)?;
+                    if !is_xml10_char(ch) {
+                        return Err(CellError::Value);
+                    }
                     text_len = text_len.checked_add(1).ok_or(CellError::Value)?;
                     if text_len > MAX_TEXT {
                         return Err(CellError::Value);
@@ -229,6 +233,10 @@ fn local_name(name: QName<'_>) -> String {
     let bytes = name.as_ref();
     let bytes = bytes.get(bytes.iter().rposition(|byte| *byte == b':').map_or(0, |at| at + 1)..).unwrap_or_default();
     std::str::from_utf8(bytes).map(str::to_string).unwrap_or_default()
+}
+
+fn is_xml10_char(ch: char) -> bool {
+    matches!(ch, '\u{9}' | '\u{A}' | '\u{D}' | '\u{20}'..='\u{D7FF}' | '\u{E000}'..='\u{FFFD}' | '\u{10000}'..='\u{10FFFF}')
 }
 
 fn add_node(
@@ -424,6 +432,10 @@ mod tests {
         assert_eq!(evaluate("<r><v>1</v></r>", "/r/v"), Value::Number(1.0));
         assert_eq!(evaluate("<r>1</r>", "//r"), Value::Number(1.0));
         assert_eq!(evaluate("<r><a><a><b>value</b></a></a></r>", "//a//b"), Value::from("value"));
+        assert_eq!(
+            evaluate("<r><a><v>1</v><b><v>2</v></b><v>3</v></a></r>", "//v"),
+            Value::from(Array::column(vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]))
+        );
     }
 
     #[test]
@@ -440,6 +452,7 @@ mod tests {
             ("<r a='1'/>", "//@a"),
             ("<r><v a='1'/></r>", "/r//@a"),
             ("<r><v><w>1</w></v></r>", "//v"),
+            ("<r>&#1;</r>", "/r"),
         ] {
             assert_eq!(evaluate(xml, xpath), Value::Error(CellError::Value));
         }
