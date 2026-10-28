@@ -124,6 +124,14 @@ fn read_page_margins(e: &El, sheet: &mut Sheet) {
     }
 }
 
+fn read_ignored_errors(e: &El, sheet: &mut Sheet) {
+    for ignored in e.kids("ignoredError") {
+        let kinds = error_rule::NAMES.iter().filter(|(name, _)| ignored.flag(name, false)).fold(0, |mask, (_, bit)| mask | bit);
+        // An element with no rule on (Excel leaves one behind after Ignore is turned off) ignores nothing.
+        add_ranges(&mut sheet.ignored_errors, kinds, parse_sqref(ignored.attr("sqref")));
+    }
+}
+
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
@@ -173,13 +181,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 }
             }
             "conditionalFormatting" => read_cf(cx, e, &mut sheet),
-            "ignoredErrors" => {
-                for ie in e.kids("ignoredError") {
-                    let kinds = error_rule::NAMES.iter().filter(|(n, _)| ie.flag(n, false)).fold(0, |m, (_, bit)| m | bit);
-                    // An element with no rule on (Excel leaves one behind after Ignore is turned off) ignores nothing.
-                    add_ranges(&mut sheet.ignored_errors, kinds, parse_sqref(ie.attr("sqref")));
-                }
-            }
+            "ignoredErrors" => read_ignored_errors(e, &mut sheet),
             "dataValidations" => {
                 for v in e.kids("dataValidation") {
                     if let Some(v) = read_validation(v) {
