@@ -283,25 +283,6 @@ fn read_text_format(body: Option<&El>) -> ShapeFormat {
     f
 }
 
-#[cfg(test)]
-mod tests {
-    #![allow(clippy::unwrap_used)]
-
-    use super::read_text_format;
-    use crate::xml;
-
-    #[test]
-    fn text_format_uses_only_first_paragraph() {
-        let body = xml::parse(
-            br#"<a:txBody><a:p><a:r><a:t>first</a:t></a:r></a:p><a:p><a:r><a:rPr b="1" sz="2000"/><a:t>later</a:t></a:r></a:p></a:txBody>"#,
-        )
-        .unwrap();
-        let format = read_text_format(Some(&body));
-        assert!(!format.bold);
-        assert_eq!(format.font_size, None);
-    }
-}
-
 // ---------------------------------------------------------------- writing
 
 /// The opening `<xdr:twoCellAnchor>` for a model anchor, carrying Excel's `editAs` when the mode
@@ -559,5 +540,24 @@ pub fn image_content_type(ext: &str) -> &'static str {
         "wmf" => "image/x-wmf",
         "webp" => "image/webp",
         _ => "image/png",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::read_text_format;
+    use crate::xml;
+
+    #[test]
+    fn text_format_uses_only_first_paragraph() {
+        let body = xml::parse(
+            br#"<a:txBody><a:p><a:r><a:t>first</a:t></a:r></a:p><a:p><a:r><a:rPr b="1" sz="2000"/><a:t>later</a:t></a:r></a:p></a:txBody>"#,
+        )
+        .unwrap();
+        let format = read_text_format(Some(&body));
+        assert!(!format.bold);
+        assert_eq!(format.font_size, None);
     }
 }
