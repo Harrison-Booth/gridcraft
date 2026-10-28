@@ -52,7 +52,7 @@ struct Step {
 pub(crate) fn filterxml(args: &[Arg], ctx: &mut dyn Ctx) -> R<Value> {
     let xml = text(args, 0)?;
     let xpath = text(args, 1)?;
-    if xml.is_empty() || xpath.is_empty() || xml.len() > MAX_TEXT {
+    if xml.is_empty() || xpath.is_empty() || xml.chars().count() > MAX_TEXT {
         return Err(CellError::Value);
     }
     let steps = parse_xpath(&xpath)?;
@@ -171,7 +171,7 @@ fn parse_xml(xml: &str) -> R<(Vec<Node>, usize)> {
                     continue;
                 }
                 if let Some(index) = stack.last().copied() {
-                    text_len = text_len.checked_add(decoded.len()).ok_or(CellError::Value)?;
+                    text_len = text_len.checked_add(decoded.chars().count()).ok_or(CellError::Value)?;
                     if text_len > MAX_TEXT {
                         return Err(CellError::Value);
                     }
@@ -194,7 +194,7 @@ fn parse_xml(xml: &str) -> R<(Vec<Node>, usize)> {
                             _ => None,
                         })
                         .ok_or(CellError::Value)?;
-                    text_len = text_len.checked_add(ch.len_utf8()).ok_or(CellError::Value)?;
+                    text_len = text_len.checked_add(1).ok_or(CellError::Value)?;
                     if text_len > MAX_TEXT {
                         return Err(CellError::Value);
                     }
@@ -207,7 +207,7 @@ fn parse_xml(xml: &str) -> R<(Vec<Node>, usize)> {
                 }
                 if let Some(index) = stack.last().copied() {
                     let decoded = event.decode().map_err(|_| CellError::Value)?;
-                    text_len = text_len.checked_add(decoded.len()).ok_or(CellError::Value)?;
+                    text_len = text_len.checked_add(decoded.chars().count()).ok_or(CellError::Value)?;
                     if text_len > MAX_TEXT {
                         return Err(CellError::Value);
                     }
@@ -325,7 +325,11 @@ fn parse_xpath(xpath: &str) -> R<Vec<Step>> {
             if attribute.is_empty() || at != bytes.len() || steps.is_empty() || matches!(axis, Axis::Descendant) {
                 return Err(CellError::Value);
             }
-            Test::Attribute(attribute.to_string())
+            let name = attribute.rsplit(':').next().ok_or(CellError::Value)?;
+            if name.is_empty() {
+                return Err(CellError::Value);
+            }
+            Test::Attribute(name.to_string())
         } else if raw == "*" {
             Test::Any
         } else if raw.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')) {
@@ -408,6 +412,7 @@ mod tests {
         assert_eq!(evaluate("<r><v>7</v><v>9</v></r>", "//v[2]"), Value::Number(9.0));
         assert_eq!(evaluate("<r><v>abc</v></r>", "//v"), Value::from("abc"));
         assert_eq!(evaluate("<r><v a='5'/></r>", "//v/@a"), Value::Number(5.0));
+        assert_eq!(evaluate("<r xmlns:p='urn:x' p:a='5'/>", "//r/@p:a"), Value::Number(5.0));
         assert_eq!(evaluate("<r xmlns='urn:x'><v>1</v></r>", "//v"), Value::Number(1.0));
         assert_eq!(evaluate("<r><v> 3 </v></r>", "//v"), Value::Number(3.0));
         assert_eq!(evaluate("<r>&amp;lt;</r>", "/r"), Value::from("&lt;"));
@@ -438,5 +443,13 @@ mod tests {
         ] {
             assert_eq!(evaluate(xml, xpath), Value::Error(CellError::Value));
         }
+    }
+
+    #[test]
+    fn filterxml_limits_xml_by_character_count() {
+        let xml = format!("<r>{}</r>", "é".repeat(MAX_TEXT - 7));
+        assert_eq!(xml.chars().count(), MAX_TEXT);
+        assert!(xml.len() > MAX_TEXT);
+        assert_eq!(evaluate(&xml, "/r"), Value::from("é".repeat(MAX_TEXT - 7)));
     }
 }
