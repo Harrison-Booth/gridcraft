@@ -46,6 +46,11 @@ fn operation_symbol(op: &str) -> Option<char> {
     }
 }
 
+fn unignore_cut_destination(cx: &mut crate::cmd::Ctx, sheet: usize, dest: CellRef) -> Result<()> {
+    gridcraft_model::unignore_errors(&mut cx.sheet_mut(sheet)?.ignored_errors, RangeRef::cell(dest), gridcraft_model::error_rule::ALL);
+    Ok(())
+}
+
 fn copy_merges(
     cx: &mut crate::cmd::Ctx,
     dest_sheet: usize,
@@ -284,11 +289,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
             cx.touch(dest_sheet, dest);
             if cut_move {
                 // A structural commit skips the ignored-error cleanup, so each overwritten cell drops its rules here.
-                gridcraft_model::unignore_errors(
-                    &mut cx.sheet_mut(dest_sheet)?.ignored_errors,
-                    RangeRef::cell(dest),
-                    gridcraft_model::error_rule::ALL,
-                );
+                unignore_cut_destination(cx, dest_sheet, dest)?;
             }
         }
         // Merged areas inside the copied block travel with it.
