@@ -316,15 +316,25 @@ fn sample() -> Workbook {
                 totals_label: Some("Total".into()),
                 formula: None,
                 unique_name: None,
+                query_field_id: None,
                 xml: None,
             },
-            TableColumn { name: "Amount".into(), totals: TotalsFn::Sum, totals_label: None, formula: None, unique_name: None, xml: None },
+            TableColumn {
+                name: "Amount".into(),
+                totals: TotalsFn::Sum,
+                totals_label: None,
+                formula: None,
+                unique_name: None,
+                query_field_id: None,
+                xml: None,
+            },
             TableColumn {
                 name: "Tax".into(),
                 totals: TotalsFn::Custom,
                 totals_label: Some("SUM(R2:R4)".into()),
                 formula: Some("Q2*0.1".into()),
                 unique_name: None,
+                query_field_id: None,
                 xml: None,
             },
         ],
@@ -340,6 +350,7 @@ fn sample() -> Workbook {
         ],
         table_type: None,
         connection_id: None,
+        query_table: None,
     });
     let png = b"\x89PNG\r\n\x1a\n0000IHDRfake".to_vec();
     s.images.push(Image {
@@ -490,7 +501,16 @@ fn full_roundtrip() {
     assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
     let (back, rep) = read_xlsx(&bytes).unwrap();
     assert!(rep.warnings.iter().all(|w| !w.contains("skipped") || w.contains("chart")), "{:?}", rep.warnings);
+    assert_workbook_metadata_roundtrip(&wb, &back);
 
+    let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
+    assert_sheet_cells_and_settings(&wb, &back, a, b);
+    assert_table_roundtrip(a, b);
+    assert_drawing_and_chart_roundtrip(a, b);
+    assert_eq!(back.sheet(1).unwrap().value(at("A1")), Value::Number(5.0));
+}
+
+fn assert_workbook_metadata_roundtrip(wb: &Workbook, back: &Workbook) {
     assert_eq!(back.date_system, wb.date_system);
     assert_eq!(back.calc, wb.calc);
     assert!(back.protected_structure);
@@ -505,8 +525,9 @@ fn full_roundtrip() {
     assert_eq!(back.sheets[2].visibility, Visibility::VeryHidden);
     assert_eq!(back.sheets[2].name, "2024");
     assert_eq!(back.sheets[2].comments, wb.sheets[2].comments);
+}
 
-    let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
+fn assert_sheet_cells_and_settings(wb: &Workbook, back: &Workbook, a: &Sheet, b: &Sheet) {
     assert_eq!(b.name, a.name);
     // Cells: values, formulas and resolved styles.
     let skip = [at("H2"), at("H3")];
@@ -542,6 +563,9 @@ fn full_roundtrip() {
     let mut sp = a.sparklines.clone();
     sp[0].source = "'Data & Stuff'!B2:B3".into();
     assert_eq!(b.sparklines, sp);
+}
+
+fn assert_table_roundtrip(a: &Sheet, b: &Sheet) {
     // Tables: name sanitized, ids reassigned.
     let (ta, tb) = (&a.tables[0], &b.tables[0]);
     assert_eq!(tb.name, "Sales_Table");
@@ -549,6 +573,9 @@ fn full_roundtrip() {
     assert_eq!((tb.banded_rows, tb.banded_cols, tb.first_col, tb.last_col, tb.filter_button), (true, true, true, false, true));
     assert_eq!(tb.filter, ta.filter, "the table's filter criteria survive (SUBTOTAL tells filtered rows apart)");
     assert_eq!(b.value(at("P1")), Value::text("Region"), "header cells carry the column names");
+}
+
+fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
     // Drawings.
     assert_eq!(b.images.len(), 1);
     assert_eq!(b.images[0].data, a.images[0].data);
@@ -587,7 +614,6 @@ fn full_roundtrip() {
         }
         assert!(close(y.anchor.width, x.anchor.width) && close(y.anchor.height, x.anchor.height));
     }
-    assert_eq!(back.sheet(1).unwrap().value(at("A1")), Value::Number(5.0));
 }
 
 #[test]
@@ -826,8 +852,24 @@ fn writing_repairs_invalid_models() {
         header_row: true,
         totals_row: false,
         columns: vec![
-            TableColumn { name: "X".into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None },
-            TableColumn { name: "x".into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None },
+            TableColumn {
+                name: "X".into(),
+                totals: TotalsFn::None,
+                totals_label: None,
+                formula: None,
+                unique_name: None,
+                query_field_id: None,
+                xml: None,
+            },
+            TableColumn {
+                name: "x".into(),
+                totals: TotalsFn::None,
+                totals_label: None,
+                formula: None,
+                unique_name: None,
+                query_field_id: None,
+                xml: None,
+            },
         ],
         style: String::new(),
         banded_rows: true,
@@ -838,6 +880,7 @@ fn writing_repairs_invalid_models() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        query_table: None,
     });
     s.cells.set(at("B2"), Cell { value: Value::Number(1.0), formula: None, style: StyleId(9999) });
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -1100,7 +1143,15 @@ fn table_newline_column_and_backslash_name_survive() {
     s.set_value(at("A1"), Value::text("Handle\nBars"));
     s.set_value(at("B1"), Value::text("Name"));
     s.set_value(at("B2"), Value::text("x"));
-    let col = |n: &str| TableColumn { name: n.into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None };
+    let col = |n: &str| TableColumn {
+        name: n.into(),
+        totals: TotalsFn::None,
+        totals_label: None,
+        formula: None,
+        unique_name: None,
+        query_field_id: None,
+        xml: None,
+    };
     s.tables.push(Table {
         id: 1,
         name: "\\_Prime.1".into(),
@@ -1117,6 +1168,7 @@ fn table_newline_column_and_backslash_name_survive() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        query_table: None,
     });
     s.cells.set(at("D1"), Cell::formula(Formula::new("COUNTA(\\_Prime.1[Name])")));
     let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
@@ -1147,9 +1199,18 @@ fn header_and_totals_table_without_data_row_survives() {
                 totals_label: Some("Total".into()),
                 formula: None,
                 unique_name: None,
+                query_field_id: None,
                 xml: None,
             },
-            TableColumn { name: "Amount".into(), totals: TotalsFn::Sum, totals_label: None, formula: None, unique_name: None, xml: None },
+            TableColumn {
+                name: "Amount".into(),
+                totals: TotalsFn::Sum,
+                totals_label: None,
+                formula: None,
+                unique_name: None,
+                query_field_id: None,
+                xml: None,
+            },
         ],
         style: "TableStyleMedium2".into(),
         banded_rows: true,
@@ -1160,6 +1221,7 @@ fn header_and_totals_table_without_data_row_survives() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        query_table: None,
     });
     let (back, report) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
     assert!(report.warnings.is_empty(), "{:?}", report.warnings);
@@ -1418,7 +1480,15 @@ fn a_table_filter_criteria_survive_a_round_trip() {
         range: rr("A1:A4"),
         header_row: true,
         totals_row: false,
-        columns: vec![TableColumn { name: "Region".into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None }],
+        columns: vec![TableColumn {
+            name: "Region".into(),
+            totals: TotalsFn::None,
+            totals_label: None,
+            formula: None,
+            unique_name: None,
+            query_field_id: None,
+            xml: None,
+        }],
         style: "TableStyleMedium2".into(),
         banded_rows: true,
         banded_cols: false,
@@ -1428,6 +1498,7 @@ fn a_table_filter_criteria_survive_a_round_trip() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        query_table: None,
     });
     // The dropdown of a table's header cell installs the sheet AutoFilter over the table's
     // range, and `data.filterBy` stores its criteria there.
@@ -1455,8 +1526,15 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     for (a, v) in [("A1", "Id"), ("B1", "Region"), ("A2", "1"), ("B2", "East"), ("A3", "2"), ("B3", "West")] {
         s.set_value(at(a), Value::text(v));
     }
-    let column =
-        |name: &str| TableColumn { name: name.into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None };
+    let column = |name: &str| TableColumn {
+        name: name.into(),
+        totals: TotalsFn::None,
+        totals_label: None,
+        formula: None,
+        unique_name: None,
+        query_field_id: None,
+        xml: None,
+    };
     s.tables.push(Table {
         id: 1,
         name: "Sales".into(),
@@ -1473,6 +1551,7 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
         filter: vec![],
         table_type: None,
         connection_id: None,
+        query_table: None,
     });
     s.autofilter =
         Some(AutoFilter { range: rr("B1:B3"), criteria: vec![(0, FilterCriterion::Values { values: vec!["East".into()], blanks: false })] });

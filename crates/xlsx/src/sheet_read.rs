@@ -3,6 +3,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::IoError;
+use crate::fmla::from_file;
+use crate::package::Rel;
+use crate::read::Ctx;
+use crate::styles::read_color;
+use crate::tables::{col_width_to_px, paper_name, pt_to_px};
+use crate::xml::{self, El};
 use gridcraft_core::date::{serial_from_ymd, time_fraction};
 use gridcraft_core::{CellError, CellRef, DateSystem, MAX_COLS, MAX_ROWS, RangeRef, Value};
 use gridcraft_formula::Expr;
@@ -12,19 +19,11 @@ use gridcraft_model::{
     ValidationKind, XmlColumnPr,
 };
 
-use crate::IoError;
-use crate::fmla::from_file;
-use crate::package::Rel;
-use crate::read::Ctx;
-use crate::styles::read_color;
-use crate::tables::{col_width_to_px, paper_name, pt_to_px};
-use crate::xml::{self, El};
-
 mod parts;
 mod rules;
 
 pub use parts::{read_autofilter, read_table};
-use parts::{read_comments, read_hyperlinks, read_note_shapes, read_threaded};
+use parts::{read_comments, read_hyperlinks, read_note_shapes, read_query_table, read_threaded};
 use rules::{read_cf, read_validation};
 
 struct Shared {
@@ -97,6 +96,24 @@ const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
 /// rule copies its element's whole range list, so rules × ranges must stay bounded.
 const MAX_COND_CELLS: u64 = 4_000_000;
 
+fn read_sheet_format(e: &El, sheet: &mut Sheet) {
+    if let Some(h) = e.attr_f64("defaultRowHeight") {
+        let px = pt_to_px(h);
+        if px > 0.0 {
+            sheet.default_row_height = px;
+        }
+    }
+    if let Some(w) = e.attr_f64("defaultColWidth") {
+        let px = col_width_to_px(w);
+        if px > 0.0 {
+            sheet.default_col_width = px;
+        }
+    } else if let Some(b) = e.attr_f64("baseColWidth") {
+        let px = ((b.clamp(0.0, 255.0) * 7.0 + 5.0) / 8.0).ceil() * 8.0;
+        sheet.default_col_width = px as f32;
+    }
+}
+
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
@@ -134,23 +151,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 fit_to_page = e.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false));
             }
             "sheetViews" => read_views(e, &mut sheet),
-            "sheetFormatPr" => {
-                if let Some(h) = e.attr_f64("defaultRowHeight") {
-                    let px = pt_to_px(h);
-                    if px > 0.0 {
-                        sheet.default_row_height = px;
-                    }
-                }
-                if let Some(w) = e.attr_f64("defaultColWidth") {
-                    let px = col_width_to_px(w);
-                    if px > 0.0 {
-                        sheet.default_col_width = px;
-                    }
-                } else if let Some(b) = e.attr_f64("baseColWidth") {
-                    let px = ((b.clamp(0.0, 255.0) * 7.0 + 5.0) / 8.0).ceil() * 8.0;
-                    sheet.default_col_width = px as f32;
-                }
-            }
+            "sheetFormatPr" => read_sheet_format(e, &mut sheet),
             "cols" => read_cols(cx, e, &mut sheet, &mut column_assignments_left)?,
             "mergeCells" => {
                 for m in e.kids("mergeCell") {
@@ -251,6 +252,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                         if let Some(x) = cx.optional_xml(&target)?
                             && let Some(mut t) = read_table(cx, &x)
                         {
+                            read_query_table(cx, &target, &x, &mut t);
                             t.id = cx.next_object_id();
                             sheet.tables.push(t);
                         }

@@ -213,6 +213,14 @@ fn unmodelled_parts_survive_a_round_trip() {
     let out = write_xlsx(&wb).unwrap();
     let u = Unpacked::new(&out);
     u.assert_valid();
+    assert_kept_workbook_parts(&u);
+    let sheet = sheet_part(&u, "Data");
+    let sx = u.text(&sheet);
+    assert_kept_sheet_parts(&u, &sheet, &sx);
+    assert_round_trip_kept_content(&wb, &out);
+}
+
+fn assert_kept_workbook_parts(u: &Unpacked) {
     // Every kept part is in the output byte for byte.
     for d in [
         PRINTER,
@@ -244,34 +252,37 @@ fn unmodelled_parts_survive_a_round_trip() {
     let item = u.find(CUSTOM_XML.as_bytes())[0].clone();
     assert!(u.rels(&item).iter().any(|r| r.1.ends_with("/customXmlProps")));
     // Formulas using the link are written as they were.
-    let sheet = sheet_part(&u, "Data");
+    let sheet = sheet_part(u, "Data");
     let sx = u.text(&sheet);
     assert!(sx.contains("<f>[1]Sheet1!$A$1</f>"), "{sx}");
     assert!(sx.contains("<f>SUM([1]Sheet1!A1:A3)*2</f>"), "{sx}");
+}
+
+fn assert_kept_sheet_parts(u: &Unpacked, sheet: &str, sx: &str) {
     // Printer settings (#324).
-    let ps = attr_of(&sx, "pageSetup", "r:id");
-    let (ty, target) = u.target(&sheet, &ps);
+    let ps = attr_of(sx, "pageSetup", "r:id");
+    let (ty, target) = u.target(sheet, &ps);
     assert!(ty.ends_with("/printerSettings"));
     assert_eq!(u.parts.get(&target).unwrap(), PRINTER);
     // The OLE object and its preview image, re-linked.
-    let ole = attr_of(&sx, "oleObject", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &ole).1).unwrap(), OLE);
-    let preview = attr_of(&sx, "objectPr", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &preview).1).unwrap(), EMF);
+    let ole = attr_of(sx, "oleObject", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &ole).1).unwrap(), OLE);
+    let preview = attr_of(sx, "objectPr", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &preview).1).unwrap(), EMF);
     // Namespace declarations travel with the fragment.
-    assert_eq!(attr_of(&sx, "mc:AlternateContent", "xmlns:mc"), "http://schemas.openxmlformats.org/markup-compatibility/2006");
-    assert_eq!(attr_of(&sx, "mc:AlternateContent", "xmlns:x14"), "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main");
+    assert_eq!(attr_of(sx, "mc:AlternateContent", "xmlns:mc"), "http://schemas.openxmlformats.org/markup-compatibility/2006");
+    assert_eq!(attr_of(sx, "mc:AlternateContent", "xmlns:x14"), "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main");
     // The form control.
-    let ctrl = attr_of(&sx, "control", "r:id");
-    assert_eq!(u.parts.get(&u.target(&sheet, &ctrl).1).unwrap(), CTRL_PROP.as_bytes());
+    let ctrl = attr_of(sx, "control", "r:id");
+    assert_eq!(u.parts.get(&u.target(sheet, &ctrl).1).unwrap(), CTRL_PROP.as_bytes());
     // Schema order: pageSetup < legacyDrawing < oleObjects < controls.
     let pos = |t: &str| sx.find(t).unwrap_or_else(|| panic!("no {t}"));
     assert!(pos("<pageSetup") < pos("<legacyDrawing") && pos("<legacyDrawing") < pos("<oleObjects") && pos("<oleObjects") < pos("<controls"));
     // Query table: a sheet relationship only.
-    assert!(u.rels(&sheet).iter().any(|r| r.1.ends_with("/queryTable") && u.parts.get(&r.2).is_some_and(|b| b == QUERY_TABLE.as_bytes())));
+    assert!(u.rels(sheet).iter().any(|r| r.1.ends_with("/queryTable") && u.parts.get(&r.2).is_some_and(|b| b == QUERY_TABLE.as_bytes())));
     // One VML drawing: the kept control shapes plus GridCraft's note, in a fresh shape block.
-    let vml_id = attr_of(&sx, "legacyDrawing", "r:id");
-    let vml_part = u.target(&sheet, &vml_id).1;
+    let vml_id = attr_of(sx, "legacyDrawing", "r:id");
+    let vml_part = u.target(sheet, &vml_id).1;
     let vml = u.text(&vml_part);
     assert!(vml.contains("_x0000_s1025") && vml.contains("_x0000_s1026"));
     assert!(!vml.contains("old note") && !vml.contains("_x0000_s1027"), "the source's note shape is replaced");
@@ -280,9 +291,11 @@ fn unmodelled_parts_survive_a_round_trip() {
     let img = u.rels(&vml_part);
     assert_eq!(img.len(), 1);
     assert_eq!(u.parts.get(&img[0].2).unwrap(), EMF);
+}
 
+fn assert_round_trip_kept_content(wb: &gridcraft_model::Workbook, out: &[u8]) {
     // Reading the output keeps the same content again.
-    let (wb2, rep2) = read_xlsx(&out).unwrap();
+    let (wb2, rep2) = read_xlsx(out).unwrap();
     assert!(!rep2.warnings.iter().any(|w| w.contains("dropped")), "{:?}", rep2.warnings);
     let a = wb.sheet(0).unwrap().preserved.as_deref().unwrap();
     let b = wb2.sheet(0).unwrap().preserved.as_deref().unwrap();
@@ -293,7 +306,6 @@ fn unmodelled_parts_survive_a_round_trip() {
     assert_eq!(da, db);
     assert_eq!(a.elements.len(), b.elements.len());
     assert_eq!(wb.preserved.as_deref().unwrap().parts.len(), wb2.preserved.as_deref().unwrap().parts.len());
-    u.assert_valid();
 }
 
 #[test]
@@ -556,6 +568,175 @@ fn xml_maps_and_their_bindings_survive_a_round_trip() {
             (Some("Blocked"), Some("1"), Some("/DataList/ItemList/Item/Blocked"), Some("boolean")),
         ]
     );
+}
+
+/// A workbook with a table that is the result range of a query on a data connection.
+fn query_table_package() -> Vec<u8> {
+    let types = r#"<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/tables/table1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.table+xml"/><Override PartName="/xl/connections.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.connections+xml"/><Override PartName="/xl/queryTables/queryTable1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml"/></Types>"#;
+    let workbook = format!(
+        r#"<?xml version="1.0"?><workbook xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>"#
+    );
+    let sheet = format!(
+        r#"<?xml version="1.0"?><worksheet xmlns="{NS_MAIN}" xmlns:r="{NS_R}"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Id</t></is></c><c r="B1" t="inlineStr"><is><t>Name</t></is></c></row><row r="2"><c r="A2"><v>1</v></c><c r="B2" t="inlineStr"><is><t>x</t></is></c></row></sheetData><tableParts count="1"><tablePart r:id="rId1"/></tableParts></worksheet>"#
+    );
+    let table = format!(
+        r#"<?xml version="1.0"?><table xmlns="{NS_MAIN}" id="1" name="Table_Query" displayName="Table_Query" ref="A1:B2" tableType="queryTable" connectionId="1" totalsRowShown="0"><tableColumns count="2"><tableColumn id="1" uniqueName="Id" name="Id" queryTableFieldId="1"/><tableColumn id="2" uniqueName="Name" name="Name" queryTableFieldId="2"/></tableColumns><tableStyleInfo name="TableStyleMedium2" showFirstColumn="0" showLastColumn="0" showRowStripes="1" showColumnStripes="0"/></table>"#
+    );
+    let query = format!(
+        r#"<?xml version="1.0"?><queryTable xmlns="{NS_MAIN}" name="ExternalData_1" connectionId="1" autoFormatId="16" applyNumberFormats="0"><queryTableRefresh nextId="3"><queryTableFields count="2"><queryTableField id="1" name="Id" tableColumnId="1"/><queryTableField id="2" name="Name" tableColumnId="2"/></queryTableFields></queryTableRefresh></queryTable>"#
+    );
+    let root_rels = rels(&[("rId1", "officeDocument", "xl/workbook.xml")]);
+    let wb_rels = rels(&[("rId1", "worksheet", "worksheets/sheet1.xml"), ("rId2", "connections", "connections.xml")]);
+    let sheet_rels = rels(&[("rId1", "table", "../tables/table1.xml")]);
+    let table_rels = rels(&[("rId1", "queryTable", "../queryTables/queryTable1.xml")]);
+    make_zip(&[
+        ("[Content_Types].xml", types.as_bytes()),
+        ("_rels/.rels", root_rels.as_bytes()),
+        ("xl/workbook.xml", workbook.as_bytes()),
+        ("xl/_rels/workbook.xml.rels", wb_rels.as_bytes()),
+        ("xl/worksheets/sheet1.xml", sheet.as_bytes()),
+        ("xl/worksheets/_rels/sheet1.xml.rels", sheet_rels.as_bytes()),
+        ("xl/tables/table1.xml", table.as_bytes()),
+        ("xl/tables/_rels/table1.xml.rels", table_rels.as_bytes()),
+        ("xl/queryTables/queryTable1.xml", query.as_bytes()),
+        ("xl/connections.xml", CONNECTIONS.as_bytes()),
+    ])
+}
+
+#[test]
+fn a_table_keeps_its_query_table_on_save() {
+    let (wb, rep) = read_xlsx(&query_table_package()).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("query table")), "{:?}", rep.warnings);
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let t = xml::parse(u.text(&table).as_bytes()).unwrap();
+    assert_eq!((t.attr("tableType"), t.attr("connectionId")), (Some("queryTable"), Some("1")));
+    let fields: Vec<_> = t.child("tableColumns").unwrap().kids("tableColumn").map(|c| c.attr("queryTableFieldId")).collect();
+    assert_eq!(fields, [Some("1"), Some("2")]);
+    // The table points at its query table, byte for byte, with the content type it needs.
+    let (_, query) = u.rels(&table).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/queryTable")).unwrap();
+    assert!(u.text(&query).contains("<queryTableField id=\"2\" name=\"Name\" tableColumnId=\"2\"/>"));
+    let types = u.text("[Content_Types].xml");
+    assert!(
+        types.contains(&format!("PartName=\"/{query}\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.queryTable+xml\"")),
+        "{types}"
+    );
+    // The connection it queries is kept too.
+    assert!(u.parts.contains_key("xl/connections.xml"));
+    // And it reads back the same.
+    let (again, _) = read_xlsx(&out).unwrap();
+    assert_eq!(again.sheets[0].tables[0].query_table, wb.sheets[0].tables[0].query_table);
+}
+
+#[test]
+fn a_query_table_that_cannot_be_kept_leaves_a_plain_table() {
+    let mut zip = Unpacked::new(&query_table_package()).parts;
+    zip.insert("xl/queryTables/queryTable1.xml".to_string(), b"<queryTable".to_vec());
+    let items: Vec<(&str, &[u8])> = zip.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (wb, rep) = read_xlsx(&make_zip(&items)).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("query table")), "{:?}", rep.warnings);
+    let u = Unpacked::new(&write_xlsx(&wb).unwrap());
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let t = xml::parse(u.text(&table).as_bytes()).unwrap();
+    assert_eq!(t.attr("tableType"), None);
+    assert!(t.child("tableColumns").unwrap().kids("tableColumn").all(|c| c.attr("queryTableFieldId").is_none()));
+}
+
+#[test]
+fn a_query_table_with_a_prefixed_root_and_a_formatted_prolog_is_kept() {
+    let mut zip = Unpacked::new(&query_table_package()).parts;
+    let query = format!("<?xml version=\"1.0\"?>\n<q:queryTable xmlns:q=\"{NS_MAIN}\" name=\"ExternalData_1\" connectionId=\"1\"/>");
+    zip.insert("xl/queryTables/queryTable1.xml".to_string(), query.into_bytes());
+    let items: Vec<(&str, &[u8])> = zip.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (wb, rep) = read_xlsx(&make_zip(&items)).unwrap();
+    assert!(!rep.warnings.iter().any(|w| w.contains("query table")), "{:?}", rep.warnings);
+    assert!(wb.sheets[0].tables[0].query_table.is_some());
+}
+
+#[test]
+fn a_query_table_root_outside_the_spreadsheet_namespace_leaves_a_plain_table() {
+    let mut zip = Unpacked::new(&query_table_package()).parts;
+    zip.insert("xl/queryTables/queryTable1.xml".to_string(), br#"<?xml version="1.0"?><queryTable name="ExternalData_1"/>"#.to_vec());
+    let items: Vec<(&str, &[u8])> = zip.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (wb, rep) = read_xlsx(&make_zip(&items)).unwrap();
+    assert!(rep.warnings.iter().any(|w| w.contains("query table")), "{:?}", rep.warnings);
+    assert_eq!(wb.sheets[0].tables[0].table_type, None);
+}
+
+#[test]
+fn a_query_table_keeps_its_field_links_when_columns_move() {
+    let (mut wb, _) = read_xlsx(&query_table_package()).unwrap();
+    Arc::make_mut(&mut wb.sheets[0]).tables[0].columns.swap(0, 1);
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let (_, query) = u.rels(&table).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/queryTable")).unwrap();
+    // Id is now the second column, Name the first: each field follows its column to the new id.
+    let text = u.text(&query);
+    assert!(text.contains("<queryTableField id=\"1\" name=\"Id\" tableColumnId=\"2\"/>"), "{text}");
+    assert!(text.contains("<queryTableField id=\"2\" name=\"Name\" tableColumnId=\"1\"/>"), "{text}");
+}
+
+#[test]
+fn a_prefixed_query_table_keeps_its_field_links_when_columns_move() {
+    let mut zip = Unpacked::new(&query_table_package()).parts;
+    let query = format!(
+        "<?xml version=\"1.0\"?>\n<q:queryTable xmlns:q=\"{NS_MAIN}\" name=\"ExternalData_1\" connectionId=\"1\"><q:queryTableRefresh nextId=\"3\"><q:queryTableFields count=\"2\"><q:queryTableField id=\"1\" name=\"Id\" tableColumnId=\"1\"/><q:queryTableField id=\"2\" name=\"Name\" tableColumnId=\"2\"/></q:queryTableFields></q:queryTableRefresh></q:queryTable>"
+    );
+    zip.insert("xl/queryTables/queryTable1.xml".to_string(), query.into_bytes());
+    let items: Vec<(&str, &[u8])> = zip.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (mut wb, _) = read_xlsx(&make_zip(&items)).unwrap();
+    Arc::make_mut(&mut wb.sheets[0]).tables[0].columns.swap(0, 1);
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let (_, query) = u.rels(&table).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/queryTable")).unwrap();
+    let text = u.text(&query);
+    assert!(text.contains("<q:queryTableField id=\"1\" name=\"Id\" tableColumnId=\"2\"/>"), "{text}");
+    assert!(text.contains("<q:queryTableField id=\"2\" name=\"Name\" tableColumnId=\"1\"/>"), "{text}");
+}
+
+#[test]
+fn a_query_field_whose_column_is_gone_is_dropped_on_save() {
+    let (mut wb, _) = read_xlsx(&query_table_package()).unwrap();
+    Arc::make_mut(&mut wb.sheets[0]).tables[0].columns.pop();
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let (_, query) = u.rels(&table).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/queryTable")).unwrap();
+    let text = u.text(&query);
+    assert!(text.contains("<queryTableField id=\"1\" name=\"Id\" tableColumnId=\"1\"/>"), "{text}");
+    assert!(!text.contains("name=\"Name\""), "{text}");
+    assert!(text.contains("<queryTableFields count=\"1\">"), "{text}");
+}
+
+#[test]
+fn a_query_field_with_single_quoted_attributes_follows_its_column() {
+    let mut zip = Unpacked::new(&query_table_package()).parts;
+    let query = String::from_utf8(zip["xl/queryTables/queryTable1.xml"].clone()).unwrap().replace('"', "'");
+    zip.insert("xl/queryTables/queryTable1.xml".to_string(), query.into_bytes());
+    let items: Vec<(&str, &[u8])> = zip.iter().map(|(k, v)| (k.as_str(), v.as_slice())).collect();
+    let (mut wb, _) = read_xlsx(&make_zip(&items)).unwrap();
+    Arc::make_mut(&mut wb.sheets[0]).tables[0].columns.swap(0, 1);
+    let out = write_xlsx(&wb).unwrap();
+    let u = Unpacked::new(&out);
+    u.assert_valid();
+    let sheet = sheet_part(&u, "Data");
+    let (_, table) = u.rels(&sheet).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/table")).unwrap();
+    let (_, query) = u.rels(&table).into_iter().map(|r| (r.1, r.2)).find(|(ty, _)| ty.ends_with("/queryTable")).unwrap();
+    let text = u.text(&query);
+    assert!(text.contains("<queryTableField id=\"1\" name=\"Id\" tableColumnId=\"2\"/>"), "{text}");
+    assert!(text.contains("<queryTableField id=\"2\" name=\"Name\" tableColumnId=\"1\"/>"), "{text}");
 }
 
 /// Where a link with `target`, in a workbook read from `from`, points once saved into `to`.
