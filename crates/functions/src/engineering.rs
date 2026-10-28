@@ -616,6 +616,10 @@ mod tests {
             ("BESSELI", 50.0, 40.0, 60071771937893.328),
             ("BESSELI", 1e-10, 3.0, 2.0833333333333328e-32),
             ("BESSELI", 1e-20, 2.0, 1.25e-41),
+            // Excel's starting order depends on n only, so large x at a low order is a few digits off.
+            ("BESSELI", 100.0, 2.0, 1.0529077100617856e42),
+            ("BESSELI", 100.0, 3.0, 1.0247437513374843e42),
+            ("BESSELI", 20.0, 5.0, 23018393.919439059),
             ("BESSELI", 1.0, 2.9, 0.13574766658069928),
             ("BESSELI", -3.0, 2.0, 2.2452124313471509),
             ("BESSELI", -3.0, 3.0, -0.95975362539967934),
