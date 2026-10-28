@@ -401,28 +401,6 @@ fn write_sheet_printing<'a>(s: &mut String, sheet: &'a Sheet, rels: &mut Rels, o
             }
         }
         s.push('>');
-        for &(c, mut cell) in cells {
-            let ov = overrides.get(&c);
-            let ex = extra.get(&c);
-            let mut legacy_cell = None;
-            let array = dynamic.get(&c).copied().or_else(|| {
-                // A formula read with its dynamic-array mark keeps it (`cm`, see `read_formula`).
-                let f = cell?.formula.as_ref().filter(|f| f.array.is_none() && !f.dynamic)?;
-                match crate::array_formula::export(wb, si, c, f, out.functions, &mut out.names) {
-                    crate::array_formula::Export::Unchanged => None,
-                    crate::array_formula::Export::Dynamic => Some(RangeRef::cell(c)),
-                    // Every `@` is one Excel implies in a legacy formula: write it without them.
-                    crate::array_formula::Export::Legacy(e) => {
-                        legacy_cell = cell.map(|x| Cell { formula: Some(std::sync::Arc::new(Formula::from_expr(e))), ..x.clone() });
-                        None
-                    }
-                }
-            });
-            if legacy_cell.is_some() {
-                cell = legacy_cell.as_ref();
-            }
-            write_cell(&mut s, c, cell, sheet.cell_pictures.get(&c), ov, ex, array.as_ref(), &sid, out);
-        }
         // CT_HeaderFooter's element order.
         for (tag, text) in [
             ("oddHeader", &p.header),
@@ -635,10 +613,19 @@ fn write_sheet_data(s: &mut String, data: SheetCellData<'_>, sid: &dyn Fn(gridcr
         for &(cell_ref, cell) in cells {
             let ov = overrides.get(&cell_ref);
             let ex = extra.get(&cell_ref);
+            let mut legacy_cell = None;
             let array = dynamic.get(&cell_ref).copied().or_else(|| {
-                let f = cell?.formula.as_ref()?;
-                (f.array.is_none() && crate::array_formula::needs_array(workbook, index, cell_ref, f)).then_some(RangeRef::cell(cell_ref))
+                let f = cell?.formula.as_ref().filter(|f| f.array.is_none() && !f.dynamic)?;
+                match crate::array_formula::export(workbook, index, cell_ref, f, out.functions, &mut out.names) {
+                    crate::array_formula::Export::Unchanged => None,
+                    crate::array_formula::Export::Dynamic => Some(RangeRef::cell(cell_ref)),
+                    crate::array_formula::Export::Legacy(expr) => {
+                        legacy_cell = cell.map(|x| Cell { formula: Some(std::sync::Arc::new(Formula::from_expr(expr))), ..x.clone() });
+                        None
+                    }
+                }
             });
+            let cell = legacy_cell.as_ref().or(cell);
             write_cell(
                 s,
                 CellWriteInput {
