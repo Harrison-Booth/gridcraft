@@ -23,6 +23,11 @@ fn sample() -> Workbook {
     wb.calc = CalcSettings { mode: CalcMode::Manual, iterative: true, max_iterations: 42, max_change: 0.5, precision_as_displayed: true };
     wb.protected_structure = true;
     wb.structure_password = Some(gridcraft_model::PasswordHash::new_sha512("s3cret", b"0123456789abcdef"));
+    wb.write_reservation = Some(gridcraft_model::WriteReservation {
+        user_name: "Ann & <Bob>".into(),
+        read_only_recommended: true,
+        password: Some(gridcraft_model::PasswordHash::new_sha512("modify-me", b"fedcba9876543210")),
+    });
     wb.props = DocProps {
         title: "T & <x>".into(),
         subject: "S".into(),
@@ -490,12 +495,23 @@ fn full_roundtrip() {
     assert_eq!(write_xlsx(&wb).unwrap(), bytes, "output is deterministic");
     let (back, rep) = read_xlsx(&bytes).unwrap();
     assert!(rep.warnings.iter().all(|w| !w.contains("skipped") || w.contains("chart")), "{:?}", rep.warnings);
+    assert_workbook_metadata_roundtrip(&wb, &back);
 
+    let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
+    assert_sheet_cells_and_settings(&wb, &back, a, b);
+    assert_table_roundtrip(a, b);
+    assert_drawing_and_chart_roundtrip(a, b);
+    assert_eq!(back.sheet(1).unwrap().value(at("A1")), Value::Number(5.0));
+}
+
+fn assert_workbook_metadata_roundtrip(wb: &Workbook, back: &Workbook) {
     assert_eq!(back.date_system, wb.date_system);
     assert_eq!(back.calc, wb.calc);
     assert!(back.protected_structure);
     assert_eq!(back.structure_password, wb.structure_password);
     assert!(back.structure_password.as_ref().unwrap().verify("s3cret").unwrap());
+    assert_eq!(back.write_reservation, wb.write_reservation);
+    assert!(back.write_reservation.as_ref().and_then(|r| r.password.as_ref()).unwrap().verify("modify-me").unwrap());
     assert_eq!(back.props, wb.props);
     assert_eq!(back.theme, wb.theme);
     assert_eq!(back.names, wb.names);
@@ -505,8 +521,9 @@ fn full_roundtrip() {
     assert_eq!(back.sheets[2].visibility, Visibility::VeryHidden);
     assert_eq!(back.sheets[2].name, "2024");
     assert_eq!(back.sheets[2].comments, wb.sheets[2].comments);
+}
 
-    let (a, b) = (wb.sheet(0).unwrap(), back.sheet(0).unwrap());
+fn assert_sheet_cells_and_settings(wb: &Workbook, back: &Workbook, a: &Sheet, b: &Sheet) {
     assert_eq!(b.name, a.name);
     // Cells: values, formulas and resolved styles.
     let skip = [at("H2"), at("H3")];
@@ -542,6 +559,9 @@ fn full_roundtrip() {
     let mut sp = a.sparklines.clone();
     sp[0].source = "'Data & Stuff'!B2:B3".into();
     assert_eq!(b.sparklines, sp);
+}
+
+fn assert_table_roundtrip(a: &Sheet, b: &Sheet) {
     // Tables: name sanitized, ids reassigned.
     let (ta, tb) = (&a.tables[0], &b.tables[0]);
     assert_eq!(tb.name, "Sales_Table");
@@ -549,6 +569,9 @@ fn full_roundtrip() {
     assert_eq!((tb.banded_rows, tb.banded_cols, tb.first_col, tb.last_col, tb.filter_button), (true, true, true, false, true));
     assert_eq!(tb.filter, ta.filter, "the table's filter criteria survive (SUBTOTAL tells filtered rows apart)");
     assert_eq!(b.value(at("P1")), Value::text("Region"), "header cells carry the column names");
+}
+
+fn assert_drawing_and_chart_roundtrip(a: &Sheet, b: &Sheet) {
     // Drawings.
     assert_eq!(b.images.len(), 1);
     assert_eq!(b.images[0].data, a.images[0].data);
@@ -587,7 +610,6 @@ fn full_roundtrip() {
         }
         assert!(close(y.anchor.width, x.anchor.width) && close(y.anchor.height, x.anchor.height));
     }
-    assert_eq!(back.sheet(1).unwrap().value(at("A1")), Value::Number(5.0));
 }
 
 #[test]
@@ -1483,4 +1505,18 @@ fn a_partial_sheet_filter_is_not_folded_into_a_table() {
     let t = b.tables.first().expect("the table survived");
     assert!(t.filter.is_empty(), "the criteria landed on the wrong table column: {:?}", t.filter);
     assert!(b.autofilter.is_none(), "a sheet filter inside a table would be invalid");
+}
+
+#[test]
+fn legacy_reservation_password_is_written_with_a_user_name() {
+    let mut wb = sample();
+    wb.write_reservation =
+        Some(WriteReservation { user_name: String::new(), read_only_recommended: false, password: Some(PasswordHash::Legacy(0x83AF)) });
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let r = back.write_reservation.expect("the reservation survived");
+    assert_eq!(r.password, Some(PasswordHash::Legacy(0x83AF)), "a nameless legacy password is kept, under a placeholder name");
+    assert!(!r.user_name.is_empty());
+    wb.write_reservation.as_mut().unwrap().user_name = "Ann".into();
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    assert_eq!(back.write_reservation.and_then(|r| r.password), Some(PasswordHash::Legacy(0x83AF)));
 }

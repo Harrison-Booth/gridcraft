@@ -41,6 +41,10 @@ impl FileKind {
 /// The error for an encrypted workbook opened without a password contains this. The interface
 /// asks for the password when it sees it; programmatic callers pass `password` instead.
 pub const PASSWORD_REQUIRED: &str = "is password-protected. Enter its password to open it.";
+/// The error for a workbook with a password to modify, opened with neither that password
+/// (`modifyPassword`) nor `readOnly`, contains this. The interface asks for the password or a
+/// read-only open when it sees it.
+pub const MODIFY_PASSWORD_REQUIRED: &str = "is reserved by its author. Enter the password to modify it, or open it read-only.";
 /// The error for a wrong password contains this.
 pub const WRONG_PASSWORD: &str = "The password is incorrect.";
 /// The first open warning of a workbook decrypted with its password.
@@ -606,6 +610,7 @@ fn script_sandbox_check(path: &str) -> Result<()> {
 
 /// The largest native file the reader still touches: its own cap plus one, used to stop
 /// reads whose bytes arrive faster than metadata can claim (device files, growing files).
+#[cfg(not(target_arch = "wasm32"))]
 const MAX_READ_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 
 #[cfg(not(target_arch = "wasm32"))]

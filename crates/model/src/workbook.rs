@@ -156,6 +156,9 @@ pub struct Workbook {
     /// Password of the structure protection (XLSX `workbookProtection`), never the password.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub structure_password: Option<crate::PasswordHash>,
+    /// "Password to modify" (XLSX `fileSharing`): the file opens read-only unless it is given.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_reservation: Option<WriteReservation>,
     /// Custom fill lists (Options › Custom Lists) beyond the built-in ones.
     pub custom_lists: Vec<Vec<String>>,
     /// Named cell styles (Cell Styles gallery): name → style.
@@ -205,6 +208,15 @@ impl Default for Workbook {
     fn default() -> Self {
         Workbook::new()
     }
+}
+
+/// The write-reservation of a file (XLSX `fileSharing`): who reserved it, whether it asks to open
+/// read-only, and the hash of its password to modify, never the password.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteReservation {
+    pub user_name: String,
+    pub read_only_recommended: bool,
+    pub password: Option<crate::PasswordHash>,
 }
 
 /// The active sheet index of a [`Workbook`].
@@ -273,6 +285,7 @@ impl Workbook {
             props: DocProps::default(),
             protected_structure: false,
             structure_password: None,
+            write_reservation: None,
             custom_lists: vec![],
             cell_styles: vec![],
             phonetics: vec![],
@@ -439,7 +452,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn phonetics_are_additive_in_json() {
+    fn phonetics_are_additive_in_json() -> Result<(), Box<dyn std::error::Error>> {
         let mut wb = Workbook::new();
         assert!(wb.phonetics.is_empty(), "new workbooks have no phonetic data");
         wb.phonetics.push(PhoneticString {
@@ -447,12 +460,13 @@ mod tests {
             runs: vec![PhoneticRun { start: 0, end: 1, text: "ヒガシ".into() }],
             props: Some(PhoneticProps { font_id: 3, kind: Some("Hiragana".into()), alignment: None }),
         });
-        let json = serde_json::to_string(&wb).expect("serialize");
-        assert_eq!(serde_json::from_str::<Workbook>(&json).expect("deserialize").phonetics, wb.phonetics);
+        let json = serde_json::to_string(&wb)?;
+        assert_eq!(serde_json::from_str::<Workbook>(&json)?.phonetics, wb.phonetics);
         // JSON written before the field existed still loads.
-        let mut value: serde_json::Value = serde_json::from_str(&json).expect("value");
-        value.as_object_mut().expect("an object").remove("phonetics");
-        assert!(serde_json::from_value::<Workbook>(value).expect("older JSON").phonetics.is_empty());
+        let mut value: serde_json::Value = serde_json::from_str(&json)?;
+        value.as_object_mut().ok_or("none")?.remove("phonetics");
+        assert!(serde_json::from_value::<Workbook>(value)?.phonetics.is_empty());
+        Ok(())
     }
 
     #[test]

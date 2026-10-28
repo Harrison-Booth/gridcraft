@@ -2406,8 +2406,7 @@ fn ods_import_keeps_cached_values_and_reports_limits() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn ods_import_never_reuses_source_as_save_target() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-ods-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let bytes = ods_fixture();
@@ -2437,8 +2436,7 @@ fn ods_import_never_reuses_source_as_save_target() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn saving_an_opened_semicolon_csv_keeps_semicolons() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-csv-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("cut list.csv");
@@ -2512,8 +2510,7 @@ fn link_target(path: &std::path::Path) -> String {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn save_as_into_another_folder_keeps_linked_workbooks_on_the_same_file() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let a = std::env::temp_dir().join(format!("gridcraft-links-{}-{nonce}", std::process::id()));
     let b = a.join("b");
     std::fs::create_dir_all(&b).unwrap();
@@ -2541,8 +2538,7 @@ fn save_as_into_another_folder_keeps_linked_workbooks_on_the_same_file() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn saving_to_an_unknown_extension_is_refused() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-unknown-ext-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let mut s = s();
@@ -2566,8 +2562,7 @@ fn saving_to_an_unknown_extension_is_refused() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn an_xlsx_opened_under_an_unknown_extension_saves_back_as_xlsx() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-dat-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("budget.dat");
@@ -3240,8 +3235,7 @@ fn xlsb_import_keeps_cached_values_and_reports_limits() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn xlsb_import_never_reuses_source_as_save_target() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-xlsb-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let bytes = xlsb_fixture();
@@ -4367,6 +4361,75 @@ fn encrypted_book(password: &str) -> Vec<u8> {
 }
 
 #[test]
+fn a_password_to_modify_asks_for_it_or_a_read_only_open() {
+    const PW: &str = "synthetic-modify-pw";
+    let mut src = s();
+    src.execute("cell.set", json!({"cell": "A1", "input": "42"})).unwrap();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).write_reservation = Some(gridcraft_model::WriteReservation {
+        password: Some(gridcraft_model::PasswordHash::new_sha512(PW, b"0123456789abcdef")),
+        ..Default::default()
+    });
+    let bytes = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+    let b64 = crate::io::base64_encode(&bytes);
+    let open = |s: &mut Session, extra: serde_json::Value| {
+        let mut p = json!({"name": "Reserved.xlsx", "base64": b64});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        s.execute("file.open", p)
+    };
+    let mut s = Session::new();
+    let err = open(&mut s, json!({})).unwrap_err().to_string();
+    assert!(err.contains(crate::io::MODIFY_PASSWORD_REQUIRED), "{err}");
+    assert!(s.take_ui_requests().is_empty(), "programmatic calls never open dialogs");
+    for wrong in ["not-it", ""] {
+        let err = open(&mut s, json!({"modifyPassword": wrong})).unwrap_err().to_string();
+        assert!(err.contains(crate::io::WRONG_PASSWORD), "{err}");
+    }
+    assert!(s.documents().is_empty());
+
+    // Read-only: opens, keeps the reservation, but has no file to save over.
+    open(&mut s, json!({"readOnly": true})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    assert!(s.doc().unwrap().wb.write_reservation.is_some());
+
+    // The password: opens, and the reservation survives a save.
+    let mut s = Session::new();
+    open(&mut s, json!({"modifyPassword": PW})).unwrap();
+    assert_eq!(v(&s, "A1"), Value::Number(42.0));
+    let saved = crate::io::save_bytes(&s.doc().unwrap().wb, "book.xlsx").unwrap();
+    let (back, _) = crate::io::open_bytes("book.xlsx", &saved).unwrap();
+    assert!(back.write_reservation.and_then(|r| r.password).is_some_and(|h| h.verify(PW) == Ok(true)));
+}
+
+#[test]
+fn a_read_only_open_never_saves_over_its_reserved_file() {
+    const PW: &str = "synthetic-modify-pw";
+    let dir = std::env::temp_dir().join(format!("gridcraft-read-only-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("reserved.xlsx").to_string_lossy().into_owned();
+    let copy = dir.join("copy.xlsx").to_string_lossy().into_owned();
+    let mut src = s();
+    std::sync::Arc::make_mut(&mut src.doc_mut().unwrap().wb).write_reservation = Some(gridcraft_model::WriteReservation {
+        password: Some(gridcraft_model::PasswordHash::new_sha512(PW, b"0123456789abcdef")),
+        ..Default::default()
+    });
+    let bytes = crate::io::save_bytes(&src.doc().unwrap().wb, "book.xlsx").unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+
+    let mut s = Session::new();
+    s.execute("file.open", json!({"path": path, "readOnly": true})).unwrap();
+    let err = s.execute("file.save", json!({"path": path})).unwrap_err().to_string();
+    assert!(err.contains("read-only"), "{err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the reserved file is untouched");
+    let dotted = dir.join(".").join("reserved.xlsx").to_string_lossy().into_owned();
+    let err = s.execute("file.save", json!({"path": dotted})).unwrap_err().to_string();
+    assert!(err.contains("read-only"), "the same file under another spelling: {err}");
+    assert_eq!(std::fs::read(&path).unwrap(), bytes, "the reserved file is untouched");
+    s.execute("file.saveAs", json!({"path": copy})).unwrap();
+    assert!(std::fs::metadata(&copy).is_ok());
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
 fn encrypted_workbooks_open_with_their_password() {
     const PW: &str = "synthetic-pw-5521";
     let b64 = crate::io::base64_encode(&encrypted_book(PW));
@@ -4410,8 +4473,7 @@ fn encrypted_workbooks_open_with_their_password() {
 #[cfg(not(target_arch = "wasm32"))]
 fn a_decrypted_workbook_never_overwrites_its_encrypted_original() {
     const PW: &str = "synthetic-pw-5522";
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-encrypted-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let path = dir.join("Secret.xlsx");
@@ -4544,8 +4606,7 @@ fn csv_as_text_keeps_identifier_columns_as_written() {
 #[test]
 #[cfg(not(target_arch = "wasm32"))]
 fn cell_filename_follows_the_file_the_workbook_lives_in() {
-    #[allow(clippy::disallowed_methods)] // native-only test: a unique temp dir name
-    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let nonce = unique_nonce();
     let dir = std::env::temp_dir().join(format!("gridcraft-cellname-{}-{nonce}", std::process::id()));
     std::fs::create_dir(&dir).unwrap();
     let name = "=CELL(\"filename\",A1)";
@@ -5116,4 +5177,11 @@ fn a_saved_workbook_keeps_its_values_until_an_edit_reaches_them() {
     saved.execute("cell.set", json!({"cell": "A1", "input": "3"})).unwrap();
     assert_eq!(v(&saved, "B1"), Value::Number(6.0));
     assert_eq!(v(&saved, "C1"), Value::Number(7.0));
+}
+
+/// A per-test unique suffix for temp dir names.
+#[cfg(not(target_arch = "wasm32"))]
+fn unique_nonce() -> u64 {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
