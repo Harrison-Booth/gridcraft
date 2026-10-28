@@ -569,7 +569,8 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                             .add(egui::TextEdit::singleline(&mut search).hint_text("Search sheets…").desired_width(320.0))
                             .labelled_by(field_label.id);
                         take_first_focus(d, &search_response);
-                        if search_response.changed() {
+                        let search_changed = search_response.changed();
+                        if search_changed {
                             d.search = search;
                             d.list_index = 0;
                         }
@@ -592,9 +593,15 @@ pub(super) fn form_fields(ui: &mut egui::Ui, d: &mut Dialog) {
                             if up || down {
                                 d.values.insert(key.into(), json!(matches[d.list_index]));
                             }
-                            let row_height = ui.text_style_height(&egui::TextStyle::Body);
+                            let row_height = ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
                             let area = egui::ScrollArea::vertical().max_height(180.0);
-                            let area = if up || down { area.vertical_scroll_offset(row_height * d.list_index as f32) } else { area };
+                            let area = if search_changed {
+                                area.vertical_scroll_offset(0.0)
+                            } else if up || down {
+                                area.vertical_scroll_offset(row_height * d.list_index as f32)
+                            } else {
+                                area
+                            };
                             area.show_rows(ui, row_height, matches.len(), |ui, rows| {
                                 for index in rows {
                                     let Some(name) = matches.get(index) else { continue };
