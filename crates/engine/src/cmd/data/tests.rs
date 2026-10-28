@@ -517,6 +517,14 @@ fn list_validation_shifts_relative_references_for_each_cell() {
     assert!(check_validation(&wb, 0, a1, "Beta").is_some());
     assert!(check_validation(&wb, 0, a2, "Beta").is_none());
     assert!(check_validation(&wb, 0, a2, "Alpha").is_some());
+
+    s.execute("data.validation", json!({"range": "A1", "clear": true})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.first().unwrap();
+    assert_eq!(dv.ranges.first().unwrap().start, a2);
+    assert_eq!(list_items(&wb, 0, dv, a2), ["Beta", "Shared"]);
+    assert!(check_validation(&wb, 0, a2, "Beta").is_none());
+    assert!(check_validation(&wb, 0, a2, "Alpha").is_some());
 }
 
 #[test]
