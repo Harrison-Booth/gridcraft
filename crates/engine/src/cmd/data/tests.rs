@@ -494,6 +494,27 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
 }
 
 #[test]
+fn list_validation_shifts_relative_references_for_each_cell() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1", "values": [["K1:K2"], ["M1:M2"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "K1:K2", "values": [["Alpha"], ["Shared"]]})).unwrap();
+    s.execute("range.setValues", json!({"range": "M1:M2", "values": [["Beta"], ["Shared"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "list", "formula1": "=INDIRECT(B1)"})).unwrap();
+
+    let wb = s.doc().unwrap().wb.clone();
+    let dv = wb.active().unwrap().validations.first().unwrap();
+    let a1 = CellRef::parse("A1").unwrap();
+    let a2 = CellRef::parse("A2").unwrap();
+    assert_eq!(list_items(&wb, 0, dv, a1), ["Alpha", "Shared"]);
+    assert_eq!(list_items(&wb, 0, dv, a2), ["Beta", "Shared"]);
+    assert!(check_validation(&wb, 0, a1, "Alpha").is_none());
+    assert!(check_validation(&wb, 0, a1, "Beta").is_some());
+    assert!(check_validation(&wb, 0, a2, "Beta").is_none());
+    assert!(check_validation(&wb, 0, a2, "Alpha").is_some());
+}
+
+#[test]
 fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     // A typo used to give a rule that validates nothing (`type="none"`) or the wrong check,
     // with no error.
