@@ -137,6 +137,9 @@ fn depreciation() {
     is_err(ev("VDB", vec![n(2400.0), n(300.0), n(10.0), n(5.0), n(4.0)]), CellError::Num);
     close_tol(ev("AMORLINC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(0.15), n(1.0)]), 360.0, 1e-9);
     close(ev("AMORDEGRC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(0.15), n(1.0)]), 776.0);
+    for rate in [0.5, 0.22] {
+        is_err(ev("AMORDEGRC", vec![n(2400.0), d(2008, 8, 19), d(2008, 12, 31), n(300.0), n(1.0), n(rate), n(1.0)]), CellError::Num);
+    }
     is_err(ev("AMORDEGRC", vec![n(1.0), n(1.0), n(1.0), n(1.0), n(1.0), n(1.0)]), CellError::Num);
 }
 

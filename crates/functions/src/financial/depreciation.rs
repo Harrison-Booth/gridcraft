@@ -140,9 +140,10 @@ pub(super) fn amordegrc(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
         return Err(CellError::Num);
     }
     let life = 1.0 / rate;
-    let coef = if life < 3.0 {
-        1.0
-    } else if life < 5.0 {
+    if life < 3.0 || (life > 4.0 && life < 5.0) {
+        return Err(CellError::Num);
+    }
+    let coef = if life < 5.0 {
         1.5
     } else if life <= 6.0 {
         2.0
