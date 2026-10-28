@@ -5,10 +5,11 @@ use super::*;
 /// (calculation mode and iterative calculation) when a document is active. Theme, language, formula
 /// bar, AutoComplete and calculation changes run their commands through `run_or_alert`; calculation
 /// settings are saved with the workbook.
-pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
+pub(super) fn options(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
     let lang = app.ui.language;
     section(ui, lang, "Options|General");
     general_options(app, ui, lang);
+    custom_lists(app, ui, bs);
     ui.add_space(6.0);
     let mut formula_bar = app.session.prefs.formula_bar;
     if ui.checkbox(&mut formula_bar, lang.tr("Show formula bar")).changed() {
@@ -33,6 +34,65 @@ pub(super) fn options(app: &mut SheetApp, ui: &mut Ui) {
     calc_options(app, ui, lang, &calc);
     ui.add_space(6.0);
     dim(ui, lang.tr("Calculation settings are saved with the workbook."));
+}
+
+fn custom_lists(app: &mut SheetApp, ui: &mut Ui, bs: &mut super::Backstage) {
+    ui.add_space(18.0);
+    section(ui, app.ui.language, "Custom Lists");
+    let lists = &app.session.prefs.custom_lists;
+    if bs.custom_list_index >= lists.len() {
+        bs.custom_list_index = lists.len().saturating_sub(1);
+    }
+    if !lists.is_empty() {
+        craft_ui::ComboBox::from_id_salt("backstage_custom_list").selected_text(format!("Custom List {}", bs.custom_list_index + 1)).show_ui(
+            ui,
+            |ui| {
+                for (i, items) in lists.iter().enumerate() {
+                    if ui.selectable_label(bs.custom_list_index == i, items.first().map(String::as_str).unwrap_or("Custom List")).clicked() {
+                        bs.custom_list_index = i;
+                        bs.custom_list_draft = items.join("\n");
+                        bs.custom_list_draft_initialized = true;
+                    }
+                }
+            },
+        );
+        if !bs.custom_list_draft_initialized {
+            bs.custom_list_draft = lists.get(bs.custom_list_index).map(|l| l.join("\n")).unwrap_or_default();
+            bs.custom_list_draft_initialized = true;
+        }
+    }
+    let label = ui.label("Enter one item per line:");
+    ui.add(egui::TextEdit::multiline(&mut bs.custom_list_draft).desired_rows(6).desired_width(420.0)).labelled_by(label.id);
+    ui.horizontal(|ui| {
+        if ui.button("Add").clicked() {
+            let before = app.session.prefs.custom_lists.len();
+            app.run_or_alert("options.addCustomList", json!({"items": bs.custom_list_draft.lines().collect::<Vec<_>>()}));
+            if app.session.prefs.custom_lists.len() > before {
+                bs.custom_list_index = app.session.prefs.custom_lists.len() - 1;
+            }
+        }
+        if ui.add_enabled(!app.session.prefs.custom_lists.is_empty(), egui::Button::new("Replace")).clicked() {
+            app.run_or_alert(
+                "options.replaceCustomList",
+                json!({"index": bs.custom_list_index + 1, "items": bs.custom_list_draft.lines().collect::<Vec<_>>()}),
+            );
+        }
+        if ui.add_enabled(!app.session.prefs.custom_lists.is_empty(), egui::Button::new("Delete")).clicked() {
+            app.run_or_alert("options.deleteCustomList", json!({"index": bs.custom_list_index + 1}));
+            bs.custom_list_index = bs.custom_list_index.min(app.session.prefs.custom_lists.len().saturating_sub(1));
+            bs.custom_list_draft = app.session.prefs.custom_lists.get(bs.custom_list_index).map(|l| l.join("\n")).unwrap_or_default();
+            bs.custom_list_draft_initialized = true;
+        }
+        if ui.add_enabled(app.session.active().is_some(), egui::Button::new("Import Selection")).clicked() {
+            let before = app.session.prefs.custom_lists.len();
+            app.run_or_alert("options.importCustomList", json!({}));
+            if app.session.prefs.custom_lists.len() > before {
+                bs.custom_list_index = app.session.prefs.custom_lists.len() - 1;
+                bs.custom_list_draft = app.session.prefs.custom_lists[bs.custom_list_index].join("\n");
+                bs.custom_list_draft_initialized = true;
+            }
+        }
+    });
 }
 
 /// The display theme and interface language controls of the General section.
