@@ -137,6 +137,13 @@ impl Out {
         }
         self.parts.push((name.to_string(), data));
     }
+    pub fn replace(&mut self, name: &str, data: Vec<u8>) {
+        if let Some((_, part)) = self.parts.iter_mut().find(|(part_name, _)| part_name == name) {
+            *part = data;
+        } else {
+            self.part(name, None, data);
+        }
+    }
     /// The `xl/media` file name (`imageN.ext`) holding `data`. A picture used on several sheets,
     /// or twice on one, is written once and every drawing points to that part, as in Excel.
     pub fn image_part(&mut self, ext: &str, data: &[u8]) -> String {
