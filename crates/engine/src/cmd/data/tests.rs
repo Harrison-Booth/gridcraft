@@ -442,7 +442,7 @@ fn a_list_typed_without_quotes_is_saved_as_a_quoted_list() {
         ("H1", "Sheet1!$K$1:$K$3", "Sheet1!$K$1:$K$3"),
         ("I1", "=OFFSET($K$1,0,0,3,1)", "OFFSET($K$1,0,0,3,1)"),
         ("J1", "=INDIRECT(\"K1:K3\")", "INDIRECT(\"K1:K3\")"),
-        ("L1", "=$M$1#", "$M$1#"),
+        ("L1", "=$M$1#", "_xlfn.ANCHORARRAY($M$1)"),
     ];
     for (cell, source, _) in rules {
         s.execute("data.validation", json!({"range": cell, "type": "list", "formula1": source})).unwrap();
