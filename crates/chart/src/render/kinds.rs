@@ -1,6 +1,10 @@
 use super::frame::{Bx, CatAxis, ValAxis, frame, on, value_range};
 use super::legend::{cat_label, point_color};
-use super::*;
+use super::{
+    AXIS, Chart, ChartData, Ctx, DOWN, Fmt, GRID, HAlign, LABEL_SIZE, MAX_CATS, MAX_LABELS, MAX_MARKERS, Prim, QuartileMethod, STOCK, SeriesData,
+    TAU, TEXT, UP, VAlign, WHITE, clean, nice_scale,
+};
+use crate::points;
 
 // ---------------------------------------------------------------- histogram
 
@@ -47,7 +51,7 @@ pub(super) fn histogram(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         let x = plot.x + b as f32 * cw;
         ctx.rect(x, top, cw, plot.bottom() - top, s.color, Some((WHITE, 0.75)));
         if chart.data_labels {
-            ctx.text(x + cw / 2.0, top - 2.0, &c.to_string(), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+            ctx.text(x + cw / 2.0, top - 2.0, &c.to_string(), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
 }
@@ -110,7 +114,7 @@ pub(super) fn waterfall(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx
         }
         if chart.data_labels && ncat <= MAX_LABELS {
             let v = if *kind == 0 { *t } else { t - b };
-            ctx.text(x + bw / 2.0, yb.min(yt) - 2.0, &f.format(v, None), LABEL_SIZE, TEXT, HAlign::Center, VAlign::Bottom);
+            ctx.text(x + bw / 2.0, yb.min(yt) - 2.0, &f.format(v, None), LABEL_SIZE, TEXT, (HAlign::Center, VAlign::Bottom));
         }
     }
 }
@@ -150,10 +154,10 @@ pub(super) fn funnel(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             if chart.data_labels {
                 let t = f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None);
                 let color = if ctx.tw(&t, LABEL_SIZE) + 4.0 <= bw { on(s.color) } else { TEXT };
-                ctx.text(plot.cx(), yc, &t, LABEL_SIZE, color, HAlign::Center, VAlign::Middle);
+                ctx.text(plot.cx(), yc, &t, LABEL_SIZE, color, (HAlign::Center, VAlign::Middle));
             }
             let l = ctx.fit(labels.get(j).map(String::as_str).unwrap_or(""), LABEL_SIZE, lw - 8.0);
-            ctx.text(plot.x - 6.0, yc, &l, LABEL_SIZE, TEXT, HAlign::Right, VAlign::Middle);
+            ctx.text(plot.x - 6.0, yc, &l, LABEL_SIZE, TEXT, (HAlign::Right, VAlign::Middle));
         }
     }
 }
@@ -167,8 +171,11 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
     if !(total.is_finite() && total > 0.0) {
         return;
     }
-    let (cx, cy) = (area.cx(), area.cy());
-    let r = area.w.min(area.h) / 2.0 * 0.92;
+    let (pcx, pcy) = (area.cx(), area.cy());
+    // Exploded slices are pulled out along their middle; the pie shrinks so they still fit.
+    let explode = |j: usize| points::point(s, j).map(|p| p.explosion).unwrap_or(0.0);
+    let max_explosion = (0..vals.len()).map(explode).fold(0.0f32, f32::max);
+    let r = area.w.min(area.h) / 2.0 * 0.92 / (1.0 + max_explosion);
     if r < 2.0 {
         return;
     }
@@ -179,11 +186,14 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
     for (j, v) in vals.iter().enumerate() {
         let sweep = (*v / total) as f32 * TAU;
         if sweep > 1e-4 {
-            let fill = point_color(data, j);
-            ctx.out.push(Prim::Wedge { cx, cy, r_outer: r, r_inner: ri, a0: a, a1: (a + sweep).min(TAU), fill, stroke: Some((WHITE, 1.5)) });
+            let fill = point_color(chart, data, j);
+            let stroke = points::point(s, j).and_then(|p| p.line).map(|c| (c, 1.5)).unwrap_or((WHITE, 1.5));
+            let d = explode(j) * r;
+            let mid = a + sweep / 2.0;
+            let (cx, cy) = (pcx + d * mid.sin(), pcy - d * mid.cos());
+            ctx.out.push(Prim::Wedge { cx, cy, r_outer: r, r_inner: ri, a0: a, a1: (a + sweep).min(TAU), fill, stroke: Some(stroke) });
             if (chart.data_labels || names) && vals.len() <= MAX_LABELS {
                 let t = if names { cat_label(data, j) } else { f.format(s.values.get(j).copied().flatten().unwrap_or(0.0), None) };
-                let mid = a + sweep / 2.0;
                 let rr = if ri > 0.0 { (r + ri) / 2.0 } else { r * 0.65 };
                 let room = sweep * rr;
                 if ctx.tw(&t, LABEL_SIZE) <= room.max(r - ri) && room >= LABEL_SIZE {
@@ -194,7 +204,7 @@ pub(super) fn pie(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx, inne
         a += sweep;
     }
     for (x, y, t, c) in labels {
-        ctx.text(x, y, &t, LABEL_SIZE, c, HAlign::Center, VAlign::Middle);
+        ctx.text(x, y, &t, LABEL_SIZE, c, (HAlign::Center, VAlign::Middle));
     }
 }
 
@@ -277,15 +287,15 @@ pub(super) fn treemap(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) 
     items.sort_by(|a, b| b.1.total_cmp(&a.1));
     let f = Fmt::new(&s.number_format);
     for (j, b) in squarify(&items, area) {
-        let fill = point_color(data, j);
+        let fill = point_color(chart, data, j);
         ctx.rect(b.x, b.y, b.w, b.h, fill, Some((WHITE, 1.5)));
         if b.w > 24.0 && b.h > LABEL_SIZE * 1.6 {
             let name = ctx.fit(&cat_label(data, j), LABEL_SIZE, b.w - 8.0);
-            ctx.text(b.x + 4.0, b.y + 4.0, &name, LABEL_SIZE, on(fill), HAlign::Left, VAlign::Top);
+            ctx.text(b.x + 4.0, b.y + 4.0, &name, LABEL_SIZE, on(fill), (HAlign::Left, VAlign::Top));
             if chart.data_labels && b.h > LABEL_SIZE * 3.2 {
                 let v = items.iter().find(|x| x.0 == j).map(|x| x.1).unwrap_or(0.0);
                 let t = ctx.fit(&f.format(v, None), LABEL_SIZE, b.w - 8.0);
-                ctx.text(b.x + 4.0, b.y + 4.0 + LABEL_SIZE * 1.4, &t, LABEL_SIZE, on(fill), HAlign::Left, VAlign::Top);
+                ctx.text(b.x + 4.0, b.y + 4.0 + LABEL_SIZE * 1.4, &t, LABEL_SIZE, on(fill), (HAlign::Left, VAlign::Top));
             }
         }
     }
@@ -325,7 +335,7 @@ pub(super) fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             ctx.line(ring, GRID, 0.75);
         }
         if ti % every == 0 {
-            ctx.text(cx - 3.0, cy - rr, &f.format(t, Some(sc.step)), LABEL_SIZE * 0.9, TEXT, HAlign::Right, VAlign::Middle);
+            ctx.text(cx - 3.0, cy - rr, &f.format(t, Some(sc.step)), LABEL_SIZE * 0.9, TEXT, (HAlign::Right, VAlign::Middle));
         }
     }
     let step = ncat.div_ceil(72).max(1);
@@ -349,7 +359,7 @@ pub(super) fn radar(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
             VAlign::Middle
         };
         let t = ctx.fit(labels.get(j).map(String::as_str).unwrap_or(""), LABEL_SIZE, lw.max(20.0));
-        ctx.text(p[0], p[1], &t, LABEL_SIZE, TEXT, align, valign);
+        ctx.text(p[0], p[1], &t, LABEL_SIZE, TEXT, (align, valign));
     }
     for s in &data.series {
         let mut pts: Vec<[f32; 2]> = (0..ncat).map(|j| pt(ang(j), sc.frac(s.values.get(j).copied().flatten().unwrap_or(sc.min)) * r)).collect();

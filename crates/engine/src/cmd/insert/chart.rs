@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, RangeRef, Result, Series, Session, Sheet, anchor_mode_param, bad, block,
+    bool_param, cell_param_on, edit, f64_param, json, split_sheet, str_param, target_ranges, target_sheet, u32_param,
+};
 
 fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
     if p.get("range").is_some() {
@@ -82,6 +85,9 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                points: Vec::new(),
+                invert_if_negative: false,
+                invert_color: None,
             });
         }
     } else {
@@ -98,6 +104,9 @@ pub fn series_from_range(sh: &Sheet, r: RangeRef, by_rows: bool) -> Vec<Series> 
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                points: Vec::new(),
+                invert_if_negative: false,
+                invert_color: None,
             });
         }
     }
@@ -264,6 +273,7 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
         source: (areas.len() == 1).then(|| format!("{}!{}", gridcraft_formula::quote_sheet(&sh.name), bounds.a1())),
         by_rows,
         pivot: None,
+        vary_colors: None,
     };
     Ok((sheet, chart))
 }
