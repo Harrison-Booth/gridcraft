@@ -2,10 +2,16 @@
 //! tools, Get Data, scripts (Automate), cell checkboxes, theme colours and fonts.
 
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::*;
+use gridcraft_model::{
+    Anchor, Chart, Color, DefinedName, HAlign, LegendPos, NumFmt, Shape, Sheet, SheetViewMode, TableColumn, TotalsFn, Trendline, TrendlineKind,
+    Workbook,
+};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, always, anchor_mode_name, bad, bool_param, cell_param, cell_param_on, cmd, edit, f64_param, has_doc,
+    ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
+};
 
 mod cells;
 mod chart;
@@ -32,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Chart Element",
             ["Chart Design", "Chart Layouts"],
             None,
-            "{chart?, element: title|legend|dataLabels|gridlines|axisTitles|smooth|trendline, on?: bool, position?: bottom|top|left|right; trendline: series?: index (default all), type?: linear|exponential|linearForecast|movingAverage|logarithmic|power|polynomial, order?: 2..6, period?: 2..255, forward?, backward?, displayEquation?, displayRSquared?}",
+            "{chart?, element: title|legend|dataLabels|gridlines|axisTitles|smooth|trendline, on?: bool, position?: bottom|top|left|right; trendline: series?: index (default all), type?: linear|exponential|linearForecast|movingAverage|logarithmic|power|polynomial, order?: 2..6, period?: 2..255, forward?, backward?, displayEquation?, displayRSquared?; errorBars: series?: index (default all), type?: standardError|percentage|standardDeviation|fixed|custom, value?: number, plus?/minus?: reference or {array} (custom), direction?: y|x (x on scatter/bubble), display?: both|plus|minus, endStyle?: cap|noCap, color?, width?: points; on=false removes them}",
             has_doc,
             add_element
         ),
