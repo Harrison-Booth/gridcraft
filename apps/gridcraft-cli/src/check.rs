@@ -24,7 +24,7 @@ use gridcraft_engine::formula::{Expr, quote_sheet};
 use gridcraft_engine::model::{Cell, Sheet, Workbook};
 use serde_json::{Value as Json, json};
 
-use super::{Args, USAGE, number_text, outln, pretty};
+use super::{Args, USAGE, number_text, pretty, print_usage};
 
 mod calc;
 mod fidelity;
@@ -199,7 +199,7 @@ pub fn main(args: &[String]) -> ExitCode {
         Err(e) => return usage(e),
     };
     if a.help {
-        outln!("{USAGE}");
+        print_usage();
         return ExitCode::SUCCESS;
     }
     if a.positional.is_empty() {

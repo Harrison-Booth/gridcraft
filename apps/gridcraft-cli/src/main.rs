@@ -51,6 +51,10 @@ const USAGE: &str = "usage:
   gridcraft-cli send <port> <method> [json]
   gridcraft-cli version";
 
+fn print_usage() {
+    outln!("{USAGE}");
+}
+
 /// stdout went away. A reader that stopped early (a closed pipe) ends the program quietly; any
 /// other write error is reported.
 fn stdout_failed(e: std::io::Error) -> ! {
