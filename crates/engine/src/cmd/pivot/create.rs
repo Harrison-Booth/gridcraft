@@ -19,9 +19,37 @@ fn default_source(s: &Session) -> Result<String> {
         sel.intersection(&used).unwrap_or(sel)
     };
     if r.is_single() && sh.value(r.start).is_empty() {
+        // Active cell outside the data: use the sheet's only block, else keep the error.
+        if let Some(only) = only_block(sh) {
+            return Ok(pv::range_text(&sh.name, only));
+        }
         return Err(other("The reference isn't valid. Select a cell in a range with labeled columns, or pass `source`."));
     }
     Ok(pv::range_text(&sh.name, r))
+}
+
+/// The sheet's one block of data, or `None` when it has none or several (or is too big to scan).
+fn only_block(sh: &Sheet) -> Option<RangeRef> {
+    const SCAN_CAP: u64 = 1_000_000;
+    let used = sh.used_range()?;
+    let cells = u64::from(used.end.row - used.start.row + 1) * u64::from(used.end.col - used.start.col + 1);
+    if cells > SCAN_CAP {
+        return None;
+    }
+    let mut block: Option<RangeRef> = None;
+    for row in used.start.row..=used.end.row {
+        for col in used.start.col..=used.end.col {
+            let c = CellRef::new(row, col);
+            if sh.value(c).is_empty() || block.is_some_and(|b| b.contains(c)) {
+                continue;
+            }
+            if block.is_some() {
+                return None;
+            }
+            block = Some(current_region(sh, c));
+        }
+    }
+    block
 }
 
 pub(super) fn source_param(s: &Session, p: &Json) -> Result<String> {
