@@ -145,14 +145,14 @@ fn parse_xml(xml: &str) -> R<(Vec<Node>, usize)> {
                 if stack.len() >= MAX_DEPTH || nodes.len() >= MAX_NODES {
                     return Err(CellError::Value);
                 }
-                let index = add_node(&mut nodes, &mut stack, &mut root, &element, reader.decoder())?;
+                let index = add_node(&mut nodes, &stack, &mut root, &element, reader.decoder())?;
                 stack.push(index);
             }
             Event::Empty(element) => {
                 if nodes.len() >= MAX_NODES {
                     return Err(CellError::Value);
                 }
-                add_node(&mut nodes, &mut stack, &mut root, &element, reader.decoder())?;
+                add_node(&mut nodes, &stack, &mut root, &element, reader.decoder())?;
             }
             Event::End(_) => {
                 stack.pop().ok_or(CellError::Value)?;
