@@ -322,7 +322,7 @@ pub(crate) fn series(values: &Value, timeline: &Value, opts: &Options, sys: Date
     let mut times: Vec<f64> = points.iter().map(|p| p.0).collect();
     times.dedup();
     if times.len() < 2 {
-        return Err(CellError::Num);
+        return Err(CellError::Div0);
     }
     let axis = detect_axis(&times, sys)?;
     let (Some(&first), Some(&last)) = (times.first(), times.last()) else { return Err(CellError::Num) };
@@ -1127,6 +1127,11 @@ mod tests {
         is_err(ev("FORECAST.ETS.CONFINT", vec![n(13.0), range(&ys), range(&ts), n(0.0)]), CellError::Num);
         is_err(ev("FORECAST.ETS.STAT", vec![range(&ys), range(&ts), n(9.0)]), CellError::Num);
         is_err(ev("FORECAST.ETS.STAT", vec![range(&ys), range(&ts), n(0.0)]), CellError::Num);
+        // A single unique timeline point has no forecast interval or model to estimate.
+        is_err(ets(vec![n(1.0), n(1.0), n(1.0)]), CellError::Div0);
+        is_err(ev("FORECAST.ETS.CONFINT", vec![n(1.0), n(1.0), n(1.0)]), CellError::Div0);
+        is_err(ev("FORECAST.ETS.SEASONALITY", vec![n(1.0), n(1.0)]), CellError::Div0);
+        is_err(ev("FORECAST.ETS.STAT", vec![n(1.0), n(1.0), n(1.0)]), CellError::Div0);
         // Hostile spans: a huge gap is rejected before anything is allocated.
         is_err(ets(vec![n(1e15), range(&[1.0, 2.0, 3.0]), range(&[0.0, 1.0, 1e12])]), CellError::Num);
         is_err(ets(vec![n(1e308), range(&ys), range(&ts)]), CellError::Num);

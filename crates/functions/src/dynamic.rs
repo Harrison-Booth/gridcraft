@@ -444,8 +444,9 @@ fn span(len: usize, n: Option<i64>, take: bool) -> R<(usize, usize)> {
 
 fn take_drop(args: &[Arg], take: bool) -> R<Value> {
     let a = arr_arg(args, 0)?;
-    let (r0, r1) = span(a.rows, opt_count(args, 1)?, take)?;
-    let (c0, c1) = span(a.cols, opt_count(args, 2)?, take)?;
+    let axis_span = |len, count| span(len, count, take).map_err(|e| if !take && e == CellError::Calc { CellError::Value } else { e });
+    let (r0, r1) = axis_span(a.rows, opt_count(args, 1)?)?;
+    let (c0, c1) = axis_span(a.cols, opt_count(args, 2)?)?;
     let rows: Vec<Vec<Value>> = (r0..r1).map(|r| (c0..c1).map(|c| a.get(r, c).cloned().unwrap_or(Value::Empty)).collect()).collect();
     from_rows(rows, &Value::Empty)
 }
@@ -1211,7 +1212,8 @@ mod tests {
         assert_eq!(rows_of(&r), vec![vec![nv(10.0)], vec![nv(30.0)]]);
         let r = ev("DROP", vec![rf(grid()), n(-2.0)]);
         assert_eq!(rows_of(&r), vec![vec![tv("b"), nv(2.0), nv(20.0)]]);
-        is_err(ev("DROP", vec![rf(grid()), n(3.0)]), CellError::Calc);
+        is_err(ev("DROP", vec![rf(grid()), n(3.0)]), CellError::Value);
+        is_err(ev("DROP", vec![av(row(&[1.0])), n(1.0)]), CellError::Value);
         let r = ev("CHOOSEROWS", vec![rf(grid()), n(3.0), n(-3.0)]);
         assert_eq!(rows_of(&r), vec![vec![tv("c"), nv(1.0), nv(30.0)], vec![tv("b"), nv(2.0), nv(20.0)]]);
         let r = ev("CHOOSECOLS", vec![rf(grid()), av(row(&[1.0, 3.0]))]);
