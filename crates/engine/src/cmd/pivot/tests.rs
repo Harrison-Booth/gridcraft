@@ -63,6 +63,23 @@ fn insert_creates_placeholder_on_new_sheet() {
 }
 
 #[test]
+fn active_cell_outside_the_data_uses_the_only_block() {
+    let mut s = sales();
+    s.execute("selection.set", json!({"range": "J5"})).unwrap();
+    s.execute("insert.pivotTable", json!({})).unwrap();
+    assert_eq!(pt(&s).source, "Sheet1!$A$1:$E$13");
+    // Two blocks: ambiguous, so the error stays.
+    let mut s = sales();
+    s.execute("cell.set", json!({"cell": "J1", "input": "x"})).unwrap();
+    s.execute("selection.set", json!({"range": "H5"})).unwrap();
+    assert!(s.execute("insert.pivotTable", json!({})).is_err());
+    // No data at all.
+    let mut s = Session::new();
+    s.new_workbook();
+    assert!(s.execute("insert.pivotTable", json!({})).is_err());
+}
+
+#[test]
 fn region_by_product_sum_of_sales() {
     let mut s = sales();
     s.execute("insert.pivotTable", json!({})).unwrap();
