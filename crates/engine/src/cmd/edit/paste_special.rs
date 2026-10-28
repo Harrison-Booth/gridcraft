@@ -36,6 +36,24 @@ fn apply_operation(op: &str, old: &Cell, new: &mut Cell) {
     }
 }
 
+fn apply_requested_operation(
+    op: &str,
+    what: What,
+    old_picture: bool,
+    new_picture: &mut Option<std::sync::Arc<gridcraft_model::CellPicture>>,
+    old: &Cell,
+    new: &mut Cell,
+) {
+    if op == "none" || !matches!(what, What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas) || new.formula.is_some() {
+        return;
+    }
+    if old_picture || new_picture.is_some() {
+        *new_picture = None;
+        new.value = Value::Error(gridcraft_core::CellError::Value);
+    }
+    apply_operation(op, old, new);
+}
+
 fn operation_symbol(op: &str) -> Option<char> {
     match op {
         "add" => Some('+'),
@@ -235,14 +253,7 @@ pub(super) fn paste_special(s: &mut Session, p: &Json) -> Result<Json> {
                     What::Comments | What::Validation | What::ColumnWidths => {}
                 }
                 // Operations combine numbers with what is already there.
-                if op != "none" && matches!(what, What::All | What::Values | What::ValuesAndNumberFormats | What::Formulas) && new.formula.is_none() {
-                    if old_picture.is_some() || new_picture.is_some() {
-                        new_picture = None;
-                        new.value = Value::Error(gridcraft_core::CellError::Value);
-                    }
-                    // Numbers stored as text participate; other text and errors stay as they are.
-                    apply_operation(&op, &old, &mut new);
-                }
+                apply_requested_operation(&op, what, old_picture.is_some(), &mut new_picture, &old, &mut new);
             }
             // The copied cell's validation rule replaces whatever rule the destination had.
             if !link && matches!(what, What::All | What::AllExceptBorders | What::Validation) {
