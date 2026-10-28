@@ -46,8 +46,10 @@ fn draw(c: &Chart) -> (ChartData, Vec<Prim>) {
 }
 
 /// Fills of the bars (rects wider than the legend swatches), left to right.
+type BarPrim = (f32, Rgba, Option<(Rgba, f32)>);
+
 fn bars(prims: &[Prim]) -> Vec<(Rgba, Option<(Rgba, f32)>)> {
-    let mut v: Vec<(f32, Rgba, Option<(Rgba, f32)>)> = prims
+    let mut v: Vec<BarPrim> = prims
         .iter()
         .filter_map(|p| match p {
             Prim::Rect { x, w, h, fill: Some(f), stroke, .. } if *w > 12.0 && *w < 200.0 && *h > 0.0 => Some((*x, *f, *stroke)),
