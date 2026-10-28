@@ -11,11 +11,16 @@ use gridcraft_core::CellRef;
 pub(super) const CLIP_WALK_CAP: u64 = 16_000_000;
 
 fn used_bounds(sheet: &gridcraft_model::Sheet, range: RangeRef) -> Option<RangeRef> {
-    let cells = sheet.cells.iter().map(|(cell, _)| RangeRef::cell(cell)).filter(|cell| range.contains_range(cell));
+    let cells = sheet.cells.iter_range(range).map(|(cell, _)| RangeRef::cell(cell));
     let spills = sheet.spill_ranges.values().filter_map(|spill| range.intersection(spill));
     let merges = sheet.merges.iter().filter(|merge| range.contains_range(merge)).copied();
     let comments = sheet.comments.keys().map(|cell| RangeRef::cell(*cell)).filter(|cell| range.contains_range(cell));
     cells.chain(spills).chain(merges).chain(comments).reduce(|bound, item| bound.union(&item))
+}
+
+fn trim_trailing_unused(range: RangeRef, used: Option<RangeRef>) -> RangeRef {
+    let Some(used) = used else { return range };
+    RangeRef::new(range.start, used.end)
 }
 
 fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
@@ -30,14 +35,26 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
     let d = s.doc()?;
     let Some(sh) = d.wb.sheet(sheet) else { return Err(EngineError::NoDocument) };
     let trim = |range: RangeRef| {
-        if range.is_full_cols() || range.is_full_rows() || range.count() > CLIP_WALK_CAP { used_bounds(sh, range).unwrap_or(range) } else { range }
+        if range.is_full_cols() || range.is_full_rows() || range.count() > CLIP_WALK_CAP {
+            trim_trailing_unused(range, used_bounds(sh, range))
+        } else {
+            range
+        }
     };
     let (wb, range, areas) = if ranges.len() > 1 {
         let across = ranges.iter().all(|area| area.start.row == selected.start.row && area.end.row == selected.end.row);
         let down = ranges.iter().all(|area| area.start.col == selected.start.col && area.end.col == selected.end.col);
         let needs_trim = ranges.iter().any(|range| range.is_full_cols() || range.is_full_rows() || range.count() > CLIP_WALK_CAP);
         let shared = if needs_trim && (across || down) {
-            ranges.iter().filter_map(|area| used_bounds(sh, *area)).reduce(|bound, area| bound.union(&area))
+            let used = ranges.iter().filter_map(|area| used_bounds(sh, *area)).reduce(|bound, area| bound.union(&area));
+            used.map(|bound| {
+                let first = ranges[0];
+                if across {
+                    RangeRef::new(CellRef { row: first.start.row, col: bound.start.col }, CellRef { row: bound.end.row, col: bound.end.col })
+                } else {
+                    RangeRef::new(CellRef { row: bound.start.row, col: first.start.col }, CellRef { row: bound.end.row, col: bound.end.col })
+                }
+            })
         } else {
             None
         };
@@ -45,11 +62,11 @@ fn copy_impl(s: &mut Session, p: &Json, cut: bool) -> Result<Json> {
             .iter()
             .map(|range| {
                 if let Some(shared) = shared {
-                    let local = used_bounds(sh, *range).unwrap_or(*range);
+                    let local = trim_trailing_unused(*range, used_bounds(sh, *range));
                     if across {
-                        RangeRef::new(CellRef { row: shared.start.row, col: local.start.col }, CellRef { row: shared.end.row, col: local.end.col })
+                        RangeRef::new(CellRef { row: shared.start.row, col: range.start.col }, CellRef { row: shared.end.row, col: local.end.col })
                     } else {
-                        RangeRef::new(CellRef { row: local.start.row, col: shared.start.col }, CellRef { row: local.end.row, col: shared.end.col })
+                        RangeRef::new(CellRef { row: range.start.row, col: shared.start.col }, CellRef { row: local.end.row, col: shared.end.col })
                     }
                 } else {
                     trim(*range)
