@@ -171,7 +171,11 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = if input.starts_with('=') {
+    let text_format = wb.styles.get(sh.style_id(at)).num_fmt.as_str() == "@";
+    let formula_input = input.starts_with('=') && !text_format;
+    let v = if text_format {
+        Value::text(input)
+    } else if formula_input {
         gridcraft_calc::evaluate(wb, sheet, at, input).scalar()
     } else {
         gridcraft_core::parse::parse_input(input, wb.date_system).value
@@ -216,7 +220,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
             if v.is_error() {
                 false
             } else {
-                let n = (if input.starts_with('=') { v.display().chars().count() } else { input.chars().count() }) as f64;
+                let n = (if formula_input { v.display().chars().count() } else { input.chars().count() }) as f64;
                 compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(num))
             }
         }
@@ -243,12 +247,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
 }
 
 fn list_value_matches(item: &Value, value: &Value) -> bool {
-    match (item, value) {
-        (Value::Number(a), Value::Number(b)) => a == b,
-        (Value::Text(a), Value::Text(b)) => a.eq_ignore_ascii_case(b),
-        (Value::Bool(a), Value::Bool(b)) => a == b,
-        _ => false,
-    }
+    !item.is_empty() && !item.is_error() && !value.is_error() && gridcraft_core::compare(item, value) == std::cmp::Ordering::Equal
 }
 
 /// A formula written for `first`, as seen from `at` (relative references shifted).

@@ -513,17 +513,21 @@ fn validation_checks_formula_results_and_keeps_list_value_types() {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("range.setValues", json!({"range": "B1", "values": [[12], [11], ["11"]]})).unwrap();
-    s.execute("data.validation", json!({"range": "A1", "type": "whole", "operator": "greaterThan", "formula1": "10"})).unwrap();
+    s.execute("range.setValues", json!({"range": "B4", "values": [[0.3]]})).unwrap();
+    s.execute("home.formatCells", json!({"range": "A2", "style": {"num_fmt": "@"}})).unwrap();
+    s.execute("data.validation", json!({"range": "A1:A2", "type": "whole", "operator": "greaterThan", "formula1": "10"})).unwrap();
     s.execute("data.validation", json!({"range": "C1", "type": "custom", "formula1": "=C1>10"})).unwrap();
     s.execute("data.validation", json!({"range": "F1", "type": "textLength", "operator": "equal", "formula1": "2"})).unwrap();
     s.execute("data.validation", json!({"range": "D1", "type": "list", "formula1": "=B2"})).unwrap();
     s.execute("data.validation", json!({"range": "E1", "type": "list", "formula1": "=B3"})).unwrap();
+    s.execute("data.validation", json!({"range": "G1", "type": "list", "formula1": "=B4"})).unwrap();
     let wb = s.doc().unwrap().wb.clone();
     let check = |cell: &str, input: &str| check_validation(&wb, 0, CellRef::parse(cell).unwrap(), input).is_none();
 
     assert!(check("A1", "11"));
     assert!(check("A1", "=11"));
     assert!(check("A1", "=B1"));
+    assert!(!check("A2", "=11"), "text-formatted cells store formula input as text");
     assert!(!check("A1", "=10"));
     assert!(!check("A1", "=1/0"));
     assert!(check("C1", "=11"));
@@ -535,6 +539,7 @@ fn validation_checks_formula_results_and_keeps_list_value_types() {
     assert!(!check("D1", "=\"11\""));
     assert!(check("E1", "=\"11\""));
     assert!(!check("E1", "=11"));
+    assert!(check("G1", "=0.1+0.2"), "list numbers compare at spreadsheet precision");
 
     let before = s.doc().unwrap().wb.clone();
     assert_eq!(s.execute("data.validate", json!({"cell": "A1", "input": "=11"})).unwrap()["ok"], json!(true));
