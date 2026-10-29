@@ -1,6 +1,6 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Ignore Error, Reset Ignored Errors and the file's ignoredErrors; a euro sign is read as part of a number) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
@@ -187,6 +187,7 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Ignore Error (#1994): the warning button's menu gets Ignore Error, which stops flagging the cell (`formulas.ignoreError {range?, kinds?}`; `formulas.clearIgnoredErrors` is Reset Ignored Errors, `formulas.ignoredErrors` lists them). The sheet's `ignoredErrors` (all nine rules) are read and written; editing a cell forgets what it ignored and inserted or deleted rows and columns move it, as observed in Excel. A euro sign before or after the digits (`65.00€`, `€ 65`) is read as a number, as Excel with US settings does. Not done: the other error-check rules are not detected, so only Number Stored as Text and (through the command) the saved flags exist; Excel's per-rule on/off options and Error Checking Options dialog are missing; Convert to Number does not skip ignored cells (not observed) |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
 | 2026-10-24 | minor | Go To lists the named ranges on every sheet, as Excel's does ("The Go to popup window shows named ranges on every worksheet in your workbook"): a name scoped to another sheet appears as `Sheet2!Name`, and hidden names, constants and formulas are left out. It keeps the references entered (newest first, ten at most), and a double-click on an entry goes there. The Reference box and `edit.goTo` take several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30,H21:H29`) and select them all; `edit.goTo {list: true}` returns the list |
