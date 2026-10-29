@@ -172,11 +172,22 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         return None;
     }
     let text_format = wb.styles.get(sh.style_id(at)).num_fmt.as_str() == "@";
-    let formula_input = input.starts_with('=') && !text_format;
+    let formula_input = super::super::edit::is_formula_input(input, text_format);
     let v = if text_format {
         Value::text(input)
     } else if formula_input {
-        gridcraft_calc::evaluate(wb, sheet, at, input).scalar()
+        let mut candidate = wb.clone();
+        match super::super::edit::input_to_cell(input, sheet, at, &mut candidate) {
+            Ok(Some(cell)) => {
+                if let Some(sh) = candidate.sheet_mut(sheet) {
+                    sh.set_cell(at, cell);
+                }
+                let mut calc = gridcraft_calc::Calc::new();
+                calc.recalc_all(&mut candidate);
+                candidate.sheet(sheet).map_or(Value::Empty, |sh| sh.value(at))
+            }
+            _ => gridcraft_calc::evaluate(wb, sheet, at, input).scalar(),
+        }
     } else {
         gridcraft_core::parse::parse_input(input, wb.date_system).value
     };
@@ -202,7 +213,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
             let value = v.scalar();
             if is_literal_list(dv.f1.trim()) {
                 let items = list_items(wb, sheet, dv);
-                if input.starts_with('=') {
+                if formula_input {
                     let candidate = value.display();
                     !value.is_error() && items.iter().any(|x| x.eq_ignore_ascii_case(&candidate))
                 } else {
