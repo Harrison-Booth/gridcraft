@@ -920,6 +920,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Scatter or Bubble" => "Dispersie sau bule",
         "Search and run any command" => "Căutați și rulați orice comandă",
         "Search commands" => "Căutare comenzi",
+        "Search commands (Alt+Q)" => "Căutați comenzi (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Căutați o comandă, de ex. înghețare, grafic, îngroșat…",
         "Select and move ink and shapes" => "Selectați și mutați cerneala și formele",
         "Series…" => "Serie…",
         "Share: export or save a copy" => "Partajare: exportați sau salvați o copie",
@@ -1039,6 +1041,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format Chart Area…" => "Formatare zonă diagramă…",
         "Error checking options" => "Opțiuni de verificare a erorilor",
         "Paste formulas that refer to the copied cells" => "Lipire formule care fac referire la celulele copiate",
+        "Record Macro" => "Înregistrare macrocomandă",
+        "Stop Recording" => "Oprire înregistrare",
+        "Use Relative References" => "Utilizare referințe relative",
+        "Run\nMacro" => "Rulare macrocomandă",
+        "Macros…" => "Macrocomenzi…",
+        "Recording" => "Înregistrare",
+        "New Macro" => "Macrocomandă nouă",
+        "Show" => "Afișare",
         _ => return None,
     })
 }

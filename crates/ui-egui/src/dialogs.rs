@@ -22,7 +22,6 @@ mod data;
 mod find;
 mod format_cells;
 mod insert_function;
-mod macros;
 mod names;
 mod paste;
 mod show;
@@ -70,6 +69,9 @@ pub struct Dialog {
     picture_target: Option<(u64, usize)>,
     /// The dialog this one was opened from (Name Manager › New…): it comes back when this closes.
     back: Option<Box<Dialog>>,
+    /// Drawn at least once. The click that opened a dialog ends in its first frame, so a click
+    /// outside only closes a dialog (the search box) from its second frame on.
+    shown: bool,
     focus_initialized: bool,
     /// The formula box that takes references clicked or dragged on the grid (New Formatting Rule).
     pick: Option<RefPick>,
@@ -182,12 +184,13 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            shown: false,
             focus_initialized: false,
             pick: None,
         }
     }
 
-    fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
+    pub(crate) fn custom(name: &str, title: &str, defaults: Json) -> Dialog {
         Dialog {
             name: name.into(),
             title: title.into(),
@@ -203,6 +206,7 @@ impl Dialog {
             picture_inbox: None,
             picture_target: None,
             back: None,
+            shown: false,
             focus_initialized: false,
             pick: None,
         }
@@ -946,11 +950,9 @@ impl Dialog {
                 )
             }
             "journal" => Dialog::custom("journal", "Action Journal", json!({})),
-            "macros" => {
-                let mut d = Dialog::custom("macros", "Macros", json!({}));
-                d.result = app.session.run("view.macros", json!({})).ok();
-                d
-            }
+            "macros" => crate::macro_ui::open_dialog(app, &params),
+            "recordMacro" => return crate::macro_ui::open_record(app, &params),
+            "macroEditor" => return crate::macro_editor::open(app, &params),
             "statistics" => {
                 let mut d = Dialog::custom("statistics", "Workbook Statistics", json!({}));
                 d.result = app.session.run("review.workbookStatistics", json!({})).ok();

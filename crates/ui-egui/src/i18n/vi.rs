@@ -4,6 +4,8 @@
 /// Returns the Vietnamese translation for `text`, or `None` so callers fall back to English.
 pub(super) fn translate(text: &str) -> Option<&'static str> {
     Some(match text {
+        "Search commands (Alt+Q)" => "Tìm lệnh (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Tìm một lệnh, ví dụ: cố định, biểu đồ, in đậm…",
         "Paste" => "Dán",
         "Paste Values" => "Dán giá trị",
         "Paste Formulas" => "Dán công thức",
@@ -418,6 +420,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enable iterative calculation" => "Bật tính toán lặp",
         "Calculation settings are saved with the workbook." => "Thiết lập tính toán được lưu cùng sổ làm việc.",
         "Text Box" => "Hộp văn bản",
+        "Macros" => "Macro",
+        "Record Macro" => "Ghi Macro",
+        "Stop Recording" => "Dừng Ghi",
+        "Use Relative References" => "Dùng Tham chiếu Tương đối",
+        "Run\nMacro" => "Chạy Macro",
+        "Macros…" => "Macro…",
+        "Recording" => "Đang ghi",
+        "Stop" => "Dừng",
+        "New Macro" => "Macro Mới",
+        "Show" => "Hiện",
         _ => return None,
     })
 }

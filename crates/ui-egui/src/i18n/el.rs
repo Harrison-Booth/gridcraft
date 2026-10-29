@@ -511,6 +511,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Scatter or Bubble" => "Διασπορά ή φυσαλίδες",
         "Search and run any command" => "Αναζήτηση και εκτέλεση οποιασδήποτε εντολής",
         "Search commands" => "Αναζήτηση εντολών",
+        "Search commands (Alt+Q)" => "Αναζήτηση εντολών (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Αναζητήστε εντολή, π.χ. πάγωμα, γράφημα, έντονα…",
         "Select Data" => "Επιλογή δεδομένων",
         "Select and move ink and shapes" => "Επιλογή και μετακίνηση μελανιού και σχημάτων",
         "Series…" => "Σειρά…",
@@ -983,6 +985,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "A CSV file, web page or PDF is a copy: the workbook keeps its own file." => {
             "Ένα αρχείο CSV, μια ιστοσελίδα ή ένα PDF είναι αντίγραφο: το βιβλίο εργασίας διατηρεί το δικό του αρχείο."
         }
+        "Record Macro" => "Καταγραφή μακροεντολής",
+        "Stop Recording" => "Διακοπή καταγραφής",
+        "Use Relative References" => "Χρήση σχετικών αναφορών",
+        "Run\nMacro" => "Εκτέλεση μακροεντολής",
+        "Macros…" => "Μακροεντολές…",
+        "Recording" => "Καταγραφή",
+        "New Macro" => "Νέα μακροεντολή",
+        "Show" => "Εμφάνιση",
         _ => return None,
     })
 }

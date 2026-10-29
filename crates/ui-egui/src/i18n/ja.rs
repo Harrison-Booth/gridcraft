@@ -423,10 +423,20 @@ pub(super) const CORE: &[(&str, &str)] = &[
     ("Maximum Iterations must be a whole number from 1 to 32767.", "最大反復回数には 1 から 32767 までの整数を指定してください。"),
     ("Maximum Change must be a number of 0 or more.", "変化の最大値には 0 以上の数値を指定してください。"),
     ("Calculation settings are saved with the workbook.", "計算の設定はブックと共に保存されます。"),
+    ("Record Macro", "マクロの記録"),
+    ("Stop Recording", "記録終了"),
+    ("Use Relative References", "相対参照で記録"),
+    ("Run\nMacro", "マクロの実行"),
+    ("Macros…", "マクロ…"),
+    ("Recording", "記録中"),
+    ("New Macro", "新しいマクロ"),
+    ("Show", "表示"),
 ];
 
 /// English label → Japanese for the dialog, message, Backstage and menu strings beyond [`CORE`].
 pub(super) const DIALOGS: &[(&str, &str)] = &[
+    ("Search commands (Alt+Q)", "コマンドを検索 (Alt+Q)"),
+    ("Search for a command, e.g. freeze, chart, bold…", "コマンドを検索、例: 固定、グラフ、太字…"),
     ("OK", "OK"),
     ("Cancel", "キャンセル"),
     ("Don't Save", "保存しない"),
@@ -797,7 +807,6 @@ pub(super) const DIALOGS: &[(&str, &str)] = &[
     ("Horizontal (Category) Axis Labels:", "横軸 (項目) ラベル:"),
     ("There are no conditional formatting rules on this sheet.", "このシートには条件付き書式ルールがありません。"),
     ("applies to", "適用先"),
-    ("Type a command, e.g. freeze, chart, bold…", "コマンドを入力 (例: ウィンドウ枠の固定、グラフ、太字)…"),
     ("Set cell:", "目的セル:"),
     ("To value:", "目標値:"),
     ("By changing cell:", "変化させるセル:"),

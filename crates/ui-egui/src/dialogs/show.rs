@@ -7,12 +7,11 @@ use super::data::{advanced_filter_form, data_validation_form, sort};
 use super::find::{find, go_to};
 use super::format_cells::format_cells;
 use super::insert_function::insert_function;
-use super::macros::macros;
 use super::names::{name_manager, paste_name};
 use super::paste::{paste_special, paste_special_shortcuts};
 use super::spelling::spelling;
 use super::zoom::zoom;
-use super::*;
+use super::{Dialog, Field, Json, Key, Map, RefPick, SheetApp, json, vec2};
 
 /// Builds the command params from form values for dialogs that need translation.
 /// The parameters OK sends to the dialog's command: its field values, reshaped per dialog.
@@ -107,6 +106,21 @@ pub(crate) fn build_params(d: &Dialog) -> Json {
 pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else { return };
     let home = app.ui_window();
+    // The macro step editor is a large resizable window of its own.
+    if d.name == "macroEditor" {
+        let mut open = true;
+        crate::macro_editor::window(app, ctx, &mut d, &mut open);
+        if !open {
+            app.macros.editor = None;
+            app.grid.macro_overlay = None;
+        } else if app.ui_window() != home {
+            // Something run from the editor switched windows: the editor stays in its own.
+            app.return_dialog(home, d);
+        } else {
+            app.dialog = Some(d);
+        }
+        return;
+    }
     if d.name == "pasteSpecial" {
         paste_special_shortcuts(&mut d, ctx);
     }
@@ -116,7 +130,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
     let width = match d.name.as_str() {
         "formatCells" => 560.0,
         "about" => 660.0,
-        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" | "macros" => 520.0,
+        "insertFunction" | "commandSearch" | "nameManager" | "manageRules" | "journal" | "agents" => 520.0,
+        "macros" => 480.0,
         "recommendedCharts" => 600.0,
         "analysisToolPak" => 420.0,
         "solver" => 460.0,
@@ -138,7 +153,7 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
         "advancedFilter" => window.default_height(0.0),
         _ => window,
     };
-    window.show(ctx, |ui| {
+    let shown = window.show(ctx, |ui| {
             ui.set_min_width(width - 20.0);
             match d.name.as_str() {
                 "formatCells" => format_cells(app, ui, &mut d, &mut confirm),
@@ -176,7 +191,8 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                         }
                     });
                 }
-                "macros" => macros(app, ui, &mut d),
+                "macros" => crate::macro_ui::macros_dialog(app, ui, &mut d, &mut open),
+                "recordMacro" => crate::macro_ui::record_dialog(app, ui, &mut d, &mut open),
                 "statistics" | "accessibility" | "errorChecking" | "evaluateFormula" | "comments" => {
                     let r = if d.name == "comments" {
                         app.session.active().and_then(|doc| doc.wb.active().map(|s| json!(s.comments.iter().map(|(c, m)| json!({"cell": c.a1(), "author": m.author, "text": m.text})).collect::<Vec<_>>())))
@@ -333,6 +349,11 @@ pub fn show(app: &mut SheetApp, ctx: &egui::Context) {
                 _ => form(ui, &mut d, &mut confirm, &mut open),
             }
         });
+    // The search box closes on a click outside it, as Excel's does.
+    if d.name == "commandSearch" && d.shown && shown.is_some_and(|r| r.response.clicked_elsewhere()) {
+        open = false;
+    }
+    d.shown = true;
     // Hyperlinks inside dialogs (About ▸ Contributors) open through the host's `open_url`, since
     // the native shell has no browser integration of its own.
     if let Some(open_url) = &app.services.open_url {

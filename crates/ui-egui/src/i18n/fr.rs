@@ -432,6 +432,8 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         }
         "Maximum Change must be a number of 0 or more." => "L'écart maximal doit être un nombre supérieur ou égal à 0.",
         "Calculation settings are saved with the workbook." => "Les paramètres de calcul sont enregistrés avec le classeur.",
+        "Search commands (Alt+Q)" => "Rechercher des commandes (Alt+Q)",
+        "Search for a command, e.g. freeze, chart, bold…" => "Rechercher une commande, p. ex. figer, graphique, gras…",
         "Insert Sheet" => "Insérer une feuille",
         "Rename" => "Renommer",
         "Move or Copy…" => "Déplacer ou copier…",
@@ -450,6 +452,16 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "All sheets" => "Toutes les feuilles",
         "New sheet (⇧F11)" => "Nouvelle feuille (⇧F11)",
         "Text Box" => "Zone de texte",
+        "Macros" => "Macros",
+        "Record Macro" => "Enregistrer une macro",
+        "Stop Recording" => "Arrêter l’enregistrement",
+        "Use Relative References" => "Utiliser les références relatives",
+        "Run\nMacro" => "Exécuter la macro",
+        "Macros…" => "Macros…",
+        "Recording" => "Enregistrement",
+        "Stop" => "Arrêter",
+        "New Macro" => "Nouvelle macro",
+        "Show" => "Afficher",
         _ => return None,
     })
 }

@@ -342,8 +342,8 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("WJ", Entry::Finish(Action::Control("view.zoom"))),            // Excel: Zoom To 100%; runs the 100% zoom handler (percent param)
     ("WL", Entry::Finish(Action::Command("view.normal"))),          // Excel: Normal View; containment(Normal)
     ("WM", Entry::Continue),                                        // Excel: Macros Menu; group level: containment(Macros)
-    ("WMR", Entry::Finish(Action::Command("view.macros"))),         // Excel: Record Macro; Record Macro (macros menu)
-    ("WMV", Entry::Finish(Action::Command("view.macros"))),         // Excel: View Macros; containment(Macros)
+    ("WMR", Entry::Finish(Action::Dialog("recordMacro"))),          // Excel: Record Macro; Record Macro dialog (stops recording while recording)
+    ("WMV", Entry::Finish(Action::Dialog("macros"))),               // Excel: View Macros; containment(Macros): the Macros dialog
     ("WN", Entry::Finish(Action::Command("view.newWindow"))),       // Excel: New Window
     ("WP", Entry::Finish(Action::Command("view.pageLayout"))),      // Excel: Page Layout View
     ("WQ", Entry::Finish(Action::Dialog("zoom"))),                  // Excel: Zoom; opens the Zoom dialog
@@ -370,5 +370,5 @@ pub const SEQUENCES: &[(&str, Entry)] = &[
     ("FN", Entry::Finish(Action::Command("file.new"))),    // Excel: New page; New page
     ("FO", Entry::Finish(Action::Command("file.open"))),   // Excel: Open page; fires immediately in Excel; deeper aliases dropped as unreachable
     ("FP", Entry::Finish(Action::Command("file.print"))),  // Excel: Print page; containment(Print)
-    ("Q", Entry::Finish(Action::Pending("ui.search"))),    // pending; Excel: Search / Tell Me; Alt+Q search box does not exist yet (issue #49)
+    ("Q", Entry::Finish(Action::Dialog("commandSearch"))), // Excel: Search / Tell Me; the search box; Alt+Q held as a chord opens it too (keymap)
 ];
