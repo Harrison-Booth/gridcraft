@@ -513,6 +513,7 @@ fn validation_checks_formula_results_and_keeps_list_value_types() {
     let mut s = Session::new();
     s.new_workbook();
     s.execute("range.setValues", json!({"range": "B1", "values": [[12], [11], ["11"]]})).unwrap();
+    s.execute("cell.set", json!({"cell": "B3", "input": "'11"})).unwrap();
     s.execute("range.setValues", json!({"range": "B4", "values": [[0.3]]})).unwrap();
     s.execute("home.formatCells", json!({"range": "A2", "style": {"num_fmt": "@"}})).unwrap();
     s.execute("data.validation", json!({"range": "A1:A2", "type": "whole", "operator": "greaterThan", "formula1": "10"})).unwrap();
