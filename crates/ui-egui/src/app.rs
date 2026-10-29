@@ -301,8 +301,8 @@ impl SheetApp {
 mod autosave_gate_tests {
     use super::*;
 
-    fn cell(row: u32, col: u32) -> RangeRef {
-        RangeRef::cell(CellRef::new(row, col))
+    fn cell(row: u32, col: u32) -> CellRef {
+        CellRef::new(row, col)
     }
 
     /// Runs one whole frame: the logic step (where AutoSave runs), then the window.
