@@ -197,7 +197,13 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         ValidationKind::List => {
             let value = v.scalar();
             if is_literal_list(dv.f1.trim()) {
-                list_items(wb, sheet, dv).iter().any(|x| matches!(&value, Value::Text(t) if t.eq_ignore_ascii_case(x)))
+                let items = list_items(wb, sheet, dv);
+                if input.starts_with('=') {
+                    let candidate = value.display();
+                    !value.is_error() && items.iter().any(|x| x.eq_ignore_ascii_case(&candidate))
+                } else {
+                    items.iter().any(|x| x.eq_ignore_ascii_case(input))
+                }
             } else {
                 match eval(&dv.f1) {
                     Value::Array(a) => a.data.iter().any(|item| list_value_matches(item, &value)),
