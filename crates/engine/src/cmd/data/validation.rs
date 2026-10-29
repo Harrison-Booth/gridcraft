@@ -171,7 +171,11 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     if input.is_empty() && dv.allow_blank {
         return None;
     }
-    let v = gridcraft_core::parse::parse_input(input, wb.date_system).value;
+    let v = if input.starts_with('=') {
+        gridcraft_calc::evaluate(wb, sheet, at, input).scalar()
+    } else {
+        gridcraft_core::parse::parse_input(input, wb.date_system).value
+    };
     // The formulas are written for the first cell of the range and see the value being entered,
     // as in Excel (a custom `=A1>10` on A1:A9 checks A5's new value at A5).
     let first = dv.ranges.first().map(|r| r.start).unwrap_or(at);
@@ -190,11 +194,25 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
     let eval = |f: &str| gridcraft_calc::evaluate(wb, sheet, at, &formula_at(f, first, at));
     let num = |f: &str| eval(f).to_number().ok();
     let ok = match dv.kind {
-        ValidationKind::List => list_items(wb, sheet, dv).iter().any(|x| x.eq_ignore_ascii_case(input)),
+        ValidationKind::List => {
+            let value = v.scalar();
+            if is_literal_list(dv.f1.trim()) {
+                list_items(wb, sheet, dv).iter().any(|x| matches!(&value, Value::Text(t) if t.eq_ignore_ascii_case(x)))
+            } else {
+                match eval(&dv.f1) {
+                    Value::Array(a) => a.data.iter().any(|item| list_value_matches(item, &value)),
+                    item => list_value_matches(&item, &value),
+                }
+            }
+        }
         ValidationKind::Custom => eval(&dv.f1).to_bool().unwrap_or(false),
         ValidationKind::TextLength => {
-            let n = input.chars().count() as f64;
-            compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(num))
+            if v.is_error() {
+                false
+            } else {
+                let n = (if input.starts_with('=') { v.display().chars().count() } else { input.chars().count() }) as f64;
+                compare_op(dv.op, n, num(&dv.f1), dv.f2.as_deref().and_then(num))
+            }
         }
         _ => match v.as_f64() {
             Some(n) => {
@@ -216,6 +234,15 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         dv.error_message.clone()
     };
     Some((dv.clone(), msg))
+}
+
+fn list_value_matches(item: &Value, value: &Value) -> bool {
+    match (item, value) {
+        (Value::Number(a), Value::Number(b)) => a == b,
+        (Value::Text(a), Value::Text(b)) => a.eq_ignore_ascii_case(b),
+        (Value::Bool(a), Value::Bool(b)) => a == b,
+        _ => false,
+    }
 }
 
 /// A formula written for `first`, as seen from `at` (relative references shifted).

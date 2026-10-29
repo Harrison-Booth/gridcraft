@@ -507,3 +507,36 @@ fn a_rule_with_an_unknown_type_operator_or_error_style_is_refused() {
     assert_eq!(sh.validations.len(), 3);
     assert!(check_validation(&s.doc().unwrap().wb, 0, CellRef::parse("A2").unwrap(), "0").is_some());
 }
+
+#[test]
+fn validation_checks_formula_results_and_keeps_list_value_types() {
+    let mut s = Session::new();
+    s.new_workbook();
+    s.execute("range.setValues", json!({"range": "B1", "values": [[12], [11], ["11"]]})).unwrap();
+    s.execute("data.validation", json!({"range": "A1", "type": "whole", "operator": "greaterThan", "formula1": "10"})).unwrap();
+    s.execute("data.validation", json!({"range": "C1", "type": "custom", "formula1": "=C1>10"})).unwrap();
+    s.execute("data.validation", json!({"range": "F1", "type": "textLength", "operator": "equal", "formula1": "2"})).unwrap();
+    s.execute("data.validation", json!({"range": "D1", "type": "list", "formula1": "=B2"})).unwrap();
+    s.execute("data.validation", json!({"range": "E1", "type": "list", "formula1": "=B3"})).unwrap();
+    let wb = s.doc().unwrap().wb.clone();
+    let check = |cell: &str, input: &str| check_validation(&wb, 0, CellRef::parse(cell).unwrap(), input).is_none();
+
+    assert!(check("A1", "11"));
+    assert!(check("A1", "=11"));
+    assert!(check("A1", "=B1"));
+    assert!(!check("A1", "=10"));
+    assert!(!check("A1", "=1/0"));
+    assert!(check("C1", "=11"));
+    assert!(!check("C1", "=1/0"));
+    assert!(check("F1", "=11"));
+    assert!(!check("F1", "=111"));
+    assert!(!check("F1", "=1/0"));
+    assert!(check("D1", "=11"));
+    assert!(!check("D1", "=\"11\""));
+    assert!(check("E1", "=\"11\""));
+    assert!(!check("E1", "=11"));
+
+    let before = s.doc().unwrap().wb.clone();
+    assert_eq!(s.execute("data.validate", json!({"cell": "A1", "input": "=11"})).unwrap()["ok"], json!(true));
+    assert_eq!(s.doc().unwrap().wb, before, "checking prospective input does not edit the workbook");
+}
