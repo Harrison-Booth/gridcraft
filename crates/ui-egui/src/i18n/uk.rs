@@ -270,6 +270,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Ввід",
         "Edit" => "Редагування",
         "Point" => "Вказання",
+        "End Mode" => "Режим End",
         "Calculate" => "Обчислення",
         "Select destination and press Enter or choose Paste" => "Виберіть місце вставлення та натисніть Enter або виберіть «Вставити»",
         "General" => "Загальний",
@@ -981,6 +982,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Report Layout" => "Report Layout",
         "Compact" => "Compact",
         "Tabular" => "Tabular",
+        "Record Macro" => "Записати макрос",
+        "Stop Recording" => "Зупинити запис",
+        "Use Relative References" => "Використовувати відносні посилання",
+        "Run\nMacro" => "Запустити макрос",
+        "Macros…" => "Макроси…",
+        "Recording" => "Запис",
+        "New Macro" => "Новий макрос",
+        "Show" => "Показати",
         _ => return None,
     })
 }

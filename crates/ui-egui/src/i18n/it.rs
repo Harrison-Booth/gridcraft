@@ -272,6 +272,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Immetti",
         "Edit" => "Modifica",
         "Point" => "Punta",
+        "End Mode" => "Modalità Fine",
         "Calculate" => "Calcola",
         "Select destination and press Enter or choose Paste" => "Seleziona la destinazione e premi Invio o scegli Incolla",
         "General" => "Generale",
@@ -986,6 +987,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Report Layout" => "Layout rapporto",
         "Compact" => "Compatto",
         "Tabular" => "Tabulare",
+        "Record Macro" => "Registra macro",
+        "Stop Recording" => "Interrompi registrazione",
+        "Use Relative References" => "Usa riferimenti relativi",
+        "Run\nMacro" => "Esegui macro",
+        "Macros…" => "Macro…",
+        "Recording" => "Registrazione",
+        "New Macro" => "Nuova macro",
+        "Show" => "Mostra",
         _ => return None,
     })
 }

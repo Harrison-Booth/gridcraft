@@ -281,6 +281,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Invoeren",
         "Edit" => "Bewerken",
         "Point" => "Aanwijzen",
+        "End Mode" => "Eindmodus",
         "Calculate" => "Berekenen",
         "Select destination and press Enter or choose Paste" => "Selecteer de bestemming en druk op Enter of kies Plakken",
         "General" => "Algemeen",
@@ -527,6 +528,15 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Zoom In" => "Inzoomen",
         "Zoom Out" => "Uitzoomen",
         "Dismiss" => "Negeren",
+        "Record Macro" => "Macro opnemen",
+        "Stop Recording" => "Opname stoppen",
+        "Use Relative References" => "Relatieve verwijzingen gebruiken",
+        "Run\nMacro" => "Macro uitvoeren",
+        "Macros…" => "Macro's…",
+        "Recording" => "Opnemen",
+        "Stop" => "Stoppen",
+        "New Macro" => "Nieuwe macro",
+        "Show" => "Weergeven",
         _ => return None,
     })
 }

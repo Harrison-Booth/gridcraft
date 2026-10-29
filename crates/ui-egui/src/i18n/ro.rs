@@ -275,6 +275,7 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Enter" => "Enter",
         "Edit" => "Editare",
         "Point" => "Punct",
+        "End Mode" => "Modul End",
         "Calculate" => "Calcul",
         "Select destination and press Enter or choose Paste" => "Selectați destinația și apăsați Enter sau alegeți Lipire",
         "General" => "General",
@@ -1039,6 +1040,14 @@ pub(super) fn translate(text: &str) -> Option<&'static str> {
         "Format Chart Area…" => "Formatare zonă diagramă…",
         "Error checking options" => "Opțiuni de verificare a erorilor",
         "Paste formulas that refer to the copied cells" => "Lipire formule care fac referire la celulele copiate",
+        "Record Macro" => "Înregistrare macrocomandă",
+        "Stop Recording" => "Oprire înregistrare",
+        "Use Relative References" => "Utilizare referințe relative",
+        "Run\nMacro" => "Rulare macrocomandă",
+        "Macros…" => "Macrocomenzi…",
+        "Recording" => "Înregistrare",
+        "New Macro" => "Macrocomandă nouă",
+        "Show" => "Afișare",
         _ => return None,
     })
 }
