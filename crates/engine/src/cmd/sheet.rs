@@ -191,6 +191,8 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
     sh.cell_pictures =
         std::mem::take(&mut sh.cell_pictures).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
+    sh.linked_records =
+        std::mem::take(&mut sh.linked_records).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     // Floating objects follow their anchor lines per their [`AnchorMode`]. Corners were snapshotted
@@ -232,7 +234,9 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
 }
 
 /// Rewrites every formula reference (and chart series) for a structural edit on `target`.
-pub(super) fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
+pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) {
+    cx.edits.push((target.to_string(), e.clone()));
+    let wb = &mut cx.wb;
     super::edit::rewrite_all_formulas(wb, target, e);
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
@@ -296,7 +300,7 @@ fn check_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
         let last = if axis == Axis::Rows { u.end.row } else { u.end.col };
         if last >= at && last as u64 + count as u64 >= limit as u64 {
-            return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
+            return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
     Ok(())
@@ -325,7 +329,7 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
             // New lines take the format of the line before (Excel's "Format Same As Above").
             inherit_line_format(sh, axis, at, count);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Insert { axis, at, count });
+        rewrite(cx, &name, &Edit::Insert { axis, at, count });
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -390,7 +394,7 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
                 }
                 shift_sheet_features(sh, axis, at, count, false);
             }
-            rewrite(&mut cx.wb, &name, &Edit::Delete { axis, at, count });
+            rewrite(cx, &name, &Edit::Delete { axis, at, count });
         }
         cx.structural = true;
         Ok(Json::Null)
@@ -442,13 +446,15 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             sh.cells.shift_cols(before, count as i64);
             shift_sheet_features(sh, Axis::Cols, before, count, true);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Insert { axis: Axis::Cols, at: before, count });
+        rewrite(cx, &name, &Edit::Insert { axis: Axis::Cols, at: before, count });
 
         let mut touched = Vec::new();
         {
             let sh = cx.sheet_mut(sheet)?;
             let pictures: Vec<_> =
                 sh.cell_pictures.iter().filter(|(cell, _)| source.contains(**cell)).map(|(cell, picture)| (*cell, picture.clone())).collect();
+            let records: Vec<_> =
+                sh.linked_records.iter().filter(|(cell, _)| source.contains(**cell)).map(|(cell, record)| (*cell, record.clone())).collect();
             let cells = sh.take_cells(source);
             let moved_lines: Vec<_> = (0..count).filter_map(|offset| sh.cols.remove(&(moved_from + offset)).map(|info| (offset, info))).collect();
             let movement = Edit::Move { from: source, to_row: 0, to_col: destination };
@@ -473,6 +479,10 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
                 let dest = CellRef::new(cell.row, destination + (cell.col - moved_from));
                 sh.cell_pictures.insert(dest, picture);
             }
+            for (cell, record) in records {
+                let dest = CellRef::new(cell.row, destination + (cell.col - moved_from));
+                sh.linked_records.insert(dest, record);
+            }
             for (offset, info) in moved_lines {
                 sh.cols.insert(destination + offset, info);
             }
@@ -480,14 +490,14 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
         for cell in touched {
             cx.touch(sheet, cell);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Move { from: source, to_row: 0, to_col: destination });
+        rewrite(cx, &name, &Edit::Move { from: source, to_row: 0, to_col: destination });
 
         {
             let sh = cx.sheet_mut(sheet)?;
             sh.cells.shift_cols(delete_at + count, -(count as i64));
             shift_sheet_features(sh, Axis::Cols, delete_at, count, false);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Delete { axis: Axis::Cols, at: delete_at, count });
+        rewrite(cx, &name, &Edit::Delete { axis: Axis::Cols, at: delete_at, count });
         *cx.sel = crate::Selection {
             active: CellRef::new(active_row, final_start),
             anchor: CellRef::new(active_row, final_start),
@@ -519,7 +529,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
             RangeRef::new(CellRef::new(r.start.row.max(MAX_ROWS.saturating_sub(r.height())), r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col))
         };
         if sh.cells.iter_range(doomed).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
-            return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
+            return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
     let right = shift == "right";
@@ -532,7 +542,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         }
         shift_cell_features(sh, &e);
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
-        rewrite(&mut cx.wb, &name, &e);
+        rewrite(cx, &name, &e);
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -567,7 +577,7 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
             shift_cell_features(sh, &e);
         }
         // References into the deleted cells become #REF!; the rest move.
-        rewrite(&mut cx.wb, &name, &e);
+        rewrite(cx, &name, &e);
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -782,6 +792,8 @@ pub(super) fn shift_cell_features(sh: &mut Sheet, e: &Edit) {
     }
     sh.cell_pictures =
         std::mem::take(&mut sh.cell_pictures).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
+    sh.linked_records =
+        std::mem::take(&mut sh.linked_records).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     for sp in sh.sparklines.iter_mut() {

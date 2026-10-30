@@ -615,6 +615,25 @@ fn lambda_calls_spend_one_work_budget_per_cell() {
 }
 
 #[test]
+fn lifted_lookups_stop_past_their_work_budget() {
+    // Security: each needle searched the whole lookup vector, so this one cell ran for hours
+    // (about 1.1e12 compares) and hung opening the file that held it. It is #NUM! at once now.
+    let mut t = T::new();
+    t.set("A1", "=ROWS(XMATCH(SEQUENCE(1048576),-SEQUENCE(1048576)))");
+    assert_eq!(t.get("A1"), Value::Error(CellError::Num));
+    // Ordinary lifted lookups are unaffected.
+    for (i, k) in [10, 20, 30, 40, 50].into_iter().enumerate() {
+        t.set(&format!("B{}", i + 1), &k.to_string());
+        t.set(&format!("C{}", i + 1), &(i + 1).to_string());
+    }
+    t.set("D1", "=SUM(XMATCH({30;50;10},B1:B5))");
+    t.set("D2", "=SUM(XLOOKUP({20;40},B1:B5,C1:C5))");
+    t.set("D3", "=SUM(VLOOKUP({30,10},B1:C5,2,FALSE))");
+    t.set("D4", "=SUM(MATCH({25,50},B1:B5))");
+    assert_eq!([t.num("D1"), t.num("D2"), t.num("D3"), t.num("D4")], [9.0, 6.0, 4.0, 7.0]);
+}
+
+#[test]
 fn accounting_negative_text_coerces() {
     let mut t = T::new();
     t.set("A1", "'$(1,234)");
@@ -2273,4 +2292,36 @@ fn loan_schedule_residue_keeps_excels_sign() {
         other => panic!("O7: expected a number, got {other:?}"),
     }
     assert_eq!(t.get("P7"), Value::Text("".into()));
+}
+
+#[test]
+fn fieldvalue_reads_a_linked_record_and_the_dot_syntax_means_the_same() {
+    use gridcraft_model::{LinkedField, LinkedRecord};
+    let field = |name: &str, kind: &str, value: &str| LinkedField { name: name.into(), kind: kind.into(), value: value.into() };
+    let mut t = T::new();
+    t.set("A1", "EUR/USD");
+    let record = LinkedRecord {
+        display: "EUR/USD".into(),
+        fields: vec![field("Price", "d", "1.0842"), field("Name", "s", "Euro / US dollar"), field("Open", "b", "1"), field("Icon", "r", "0")],
+    };
+    t.wb.sheet_mut(0).unwrap().linked_records.insert(c("A1"), std::sync::Arc::new(record));
+    t.set("B1", "=A1.Price");
+    t.set("B2", "=FIELDVALUE(A1,\"price\")*2");
+    t.set("B3", "=FIELDVALUE(A1,\"Name\")");
+    t.set("B4", "=A1.Open");
+    assert_eq!((t.num("B1"), t.num("B2")), (1.0842, 2.1684));
+    assert_eq!(t.get("B3"), Value::text("Euro / US dollar"));
+    assert_eq!(t.get("B4"), Value::Bool(true));
+    // An unknown field, a field that is not a scalar and a cell without a record are errors.
+    for (at, input) in [("C1", "=A1.Volume"), ("C2", "=A1.Icon"), ("C3", "=A2.Price"), ("C4", "=FIELDVALUE(1,\"Price\")")] {
+        t.set(at, input);
+        assert!(matches!(t.get(at), Value::Error(_)), "{input}");
+    }
+    // An error in the first argument (a deleted record cell) comes through as itself.
+    t.set("C5", "=FIELDVALUE(#REF!,\"Price\")");
+    assert_eq!(t.get("C5"), Value::Error(CellError::Ref));
+    // Overwriting the cell drops the record.
+    t.wb.sheet_mut(0).unwrap().set_value(c("A1"), Value::text("x"));
+    t.calc.cells_changed(&mut t.wb, &[(0, c("A1"))]);
+    assert!(matches!(t.get("B1"), Value::Error(_)));
 }

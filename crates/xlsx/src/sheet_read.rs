@@ -97,6 +97,24 @@ const MAX_DYNAMIC_CHECKS: u64 = 16_000_000;
 /// rule copies its element's whole range list, so rules × ranges must stay bounded.
 const MAX_COND_CELLS: u64 = 4_000_000;
 
+fn read_sheet_format(e: &El, sheet: &mut Sheet) {
+    if let Some(h) = e.attr_f64("defaultRowHeight") {
+        let px = pt_to_px(h);
+        if px > 0.0 {
+            sheet.default_row_height = px;
+        }
+    }
+    if let Some(w) = e.attr_f64("defaultColWidth") {
+        let px = col_width_to_px(w);
+        if px > 0.0 {
+            sheet.default_col_width = px;
+        }
+    } else if let Some(b) = e.attr_f64("baseColWidth") {
+        let px = ((b.clamp(0.0, 255.0) * 7.0 + 5.0) / 8.0).ceil() * 8.0;
+        sheet.default_col_width = px as f32;
+    }
+}
+
 pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoError> {
     let bytes = cx.pkg.read(part)?.ok_or_else(|| IoError::Format(format!("missing part {part}")))?;
     let rels = cx.pkg.rels(part)?;
@@ -134,23 +152,7 @@ pub fn read_sheet(cx: &mut Ctx<'_>, part: &str, name: &str) -> Result<Sheet, IoE
                 fit_to_page = e.child("pageSetUpPr").is_some_and(|p| p.flag("fitToPage", false));
             }
             "sheetViews" => read_views(e, &mut sheet),
-            "sheetFormatPr" => {
-                if let Some(h) = e.attr_f64("defaultRowHeight") {
-                    let px = pt_to_px(h);
-                    if px > 0.0 {
-                        sheet.default_row_height = px;
-                    }
-                }
-                if let Some(w) = e.attr_f64("defaultColWidth") {
-                    let px = col_width_to_px(w);
-                    if px > 0.0 {
-                        sheet.default_col_width = px;
-                    }
-                } else if let Some(b) = e.attr_f64("baseColWidth") {
-                    let px = ((b.clamp(0.0, 255.0) * 7.0 + 5.0) / 8.0).ceil() * 8.0;
-                    sheet.default_col_width = px as f32;
-                }
-            }
+            "sheetFormatPr" => read_sheet_format(e, &mut sheet),
             "cols" => read_cols(cx, e, &mut sheet, &mut column_assignments_left)?,
             "mergeCells" => {
                 for m in e.kids("mergeCell") {
@@ -502,11 +504,13 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
             None => Value::Empty,
         },
     };
-    let picture = c.attr("vm").and_then(|vm| {
+    let block = c.attr("vm").and_then(|vm| vm.parse::<usize>().ok()).and_then(|n| n.checked_sub(1));
+    let record = block.and_then(|n| cx.linked_records.get(n)).cloned().flatten();
+    let picture = c.attr("vm").filter(|_| record.is_none()).and_then(|vm| {
         if vm == "0" {
             return None;
         }
-        let picture = vm.parse::<usize>().ok().and_then(|n| n.checked_sub(1)).and_then(|n| cx.cell_pictures.get(n)).cloned().flatten();
+        let picture = block.and_then(|n| cx.cell_pictures.get(n)).cloned().flatten();
         if picture.is_none() {
             cx.warn("some cells have unsupported or missing value metadata; kept their scalar fallback (cell pictures may be missing)");
         }
@@ -523,7 +527,16 @@ fn read_cell(cx: &mut Ctx<'_>, sheet: &mut Sheet, st: &mut RowState, c: &El, pos
     let dynamic = c.attr("cm").is_some();
     let formula = c.child("f").and_then(|f| read_formula(cx, st, f, pos, dynamic));
     let value = if formula.is_none() && in_dynamic(st, pos) { Value::Empty } else { value };
+    // A linked record's cell holds an error for other apps; GridCraft shows its display text.
+    let value = match &record {
+        Some(record) if formula.is_none() && !record.display.is_empty() => Value::text(record.display.as_str()),
+        _ => value,
+    };
+    let has_formula = formula.is_some();
     sheet.cells.set(pos, Cell { value, formula: formula.map(Arc::new), style });
+    if let Some(record) = record.filter(|_| !has_formula) {
+        sheet.linked_records.insert(pos, record);
+    }
 }
 
 fn read_formula(cx: &mut Ctx<'_>, st: &mut RowState, f: &El, pos: CellRef, dynamic: bool) -> Option<Formula> {

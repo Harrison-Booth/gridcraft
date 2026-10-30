@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Cell, CellRef, CfOperator, EngineError, ErrorStyle, Json, RangeRef, Result, Session, Validation, ValidationKind, Value, Workbook, bad,
+    bool_param, cell_param, edit, json, ok, str_param, target_ranges, target_sheet,
+};
 
 // ---------------------------------------------------------------- validation
 
@@ -182,7 +185,7 @@ pub fn check_validation(wb: &Workbook, sheet: usize, at: CellRef, input: &str) -
         let mut w = wb.clone();
         if let Some(sh) = w.sheet_mut(sheet) {
             let style = sh.style_id(at);
-            sh.cells.set(at, Cell { value: v.clone(), style, ..Default::default() });
+            sh.set_cell(at, Cell { value: v.clone(), style, ..Default::default() });
         }
         entered = w;
         &entered
