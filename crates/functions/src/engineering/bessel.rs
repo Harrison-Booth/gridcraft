@@ -138,6 +138,9 @@ fn bessel_i(n: u32, x: f64) -> Option<f64> {
         return Some(if n == 0 { 1.0 } else { 0.0 });
     }
     let ax = x.abs();
+    if n >= 2 && ax <= 10_000.0 {
+        return bessel_i_miller(n, ax, x < 0.0 && n % 2 == 1);
+    }
     let nf = n as f64;
     let ln_t0 = nf * (ax / 2.0).ln() - crate::special::ln_gamma(nf + 1.0);
     let q = ax * ax / 4.0;
@@ -158,6 +161,34 @@ fn bessel_i(n: u32, x: f64) -> Option<f64> {
     let r = (ln_t0 + sum.ln()).exp();
     let r = if x < 0.0 && n % 2 == 1 { -r } else { r };
     if r.is_finite() { Some(r) } else { None }
+}
+
+/// Downward recurrence for I_n, normalized by exp(x) = I_0 + 2Σ I_k.
+/// The recurrence is I_{k-1} = I_{k+1} + (2k/x)I_k; the extra orders
+/// suppress the arbitrary starting values before the requested order is reached.
+fn bessel_i_miller(n: u32, x: f64, negative: bool) -> Option<f64> {
+    let margin = 32.0 + (40.0 * x.max(1.0)).sqrt();
+    let top = (n as f64 + margin).max(x + margin).ceil() as usize;
+    let mut values = vec![0.0; top.checked_add(2)?];
+    *values.get_mut(top)? = 1.0;
+
+    for k in (1..=top).rev() {
+        let next = *values.get(k + 1)?;
+        let current = *values.get(k)?;
+        let mut previous = next + (2.0 * k as f64 / x) * current;
+        if previous.abs() > 1e200 {
+            for value in &mut values {
+                *value *= 1e-200;
+            }
+            previous *= 1e-200;
+        }
+        *values.get_mut(k - 1)? = previous;
+    }
+
+    let norm = values.first().copied()? + 2.0 * values.iter().skip(1).sum::<f64>();
+    let scaled = values.get(n as usize).copied()? / norm;
+    let result = (scaled.ln() + x).exp() * if negative { -1.0 } else { 1.0 };
+    if result.is_finite() { Some(result) } else { None }
 }
 
 /// K_n(x) for x > 0: K_0 and K_1 from ∫₀^∞ e^{−x cosh t} cosh(νt) dt (trapezoid rule), then
