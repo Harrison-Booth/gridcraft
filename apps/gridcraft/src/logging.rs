@@ -176,7 +176,7 @@ impl Sink {
             }
             return;
         }
-        self.append(line);
+        let _ = self.append(line);
     }
 
     /// Start writing to `file` (a fresh one: the size cap starts over), first the lines kept so far.
