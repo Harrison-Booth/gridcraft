@@ -48,12 +48,6 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
         return;
     }
     let sys = doc.wb.date_system;
-    let Some(first) = gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(state.year), i64::from(state.month), 1) else {
-        app.grid.date_picker = None;
-        return;
-    };
-    let weekday = gridcraft_engine::core::date::datetime_from_serial(sys, first).map_or(0, |d| i64::from(d.weekday));
-    let count = gridcraft_engine::core::date::days_in_month_in(sys, state.year, state.month);
     let rect = geo.cell_rect(sh, state.cell);
     let screen = ui.ctx().content_rect();
     let at = if rect.bottom() + 240.0 <= screen.bottom() { rect.left_bottom() } else { rect.left_top() };
@@ -61,6 +55,38 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
     let mut close = false;
     let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
     let mut button_handled_enter = false;
+    let moved = ui.input(|i| {
+        let delta = if i.key_pressed(egui::Key::ArrowLeft) {
+            -1
+        } else if i.key_pressed(egui::Key::ArrowRight) {
+            1
+        } else if i.key_pressed(egui::Key::ArrowUp) {
+            -7
+        } else if i.key_pressed(egui::Key::ArrowDown) {
+            7
+        } else {
+            0
+        };
+        if delta != 0 {
+            let n = gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(state.year), i64::from(state.month), i64::from(state.day))
+                .unwrap_or(0.0)
+                + f64::from(delta);
+            if let Some(d) = gridcraft_engine::core::date::datetime_from_serial(sys, n) {
+                state.year = d.year;
+                state.month = d.month;
+                state.day = d.day.max(1);
+            }
+            true
+        } else {
+            false
+        }
+    });
+    let Some(first) = gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(state.year), i64::from(state.month), 1) else {
+        app.grid.date_picker = None;
+        return;
+    };
+    let weekday = gridcraft_engine::core::date::datetime_from_serial(sys, first).map_or(0, |d| i64::from(d.weekday));
+    let count = gridcraft_engine::core::date::days_in_month_in(sys, state.year, state.month);
     let response = egui::Area::new(egui::Id::unique("gridcraft.date_picker")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(224.0);
@@ -98,12 +124,14 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
                     let day = slot - weekday + 1;
                     if (1..=i64::from(count)).contains(&day) {
                         let day_response = ui.selectable_label(u32::try_from(day).ok() == Some(state.day), day.to_string());
-                        if state.needs_focus && u32::try_from(day).ok() == Some(state.day) {
+                        if (state.needs_focus || moved) && u32::try_from(day).ok() == Some(state.day) {
                             day_response.request_focus();
                         }
                         if day_response.clicked() {
-                            button_handled_enter |= enter_pressed;
-                            chosen = Some(first + (day - 1) as f64);
+                            if !enter_pressed || u32::try_from(day).ok() == Some(state.day) {
+                                button_handled_enter |= enter_pressed;
+                                chosen = Some(first + (day - 1) as f64);
+                            }
                         }
                     } else {
                         ui.add_enabled(false, egui::Button::new(" "));
@@ -125,33 +153,9 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
             });
         });
     });
-    let moved = ui.input(|i| {
+    ui.input(|i| {
         if i.key_pressed(egui::Key::Escape) {
             close = true;
-        }
-        let delta = if i.key_pressed(egui::Key::ArrowLeft) {
-            -1
-        } else if i.key_pressed(egui::Key::ArrowRight) {
-            1
-        } else if i.key_pressed(egui::Key::ArrowUp) {
-            -7
-        } else if i.key_pressed(egui::Key::ArrowDown) {
-            7
-        } else {
-            0
-        };
-        if delta != 0 {
-            let n = gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(state.year), i64::from(state.month), i64::from(state.day))
-                .unwrap_or(first)
-                + f64::from(delta);
-            if let Some(d) = gridcraft_engine::core::date::datetime_from_serial(sys, n) {
-                state.year = d.year;
-                state.month = d.month;
-                state.day = d.day.max(1);
-            }
-            true
-        } else {
-            false
         }
     });
     chosen = enter_selection(enter_pressed, button_handled_enter, chosen, sys, state.year, state.month, state.day);

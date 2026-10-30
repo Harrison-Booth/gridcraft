@@ -93,6 +93,39 @@ fn opening_the_picker_moves_keyboard_focus_into_it() {
 }
 
 #[test]
+fn arrow_navigation_moves_focus_with_the_selected_day() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut h = harness(session);
+    h.state_mut().run("ui.datePicker", json!({})).unwrap();
+    h.run_steps(1);
+    let initial_focus = h.ctx.memory(|m| m.focused());
+    let initial = h.state().grid.date_picker.as_ref().unwrap();
+    let expected =
+        gridcraft_engine::core::date::serial_from_ymd(DateSystem::D1900, i64::from(initial.year), i64::from(initial.month), i64::from(initial.day))
+            .unwrap()
+            + 1.0;
+    h.input_mut().events.push(Event::Key {
+        key: Key::ArrowRight,
+        physical_key: Some(Key::ArrowRight),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(1);
+    assert_ne!(h.ctx.memory(|m| m.focused()), initial_focus, "focus follows the newly selected day");
+    h.input_mut().events.push(Event::Key {
+        key: Key::Enter,
+        physical_key: Some(Key::Enter),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(1);
+    assert_eq!(h.state().session.active().and_then(|d| d.wb.active()).and_then(|s| s.value_ref(CellRef::new(0, 0))), Some(&Value::Number(expected)));
+}
+
+#[test]
 fn changing_sheets_cancels_the_picker_instead_of_writing_to_the_new_sheet() {
     let mut session = Session::new();
     session.new_workbook();
