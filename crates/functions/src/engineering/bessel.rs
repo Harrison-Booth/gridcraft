@@ -138,7 +138,7 @@ fn bessel_i(n: u32, x: f64) -> Option<f64> {
         return Some(if n == 0 { 1.0 } else { 0.0 });
     }
     let ax = x.abs();
-    if n >= 2 && ax <= 10_000.0 {
+    if n >= 2 && (1.0..=10_000.0).contains(&ax) {
         return bessel_i_miller(n, ax, x < 0.0 && n % 2 == 1);
     }
     let nf = n as f64;
@@ -169,25 +169,30 @@ fn bessel_i(n: u32, x: f64) -> Option<f64> {
 fn bessel_i_miller(n: u32, x: f64, negative: bool) -> Option<f64> {
     let margin = 32.0 + (40.0 * x.max(1.0)).sqrt();
     let top = (n as f64 + margin).max(x + margin).ceil() as usize;
-    let mut values = vec![0.0; top.checked_add(2)?];
-    *values.get_mut(top)? = 1.0;
+    let (mut next, mut current) = (0.0, 1.0);
+    let mut norm = 2.0;
+    let (mut target_log, mut target_scale) = (None, 0.0);
+    let mut log_scale = 0.0;
 
     for k in (1..=top).rev() {
-        let next = *values.get(k + 1)?;
-        let current = *values.get(k)?;
+        if k == n as usize {
+            target_log = Some(current.ln());
+            target_scale = log_scale;
+        }
         let mut previous = next + (2.0 * k as f64 / x) * current;
         if previous.abs() > 1e200 {
-            for value in &mut values {
-                *value *= 1e-200;
-            }
+            next *= 1e-200;
+            current *= 1e-200;
             previous *= 1e-200;
+            norm *= 1e-200;
+            log_scale += 200.0 * std::f64::consts::LN_10;
         }
-        *values.get_mut(k - 1)? = previous;
+        norm += if k == 1 { previous } else { 2.0 * previous };
+        (next, current) = (current, previous);
     }
 
-    let norm = values.first().copied()? + 2.0 * values.iter().skip(1).sum::<f64>();
-    let scaled = values.get(n as usize).copied()? / norm;
-    let result = (scaled.ln() + x).exp() * if negative { -1.0 } else { 1.0 };
+    let log_scaled = target_log? - (log_scale - target_scale) - norm.ln();
+    let result = (log_scaled + x).exp() * if negative { -1.0 } else { 1.0 };
     if result.is_finite() { Some(result) } else { None }
 }
 
