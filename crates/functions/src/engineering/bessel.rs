@@ -137,9 +137,7 @@ fn horner(c: &[f64], t: f64) -> f64 {
     c.iter().rev().fold(0.0, |r, a| r * t + a)
 }
 
-// I and K follow Excel, which uses the polynomial approximations of Abramowitz & Stegun
-// 9.8.1–9.8.8 (about 8 digits) rather than the true value; orders above 1 come from the
-// recurrences, so results match Excel to the last digits instead of to 1e-16 of the truth.
+// The I and K polynomials for orders 0 and 1 follow Abramowitz & Stegun 9.8.1–9.8.8.
 
 /// I_0(x) (A&S 9.8.1, 9.8.2).
 fn bessel_i0(x: f64) -> f64 {
@@ -168,32 +166,35 @@ fn bessel_i1(x: f64) -> f64 {
     if x < 0.0 { -r } else { r }
 }
 
-/// I_n(x) for n ≥ 2 by Miller's downward recurrence, normalised with I_0 (the scheme Excel uses).
+/// I_n(x), using A&S approximations for orders 0 and 1 and the existing series for higher orders.
 fn bessel_i(n: u32, x: f64) -> Option<f64> {
     let r = match n {
         0 => bessel_i0(x),
         1 => bessel_i1(x),
-        _ if x == 0.0 => 0.0,
         _ => {
-            const BIG: f64 = 1e10;
-            let tox = 2.0 / x.abs();
-            let m = 2 * (n as usize + (40.0 * n as f64).sqrt() as usize);
-            let (mut bip, mut bi, mut ans) = (0.0f64, 1.0f64, 0.0f64);
-            for j in (1..=m).rev() {
-                let bim = bip + j as f64 * tox * bi;
-                bip = bi;
-                bi = bim;
-                if bi.abs() > BIG {
-                    ans *= 1.0 / BIG;
-                    bi *= 1.0 / BIG;
-                    bip *= 1.0 / BIG;
+            if x == 0.0 {
+                return Some(0.0);
+            }
+            let nf = n as f64;
+            let ln_t0 = nf * (x.abs() / 2.0).ln() - crate::special::ln_gamma(nf + 1.0);
+            let ax = x.abs();
+            let q = ax * ax / 4.0;
+            let mut term = 1.0;
+            let mut sum = 1.0;
+            let mut k = 0.0;
+            while k < 1e6 {
+                k += 1.0;
+                term *= q / (k * (k + nf));
+                sum += term;
+                if term < 1e-17 * sum {
+                    break;
                 }
-                if j == n as usize {
-                    ans = bip;
+                if !sum.is_finite() {
+                    return None;
                 }
             }
-            let r = ans * (bessel_i0(x) / bi);
-            if x < 0.0 && n % 2 == 1 { -r } else { r }
+            let value = (ln_t0 + sum.ln()).exp();
+            if x < 0.0 && n % 2 == 1 { -value } else { value }
         }
     };
     if r.is_finite() { Some(r) } else { None }
