@@ -181,7 +181,6 @@ fn bessel_i_miller(n: u32, x: f64, negative: bool) -> Option<f64> {
         }
         let mut previous = next + (2.0 * k as f64 / x) * current;
         if previous.abs() > 1e200 {
-            next *= 1e-200;
             current *= 1e-200;
             previous *= 1e-200;
             norm *= 1e-200;
