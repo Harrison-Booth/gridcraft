@@ -252,6 +252,7 @@ pub struct DatePickerState {
     pub sheet: usize,
     pub sheet_name: String,
     pub sheet_file_id: u32,
+    pub needs_focus: bool,
     pub year: i32,
     pub month: u32,
     pub day: u32,

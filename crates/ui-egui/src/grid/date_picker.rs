@@ -22,6 +22,7 @@ pub(crate) fn open(app: &mut SheetApp) {
         sheet: d.wb.active_sheet(),
         sheet_name: sh.name.clone(),
         sheet_file_id: sh.file_id,
+        needs_focus: true,
         year: date.year,
         month: date.month.max(1),
         day: date.day.max(1),
@@ -97,7 +98,7 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
                     let day = slot - weekday + 1;
                     if (1..=i64::from(count)).contains(&day) {
                         let day_response = ui.selectable_label(u32::try_from(day).ok() == Some(state.day), day.to_string());
-                        if !was_open && u32::try_from(day).ok() == Some(state.day) {
+                        if state.needs_focus && u32::try_from(day).ok() == Some(state.day) {
                             day_response.request_focus();
                         }
                         if day_response.clicked() {
@@ -164,6 +165,7 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
     if close || super::editor::popup_dismissed(&response.response, was_open) {
         app.grid.date_picker = None;
     } else {
+        state.needs_focus = false;
         app.grid.date_picker = Some(state);
     }
 }
