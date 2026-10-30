@@ -20,6 +20,7 @@ mod native_menu;
 mod print;
 
 use std::cell::RefCell;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gridcraft_engine::Session;
@@ -77,17 +78,45 @@ impl eframe::App for App {
     }
 }
 
-fn config_dir() -> Option<std::path::PathBuf> {
+fn standard_config_dir() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
-        std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join("Library/Application Support/GridCraft"))
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/GridCraft"))
     } else if cfg!(windows) {
-        std::env::var_os("APPDATA").map(|a| std::path::PathBuf::from(a).join("GridCraft"))
+        std::env::var_os("APPDATA").map(|a| PathBuf::from(a).join("GridCraft"))
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
-            .map(std::path::PathBuf::from)
-            .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
             .map(|c| c.join("gridcraft"))
     }
+}
+
+fn portable_config_dir(executable: &Path) -> Option<PathBuf> {
+    executable.parent().filter(|dir| dir.join("portable.txt").is_file()).map(|dir| dir.join("GridCraftData"))
+}
+
+fn config_dir() -> Option<PathBuf> {
+    let portable = std::env::current_exe().ok().and_then(|exe| portable_config_dir(&exe));
+    if let Some(dir) = portable {
+        // A portable install is often placed under Program Files or another read-only folder.
+        // In that case, preserve settings in the normal per-user location and make the fallback visible.
+        if let Err(e) = prepare_portable_dir(&dir) {
+            log::warn!("cannot create portable settings directory {}: {e}; using the standard settings directory", dir.display());
+        } else {
+            return Some(dir);
+        }
+    }
+    standard_config_dir()
+}
+
+fn prepare_portable_dir(dir: &Path) -> std::io::Result<()> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_PROBE: AtomicU64 = AtomicU64::new(0);
+
+    std::fs::create_dir_all(dir)?;
+    let probe = dir.join(format!(".gridcraft-write-test-{}-{}", std::process::id(), NEXT_PROBE.fetch_add(1, Ordering::Relaxed)));
+    std::fs::OpenOptions::new().write(true).create_new(true).open(&probe)?;
+    std::fs::remove_file(probe)
 }
 
 /// Runs without preferences (`GRIDCRAFT_NO_PREFS`, agents' test runs) neither read nor write
@@ -443,5 +472,53 @@ mod packaging_tests {
         for ext in &mac {
             assert!(FileKind::from_path(&format!("book.{ext}")).is_some(), "GridCraft doesn't open .{ext}");
         }
+    }
+}
+
+#[cfg(test)]
+mod portable_preferences_tests {
+    use super::portable_config_dir;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn temp_dir() -> PathBuf {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        std::env::temp_dir().join(format!("gridcraft-portable-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)))
+    }
+
+    #[test]
+    fn marker_absent_keeps_portable_mode_disabled() -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_dir();
+        std::fs::create_dir_all(&root)?;
+        let result = portable_config_dir(&root.join("gridcraft.exe"));
+        std::fs::remove_dir_all(root)?;
+        assert_eq!(result, None);
+        Ok(())
+    }
+
+    #[test]
+    fn portable_directories_keep_preferences_and_logs_isolated() -> Result<(), Box<dyn std::error::Error>> {
+        let first = temp_dir();
+        let second = temp_dir();
+        for root in [&first, &second] {
+            std::fs::create_dir_all(root)?;
+            std::fs::write(root.join("portable.txt"), b"")?;
+        }
+        let first_data = portable_config_dir(&first.join("gridcraft.exe")).ok_or_else(|| std::io::Error::other("first marker not detected"))?;
+        let second_data = portable_config_dir(&second.join("gridcraft.exe")).ok_or_else(|| std::io::Error::other("second marker not detected"))?;
+        assert_ne!(first_data, second_data);
+        for (dir, value) in [(&first_data, b"first".as_slice()), (&second_data, b"second".as_slice())] {
+            std::fs::create_dir_all(dir)?;
+            std::fs::write(dir.join("prefs.json"), value)?;
+            std::fs::create_dir_all(dir.join("logs"))?;
+            std::fs::write(dir.join("logs/gridcraft.log"), value)?;
+        }
+        assert_eq!(std::fs::read(first_data.join("prefs.json"))?, b"first");
+        assert_eq!(std::fs::read(second_data.join("prefs.json"))?, b"second");
+        assert_eq!(std::fs::read(first_data.join("logs/gridcraft.log"))?, b"first");
+        assert_eq!(std::fs::read(second_data.join("logs/gridcraft.log"))?, b"second");
+        std::fs::remove_dir_all(first)?;
+        std::fs::remove_dir_all(second)?;
+        Ok(())
     }
 }
