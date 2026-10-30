@@ -1,0 +1,160 @@
+use super::*;
+use crate::grid::DatePickerState;
+
+const DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+pub(super) fn open(app: &mut SheetApp) {
+    let Some(d) = app.session.active() else { return };
+    let cell = d.selection.active;
+    let sys = d.wb.date_system;
+    let today = gridcraft_engine::core::date::serial_in_system(sys, gridcraft_engine::calc::now_serial()).floor();
+    let value = d.wb.active().and_then(|sh| sh.cell(cell)).and_then(|c| match &c.value {
+        Value::Number(n) => Some(n.floor()),
+        _ => None,
+    });
+    let date = value
+        .and_then(|n| gridcraft_engine::core::date::datetime_from_serial(sys, n))
+        .unwrap_or_else(|| gridcraft_engine::core::date::datetime_from_serial(sys, today).unwrap_or_default());
+    app.grid.date_picker = Some(DatePickerState { cell, year: date.year, month: date.month.max(1), day: date.day.max(1) });
+}
+
+pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
+    let Some(mut state) = app.grid.date_picker else { return };
+    let Some(doc) = app.session.active() else {
+        app.grid.date_picker = None;
+        return;
+    };
+    let Some(sh) = doc.wb.active() else {
+        app.grid.date_picker = None;
+        return;
+    };
+    let sys = doc.wb.date_system;
+    let Some(first) = gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(state.year), i64::from(state.month), 1) else {
+        app.grid.date_picker = None;
+        return;
+    };
+    let weekday = (gridcraft_engine::core::date::days_from_civil(state.year, state.month, 1) + 4).rem_euclid(7);
+    let count = gridcraft_engine::core::date::days_in_month_in(sys, state.year, state.month);
+    let rect = geo.cell_rect(sh, state.cell);
+    let screen = ui.ctx().content_rect();
+    let at = if rect.bottom() + 240.0 <= screen.bottom() { rect.left_bottom() } else { rect.left_top() };
+    let mut chosen = None;
+    let mut close = false;
+    let response = egui::Area::new(egui::Id::new("gridcraft.date_picker")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            ui.set_min_width(224.0);
+            ui.horizontal(|ui| {
+                if ui.button("‹").on_hover_text("Previous month").clicked() {
+                    let (year, month) = if state.month == 1 { (state.year.saturating_sub(1), 12) } else { (state.year, state.month - 1) };
+                    if year >= if sys == gridcraft_engine::core::DateSystem::D1904 { 1904 } else { 1900 } {
+                        state.year = year;
+                        state.month = month;
+                        state.day = state.day.min(gridcraft_engine::core::date::days_in_month_in(sys, year, month));
+                    }
+                }
+                ui.label(format!(
+                    "{} {}",
+                    gridcraft_engine::core::date::MONTHS.get(state.month.saturating_sub(1) as usize).copied().unwrap_or("January"),
+                    state.year
+                ));
+                if ui.button("›").on_hover_text("Next month").clicked() {
+                    let (year, month) = if state.month == 12 { (state.year.saturating_add(1), 1) } else { (state.year, state.month + 1) };
+                    if year <= 9999 {
+                        state.year = year;
+                        state.month = month;
+                        state.day = state.day.min(gridcraft_engine::core::date::days_in_month_in(sys, year, month));
+                    }
+                }
+            });
+            egui::Grid::new("gridcraft.date_picker.days").spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+                for name in DAY_NAMES {
+                    ui.label(name);
+                }
+                ui.end_row();
+                for slot in 0..42_i64 {
+                    let day = slot - weekday + 1;
+                    if (1..=i64::from(count)).contains(&day) {
+                        if ui.selectable_label(u32::try_from(day).ok() == Some(state.day), day.to_string()).clicked() {
+                            chosen = Some(first + (day - 1) as f64);
+                        }
+                    } else {
+                        ui.add_enabled(false, egui::Button::new(" "));
+                    }
+                    if slot % 7 == 6 {
+                        ui.end_row();
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                if ui.button("Today").clicked() {
+                    chosen = Some(gridcraft_engine::core::date::serial_in_system(sys, gridcraft_engine::calc::now_serial()).floor());
+                }
+                if ui.button("Cancel").clicked() {
+                    close = true;
+                }
+            });
+        });
+    });
+    let moved = ui.input(|i| {
+        if i.key_pressed(egui::Key::Escape) {
+            close = true;
+        }
+        let delta = if i.key_pressed(egui::Key::ArrowLeft) {
+            -1
+        } else if i.key_pressed(egui::Key::ArrowRight) {
+            1
+        } else if i.key_pressed(egui::Key::ArrowUp) {
+            -7
+        } else if i.key_pressed(egui::Key::ArrowDown) {
+            7
+        } else {
+            0
+        };
+        if delta != 0 {
+            let n = gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(state.year), i64::from(state.month), i64::from(state.day))
+                .unwrap_or(first)
+                + f64::from(delta);
+            if let Some(d) = gridcraft_engine::core::date::datetime_from_serial(sys, n) {
+                state.year = d.year;
+                state.month = d.month;
+                state.day = d.day.max(1);
+            }
+            true
+        } else {
+            false
+        }
+    });
+    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        chosen = gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(state.year), i64::from(state.month), i64::from(state.day));
+    }
+    if let Some(serial) = chosen {
+        app.run_or_alert("cell.set", json!({"cell": state.cell.a1(), "input": serial.to_string()}));
+        close = true;
+    }
+    if moved {
+        ui.ctx().request_repaint();
+    }
+    if close || super::editor::popup_dismissed(&response.response, was_open) {
+        app.grid.date_picker = None;
+    } else {
+        app.grid.date_picker = Some(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_days_use_the_workbooks_date_system_and_keep_february_1900() {
+        use gridcraft_engine::core::DateSystem;
+        assert_eq!(gridcraft_engine::core::date::serial_from_ymd(DateSystem::D1900, 1900, 2, 29), Some(60.0));
+        assert_eq!(
+            gridcraft_engine::core::date::serial_from_ymd(DateSystem::D1904, 2024, 2, 29)
+                .and_then(|serial| gridcraft_engine::core::date::datetime_from_serial(DateSystem::D1904, serial))
+                .map(|d| (d.year, d.month, d.day)),
+            Some((2024, 2, 29))
+        );
+        assert_eq!(gridcraft_engine::core::date::serial_from_ymd(DateSystem::D1904, 1904, 1, 1), Some(0.0));
+    }
+}

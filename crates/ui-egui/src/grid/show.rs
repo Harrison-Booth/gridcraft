@@ -247,7 +247,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
         crate::paper_view::paint_rulers(app, &painter, rect, &geo, &t);
     }
     // Interaction.
-    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu);
+    let previous_popups = (app.grid.filter_menu, app.grid.list_picker, app.grid.header_menu, app.grid.fill_menu, app.grid.date_picker);
     // A pan the grid never saw end (it was hidden mid-drag) must not swallow the next press.
     if app.grid.touch_pan && !resp.dragged() && !resp.drag_stopped() {
         app.grid.touch_pan = false;
@@ -271,6 +271,7 @@ pub fn show(app: &mut SheetApp, ui: &mut egui::Ui) {
     header_menu(app, ui, previous_popups.2 == app.grid.header_menu);
     context_menu(app, ui);
     fill_menu(app, ui, previous_popups.3 == app.grid.fill_menu);
+    super::date_picker::show(app, ui, &geo, previous_popups.4 == app.grid.date_picker);
     fill_options_tag(app, ui, &geo, sh);
     object_menu(app, ui);
     error_check_tag(app, ui, &geo, sh);

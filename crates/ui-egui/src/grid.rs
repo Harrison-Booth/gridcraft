@@ -17,6 +17,7 @@ use crate::theme::{self, Tokens};
 
 mod cell_paint;
 mod cursor;
+pub(crate) mod date_picker;
 mod editor;
 mod geo;
 mod interact;
@@ -205,6 +206,7 @@ pub struct GridState {
     pub renaming_tab: Option<usize>,
     pub rename_text: String,
     pub list_picker: Option<CellRef>,
+    pub date_picker: Option<DatePickerState>,
     /// Open task pane: comments, watch, selection, formatChart.
     pub pane: Option<String>,
     /// Ink stroke being drawn (sheet points).
@@ -241,6 +243,14 @@ pub struct GridState {
     pub wheel_zoom: Option<WheelZoom>,
     /// A one-finger touch drag in progress: it pans the sheet instead of selecting.
     pub touch_pan: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DatePickerState {
+    pub cell: CellRef,
+    pub year: i32,
+    pub month: u32,
+    pub day: u32,
 }
 
 /// Ctrl+wheel zoom for one (doc uid, sheet). egui eases a notch in over several frames and
