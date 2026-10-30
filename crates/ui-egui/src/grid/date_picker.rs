@@ -51,7 +51,7 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
         app.grid.date_picker = None;
         return;
     };
-    let weekday = (gridcraft_engine::core::date::days_from_civil(state.year, state.month, 1) + 4).rem_euclid(7);
+    let weekday = gridcraft_engine::core::date::datetime_from_serial(sys, first).map_or(0, |d| i64::from(d.weekday));
     let count = gridcraft_engine::core::date::days_in_month_in(sys, state.year, state.month);
     let rect = geo.cell_rect(sh, state.cell);
     let screen = ui.ctx().content_rect();
