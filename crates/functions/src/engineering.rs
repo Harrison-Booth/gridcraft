@@ -611,6 +611,8 @@ mod tests {
                 other => panic!("{function}({x},{order}): {other:?}"),
             }
         }
+        assert!(matches!(ev("BESSELI", vec![n(710.0), n(0.0)]), Value::Number(v) if v.is_finite()));
+        is_err(ev("BESSELI", vec![n(720.0), n(0.0)]), CellError::Num);
         is_err(ev("BESSELI", vec![n(800.0), n(0.0)]), CellError::Num);
         is_err(ev("BESSELI", vec![n(1.0), n(-1.0)]), CellError::Num);
         is_err(ev("BESSELK", vec![n(0.0), n(0.0)]), CellError::Num);
