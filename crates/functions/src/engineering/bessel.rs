@@ -169,7 +169,7 @@ fn bessel_i(n: u32, x: f64) -> Option<f64> {
 fn bessel_i_miller(n: u32, x: f64, negative: bool) -> Option<f64> {
     let margin = 32.0 + (40.0 * x.max(1.0)).sqrt();
     let top = (n as f64 + margin).max(x + margin).ceil() as usize;
-    let (mut next, mut current) = (0.0, 1.0);
+    let (mut next, mut current): (f64, f64) = (0.0, 1.0);
     let mut norm = 2.0;
     let (mut target_log, mut target_scale) = (None, 0.0);
     let mut log_scale = 0.0;
