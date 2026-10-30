@@ -248,11 +248,26 @@ im1!(imexp, |z: Cx| Ok(z.exp()));
 im1!(imln, |z: Cx| z.ln());
 im1!(imlog10, |z: Cx| z.ln().map(|l| Cx::new(l.re / std::f64::consts::LN_10, l.im / std::f64::consts::LN_10)));
 im1!(imlog2, |z: Cx| z.ln().map(|l| Cx::new(l.re / std::f64::consts::LN_2, l.im / std::f64::consts::LN_2)));
+// Excel takes the polar route, so IMSQRT("-4") is 1.22514845490862E-16+2i, not 2i. Its cosine
+// reduces its argument with a 64-bit-mantissa pi, which is PI/2 + 2.5e-20 and shows up as the
+// stray real part. `+ 0.0` turns a -0 imaginary part into +0, so the angle stays +pi.
+// shortcut: parts above ~1E154 or below ~1E-155 keep the exact result (Excel gives #NUM! or 0), no known use.
+const HALF_PI_EXCESS: f64 = 2.508_278_806_33e-20;
 im1!(imsqrt, |z: Cx| {
-    let m = z.abs();
-    let re = ((m + z.re) / 2.0).sqrt();
-    let im = ((m - z.re) / 2.0).sqrt();
-    Ok(Cx::new(re, if z.im < 0.0 { -im } else { im }))
+    let im = z.im + 0.0;
+    let theta = match z.re {
+        0.0 => {
+            if im == 0.0 {
+                0.0
+            } else {
+                std::f64::consts::FRAC_PI_2.copysign(im)
+            }
+        }
+        x if x > 0.0 => (im / x).atan(),
+        x => (im / x).atan() + if im < 0.0 { -std::f64::consts::PI } else { std::f64::consts::PI },
+    };
+    let (half, root) = (theta / 2.0, z.abs().sqrt());
+    Ok(Cx::new(root * (half.cos() + HALF_PI_EXCESS * half.abs().sin()), root * half.sin()))
 });
 im1!(imsin, |z: Cx| Ok(z.sin()));
 im1!(imcos, |z: Cx| Ok(z.cos()));
@@ -509,9 +524,36 @@ mod tests {
         cx(ev("IMLOG10", vec![t("3+4i")]), 0.698_970_004_336_018_8, 0.402_719_196_273_373_2);
         cx(ev("IMLOG2", vec![t("3+4i")]), 2.321_928_094_887_362, 1.337_804_212_450_976_8);
         cx(ev("IMSQRT", vec![t("1+i")]), 1.098_684_113_467_809_9, 0.455_089_860_562_227_3);
-        cx(ev("IMSQRT", vec![t("-4")]), 0.0, 2.0);
-        is_text(ev("IMSQRT", vec![t("-4")]), "2i");
-        is_text(ev("IMSQRT", vec![t("-9")]), "3i");
+        // Strings read back from Excel (16.0): its stray real part on negative reals included.
+        for (input, want) in [
+            ("-4", "1.22514845490862E-16+2i"),
+            ("-9", "1.83772268236293E-16+3i"),
+            ("-1", "6.1257422745431E-17+i"),
+            ("-2", "8.66310780426106E-17+1.4142135623731i"),
+            ("-100", "6.1257422745431E-16+10i"),
+            ("-1E10", "6.1257422745431E-12+100000i"),
+            ("-1E-10", "6.1257422745431E-22+0.00001i"),
+            ("-4+0j", "1.22514845490862E-16+2j"),
+            ("-4-0i", "1.22514845490862E-16+2i"),
+            ("-4-1E-20i", "1.22514845490862E-16-2i"),
+            ("-1+1E-10i", "5.00000653944413E-11+i"),
+            ("-0.5-1E-12i", "7.07212958930194E-13-0.707106781186548i"),
+            ("4", "2"),
+            ("2", "1.4142135623731"),
+            ("0", "0"),
+            ("3+4i", "2+i"),
+            ("3+4j", "2+j"),
+            ("-3+4i", "1+2i"),
+            ("-3-4i", "1-2i"),
+            ("-2i", "1-i"),
+            ("2i", "1+i"),
+            ("i", "0.707106781186548+0.707106781186547i"),
+            ("5-12i", "3-2i"),
+            ("-5+12i", "2+3i"),
+            ("1E10+1E10i", "109868.411346781+45508.9860562227i"),
+        ] {
+            is_text(ev("IMSQRT", vec![t(input)]), want);
+        }
         is_text(ev("IMSQRT", vec![t("4")]), "2");
         is_text(ev("IMSQRT", vec![t("-2i")]), "1-i");
         is_text(ev("IMPOWER", vec![t("2+3i"), n(3.0)]), "-46+9i");
@@ -536,21 +578,56 @@ mod tests {
         cx(ev("IMSUM", vec![t("1.5e1+2E-1j")]), 15.0, 0.2);
     }
 
+    /// Excel's orders 0 and 1 use the Abramowitz & Stegun approximations.
+    #[test]
+    #[allow(clippy::excessive_precision)] // Excel's values as it prints them (17 digits)
+    fn bessel_i_k_order_zero_and_one_match_excel() {
+        let table: &[(&str, f64, f64, f64)] = &[
+            ("BESSELI", 0.05, 0.0, 1.0006250972908861),
+            ("BESSELI", 1.0, 0.0, 1.2660658480342601),
+            ("BESSELI", 3.75, 0.0, 9.118945993790991),
+            ("BESSELI", 10.0, 0.0, 2815.7166648041534),
+            ("BESSELI", -2.5, 0.0, 3.2898391723912908),
+            ("BESSELI", 0.05, 1.0, 0.02500781331109611),
+            ("BESSELI", 1.0, 1.0, 0.5651590975819435),
+            ("BESSELI", 3.75, 1.0, 7.78001515135595),
+            ("BESSELI", 10.0, 1.0, 2670.988320559247),
+            ("BESSELI", -2.5, 1.0, -2.516716242025361),
+            ("BESSELK", 0.05, 0.0, 3.11423403291686),
+            ("BESSELK", 1.0, 0.0, 0.421024421083418),
+            ("BESSELK", 2.0, 0.0, 0.11389388),
+            ("BESSELK", 10.0, 0.0, 1.7780061933126626e-05),
+            ("BESSELK", 0.05, 1.0, 19.90967432725877),
+            ("BESSELK", 1.0, 1.0, 0.6019072316669057),
+            ("BESSELK", 2.0, 1.0, 0.13986588),
+            ("BESSELK", 10.0, 1.0, 1.8648773946849075e-05),
+        ];
+        for &(function, x, order, expected) in table {
+            match ev(function, vec![n(x), n(order)]) {
+                Value::Number(got) => {
+                    let tol = 1e-12 * expected.abs();
+                    assert!((got - expected).abs() <= tol, "{function}({x},{order}) = {got}, Excel {expected}");
+                }
+                other => panic!("{function}({x},{order}): {other:?}"),
+            }
+        }
+        assert!(matches!(ev("BESSELI", vec![n(710.0), n(0.0)]), Value::Number(v) if v.is_finite()));
+        is_err(ev("BESSELI", vec![n(720.0), n(0.0)]), CellError::Num);
+        is_err(ev("BESSELI", vec![n(800.0), n(0.0)]), CellError::Num);
+        is_err(ev("BESSELI", vec![n(1.0), n(-1.0)]), CellError::Num);
+        is_err(ev("BESSELK", vec![n(0.0), n(0.0)]), CellError::Num);
+        is_err(ev("BESSELK", vec![n(-1.0), n(0.0)]), CellError::Num);
+    }
+
     #[test]
     fn bessel() {
         close_tol(ev("BESSELJ", vec![n(1.9), n(2.0)]), 0.329_925_829, 1e-6);
         close_tol(ev("BESSELY", vec![n(2.5), n(1.0)]), 0.145_918_138, 1e-6);
-        close_tol(ev("BESSELI", vec![n(1.5), n(1.0)]), 0.981_666_428, 1e-6);
-        close_tol(ev("BESSELK", vec![n(1.5), n(1.0)]), 0.277_387_804, 1e-6);
         close_tol(ev("BESSELJ", vec![n(1.0), n(0.0)]), 0.765_197_686_557_966_6, 1e-12);
         close_tol(ev("BESSELJ", vec![n(1.0), n(1.0)]), 0.440_050_585_744_933_5, 1e-12);
         close_tol(ev("BESSELJ", vec![n(-1.0), n(1.0)]), -0.440_050_585_744_933_5, 1e-12);
         close_tol(ev("BESSELY", vec![n(1.0), n(0.0)]), 0.088_256_964_215_676_96, 1e-11);
         close_tol(ev("BESSELY", vec![n(1.0), n(1.0)]), -0.781_212_821_300_288_7, 1e-11);
-        close_tol(ev("BESSELI", vec![n(1.0), n(0.0)]), 1.266_065_877_752_008_4, 1e-12);
-        close_tol(ev("BESSELI", vec![n(1.0), n(1.0)]), 0.565_159_103_992_485_1, 1e-12);
-        close_tol(ev("BESSELK", vec![n(1.0), n(0.0)]), 0.421_024_438_240_708_3, 1e-11);
-        close_tol(ev("BESSELK", vec![n(1.0), n(1.0)]), 0.601_907_230_197_234_6, 1e-11);
         is_err(ev("BESSELJ", vec![n(1.0), n(-1.0)]), CellError::Num);
         is_err(ev("BESSELY", vec![n(0.0), n(1.0)]), CellError::Num);
         is_err(ev("BESSELK", vec![n(-1.0), n(1.0)]), CellError::Num);
