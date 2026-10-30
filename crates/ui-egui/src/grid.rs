@@ -245,9 +245,13 @@ pub struct GridState {
     pub touch_pan: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DatePickerState {
     pub cell: CellRef,
+    pub doc_uid: u64,
+    pub sheet: usize,
+    pub sheet_name: String,
+    pub sheet_file_id: u32,
     pub year: i32,
     pub month: u32,
     pub day: u32,

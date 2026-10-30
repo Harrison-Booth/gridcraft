@@ -5,6 +5,7 @@ const DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 pub(crate) fn open(app: &mut SheetApp) {
     let Some(d) = app.session.active() else { return };
+    let Some(sh) = d.wb.active() else { return };
     let cell = d.selection.active;
     let sys = d.wb.date_system;
     let today = gridcraft_engine::core::date::serial_in_system(sys, gridcraft_engine::calc::now_serial()).floor();
@@ -15,19 +16,36 @@ pub(crate) fn open(app: &mut SheetApp) {
     let date = value
         .and_then(|n| gridcraft_engine::core::date::datetime_from_serial(sys, n))
         .unwrap_or_else(|| gridcraft_engine::core::date::datetime_from_serial(sys, today).unwrap_or_default());
-    app.grid.date_picker = Some(DatePickerState { cell, year: date.year, month: date.month.max(1), day: date.day.max(1) });
+    app.grid.date_picker = Some(DatePickerState {
+        cell,
+        doc_uid: d.uid,
+        sheet: d.wb.active_sheet(),
+        sheet_name: sh.name.clone(),
+        sheet_file_id: sh.file_id,
+        year: date.year,
+        month: date.month.max(1),
+        day: date.day.max(1),
+    });
 }
 
 pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
-    let Some(mut state) = app.grid.date_picker else { return };
+    let Some(mut state) = app.grid.date_picker.clone() else { return };
     let Some(doc) = app.session.active() else {
         app.grid.date_picker = None;
         return;
     };
+    if doc.uid != state.doc_uid || doc.wb.active_sheet() != state.sheet {
+        app.grid.date_picker = None;
+        return;
+    }
     let Some(sh) = doc.wb.active() else {
         app.grid.date_picker = None;
         return;
     };
+    if sh.name != state.sheet_name || sh.file_id != state.sheet_file_id {
+        app.grid.date_picker = None;
+        return;
+    }
     let sys = doc.wb.date_system;
     let Some(first) = gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(state.year), i64::from(state.month), 1) else {
         app.grid.date_picker = None;
@@ -40,11 +58,14 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
     let at = if rect.bottom() + 240.0 <= screen.bottom() { rect.left_bottom() } else { rect.left_top() };
     let mut chosen = None;
     let mut close = false;
+    let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+    let mut button_handled_enter = false;
     let response = egui::Area::new(egui::Id::unique("gridcraft.date_picker")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(224.0);
             ui.horizontal(|ui| {
                 if ui.button("‹").on_hover_text("Previous month").clicked() {
+                    button_handled_enter |= enter_pressed;
                     let (year, month) = if state.month == 1 { (state.year.saturating_sub(1), 12) } else { (state.year, state.month - 1) };
                     if year >= if sys == gridcraft_engine::core::DateSystem::D1904 { 1904 } else { 1900 } {
                         state.year = year;
@@ -58,6 +79,7 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
                     state.year
                 ));
                 if ui.button("›").on_hover_text("Next month").clicked() {
+                    button_handled_enter |= enter_pressed;
                     let (year, month) = if state.month == 12 { (state.year.saturating_add(1), 1) } else { (state.year, state.month + 1) };
                     if year <= 9999 {
                         state.year = year;
@@ -75,6 +97,7 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
                     let day = slot - weekday + 1;
                     if (1..=i64::from(count)).contains(&day) {
                         if ui.selectable_label(u32::try_from(day).ok() == Some(state.day), day.to_string()).clicked() {
+                            button_handled_enter |= enter_pressed;
                             chosen = Some(first + (day - 1) as f64);
                         }
                     } else {
@@ -87,9 +110,11 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
             });
             ui.horizontal(|ui| {
                 if ui.button("Today").clicked() {
+                    button_handled_enter |= enter_pressed;
                     chosen = Some(gridcraft_engine::core::date::serial_in_system(sys, gridcraft_engine::calc::now_serial()).floor());
                 }
                 if ui.button("Cancel").clicked() {
+                    button_handled_enter |= enter_pressed;
                     close = true;
                 }
             });
@@ -124,9 +149,7 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
             false
         }
     });
-    if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-        chosen = gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(state.year), i64::from(state.month), i64::from(state.day));
-    }
+    chosen = enter_selection(enter_pressed, button_handled_enter, chosen, sys, state.year, state.month, state.day);
     if let Some(serial) = chosen {
         app.run_or_alert("cell.set", json!({"cell": state.cell.a1(), "input": serial.to_string()}));
         close = true;
@@ -138,6 +161,22 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
         app.grid.date_picker = None;
     } else {
         app.grid.date_picker = Some(state);
+    }
+}
+
+fn enter_selection(
+    enter_pressed: bool,
+    button_handled_enter: bool,
+    chosen: Option<f64>,
+    sys: gridcraft_engine::core::DateSystem,
+    year: i32,
+    month: u32,
+    day: u32,
+) -> Option<f64> {
+    if enter_pressed && !button_handled_enter && chosen.is_none() {
+        gridcraft_engine::core::date::serial_from_ymd(sys, i64::from(year), i64::from(month), i64::from(day))
+    } else {
+        chosen
     }
 }
 
@@ -154,5 +193,12 @@ mod tests {
             Some((2024, 2, 29))
         );
         assert_eq!(gridcraft_engine::core::date::serial_from_ymd(DateSystem::D1904, 1904, 1, 1), Some(0.0));
+    }
+
+    #[test]
+    fn enter_does_not_replace_a_popup_button_action() {
+        use gridcraft_engine::core::DateSystem;
+        assert_eq!(enter_selection(true, true, None, DateSystem::D1900, 2024, 2, 29), None);
+        assert_eq!(enter_selection(true, true, Some(60.0), DateSystem::D1900, 2024, 2, 29), Some(60.0));
     }
 }

@@ -79,3 +79,26 @@ fn escape_cancels_without_changing_the_cell() {
     assert!(h.state().grid.date_picker.is_none());
     assert_eq!(h.state().session.active().and_then(|d| d.wb.active()).and_then(|s| s.value_ref(CellRef::new(0, 0))), Some(&Value::Number(42.0)));
 }
+
+#[test]
+fn changing_sheets_cancels_the_picker_instead_of_writing_to_the_new_sheet() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("cell.set", json!({"cell":"A1", "input":"42"})).unwrap();
+    let mut h = harness(session);
+    h.state_mut().run("ui.datePicker", json!({})).unwrap();
+    h.state_mut().run("home.insertSheet", json!({})).unwrap();
+    h.input_mut().events.push(Event::Key {
+        key: Key::Enter,
+        physical_key: Some(Key::Enter),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers::NONE,
+    });
+    h.run_steps(1);
+    let doc = h.state().session.active().unwrap();
+    assert_eq!(doc.wb.active_sheet(), 1);
+    assert_eq!(doc.wb.active().and_then(|s| s.value_ref(CellRef::new(0, 0))), None);
+    assert_eq!(doc.wb.sheets[0].value_ref(CellRef::new(0, 0)), Some(&Value::Number(42.0)));
+    assert!(h.state().grid.date_picker.is_none());
+}

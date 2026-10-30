@@ -242,8 +242,8 @@ Ranked; estimates in Opus 5.5 agent-hours. Detail and the full beta-gate list in
 ## Revision history
 
 | Date | Change | Summary |
-| 2026-10-30 | minor | Progress log: keyboard date picker with 1900/1904 workbook date systems |
 |---|---|---|
+| 2026-10-30 | minor | Progress log: keyboard date picker with 1900/1904 workbook date systems |
 | 2026-10-25 | minor | Progress log: AutoSum over a selected row, and a selection's empty last row and column |
 | 2026-10-23 | minor | Progress log: accounting negatives in number text |
 | 2026-10-23 | minor | Progress log: INDEX with one index on a 2-D reference is #REF! |
