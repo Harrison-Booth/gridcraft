@@ -13,7 +13,7 @@ pub(super) const OBJECT_RESIZE_RADIUS: f32 = 10.0;
 
 pub(super) fn interact(app: &mut SheetApp, ui: &mut egui::Ui, resp: &egui::Response, geo: &Geo, sh: &Sheet, wb: &Workbook) {
     // Text selection and editing must not also move the object or edit worksheet cells.
-    if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() {
+    if app.text_box_editor.is_some() || app.grid.hf_edit.is_some() || app.grid.date_picker.is_some() {
         return;
     }
     let ctx = ui.ctx().clone();

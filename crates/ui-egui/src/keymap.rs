@@ -21,6 +21,7 @@ pub enum Shortcut {
     /// Start editing with the current date or time (Ctrl+; and Ctrl+Shift+;).
     Date,
     Time,
+    DatePicker,
     /// Ctrl+' / Ctrl+Shift+": the formula / value of the cell above, ready to edit.
     FormulaAbove,
     ValueAbove,
@@ -81,6 +82,7 @@ pub fn lookup(key: Key, physical: Option<Key>, m: Modifiers, mac: bool) -> Optio
         Num7 if ctrl && s => borders("outside"),
         Minus if ctrl && s => borders("none"),
         Num8 if ctrl && s => run("selection.currentRegion"),
+        P if (ctrl || cmd) && s => Shortcut::DatePicker,
         Semicolon if ctrl && s => Shortcut::Time,
         Quote if ctrl && s => Shortcut::ValueAbove,
         Quote if ctrl => Shortcut::FormulaAbove,
@@ -204,6 +206,7 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
                 .unwrap_or_default();
             edit_with(app, text);
         }
+        Shortcut::DatePicker => app.run_or_alert("ui.datePicker", json!({})),
         Shortcut::FormulaAbove | Shortcut::ValueAbove => {
             let Some(above) = active.row.checked_sub(1).map(|r| CellRef::new(r, active.col)) else { return true };
             let text = if shortcut == Shortcut::FormulaAbove {
