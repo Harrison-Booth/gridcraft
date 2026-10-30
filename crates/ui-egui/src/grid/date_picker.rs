@@ -127,11 +127,9 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
                         if (state.needs_focus || moved) && u32::try_from(day).ok() == Some(state.day) {
                             day_response.request_focus();
                         }
-                        if day_response.clicked() {
-                            if !enter_pressed || u32::try_from(day).ok() == Some(state.day) {
-                                button_handled_enter |= enter_pressed;
-                                chosen = Some(first + (day - 1) as f64);
-                            }
+                        if day_response.clicked() && (!enter_pressed || u32::try_from(day).ok() == Some(state.day)) {
+                            button_handled_enter |= enter_pressed;
+                            chosen = Some(first + (day - 1) as f64);
                         }
                     } else {
                         ui.add_enabled(false, egui::Button::new(" "));
