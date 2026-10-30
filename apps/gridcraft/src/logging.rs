@@ -180,18 +180,29 @@ impl Sink {
     }
 
     /// Start writing to `file` (a fresh one: the size cap starts over), first the lines kept so far.
-    pub fn attach(&mut self, file: File) {
+    pub fn attach(&mut self, mut file: File) -> std::io::Result<()> {
+        // `write_all` may accept an empty buffer without touching the file, so explicitly
+        // check the handle before declaring an empty attachment usable.
+        file.write_all(&[])?;
         self.file = Some(file);
         self.written = 0;
         self.capped = false;
-        for line in std::mem::take(&mut self.pending) {
-            self.append(&line);
+        let mut pending = std::mem::take(&mut self.pending).into_iter();
+        while let Some(line) = pending.next() {
+            if let Err(error) = self.append(&line) {
+                self.pending.push(line);
+                self.pending.extend(pending);
+                return Err(error);
+            }
         }
         if self.dropped > 0 {
             let note = format!("{} earlier log lines were dropped before the log file was opened\n", self.dropped);
+            if let Err(error) = self.append(&note) {
+                return Err(error);
+            }
             self.dropped = 0;
-            self.append(&note);
         }
+        Ok(())
     }
 
     /// There will be no log file: forget the lines kept for it and keep no more.
@@ -201,11 +212,11 @@ impl Sink {
         self.capped = true;
     }
 
-    fn append(&mut self, line: &str) {
+    fn append(&mut self, line: &str) -> std::io::Result<()> {
         if self.capped {
-            return;
+            return Ok(());
         }
-        let Some(file) = self.file.as_mut() else { return };
+        let Some(file) = self.file.as_mut() else { return Ok(()) };
         let len = u64::try_from(line.len()).unwrap_or(u64::MAX);
         let text = if self.written.saturating_add(len) > self.max_bytes {
             self.capped = true;
@@ -215,10 +226,12 @@ impl Sink {
             line.to_owned()
         };
         // A full disk or a vanished file must not take the app down: drop the file sink.
-        if file.write_all(text.as_bytes()).is_err() {
+        if let Err(error) = file.write_all(text.as_bytes()) {
             self.file = None;
-            self.capped = true;
+            self.capped = false;
+            return Err(error);
         }
+        Ok(())
     }
 }
 
@@ -240,10 +253,10 @@ impl AppLogger {
         // A thread that panicked while logging leaves the sink usable: take it back.
         let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
         match rotate(dir) {
-            Ok((path, file)) => {
-                sink.attach(file);
-                Ok(path)
-            }
+            Ok((path, file)) => match sink.attach(file) {
+                Ok(()) => Ok(path),
+                Err(e) => Err(format!("{}: {e}", dir.display())),
+            },
             Err(e) => {
                 sink.no_file();
                 Err(format!("{}: {e}", dir.display()))
