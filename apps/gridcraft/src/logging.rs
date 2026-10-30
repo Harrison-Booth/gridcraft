@@ -20,7 +20,7 @@
 //! This is the desktop app's logger only; `gridcraft-cli` and `gridcraft-web` set up their own.
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use std::time::SystemTime;
@@ -181,9 +181,11 @@ impl Sink {
 
     /// Start writing to `file` (a fresh one: the size cap starts over), first the lines kept so far.
     pub fn attach(&mut self, mut file: File) -> std::io::Result<()> {
-        // `write_all` may accept an empty buffer without touching the file, so explicitly
-        // check the handle before declaring an empty attachment usable.
-        file.write_all(&[])?;
+        // `write_all` may accept an empty buffer without touching the file. Probe a real write,
+        // then restore the fresh file to empty before accepting the attachment.
+        file.write_all(&[0])?;
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
         self.file = Some(file);
         self.written = 0;
         self.capped = false;
@@ -197,9 +199,7 @@ impl Sink {
         }
         if self.dropped > 0 {
             let note = format!("{} earlier log lines were dropped before the log file was opened\n", self.dropped);
-            if let Err(error) = self.append(&note) {
-                return Err(error);
-            }
+            self.append(&note)?;
             self.dropped = 0;
         }
         Ok(())
@@ -228,7 +228,7 @@ impl Sink {
         // A full disk or a vanished file must not take the app down: drop the file sink.
         if let Err(error) = file.write_all(text.as_bytes()) {
             self.file = None;
-            self.capped = false;
+            self.capped = true;
             return Err(error);
         }
         Ok(())
@@ -257,10 +257,7 @@ impl AppLogger {
                 Ok(()) => Ok(path),
                 Err(e) => Err(format!("{}: {e}", dir.display())),
             },
-            Err(e) => {
-                sink.no_file();
-                Err(format!("{}: {e}", dir.display()))
-            }
+            Err(e) => Err(format!("{}: {e}", dir.display())),
         }
     }
 

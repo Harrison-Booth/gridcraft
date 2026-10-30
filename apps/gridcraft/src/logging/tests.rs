@@ -174,20 +174,61 @@ fn attach_checks_an_empty_file_handle_for_writability() {
 }
 
 #[test]
+fn attach_rejects_a_file_that_cannot_accept_writes() {
+    let dir = temp_dir("read-only-attach");
+    std::fs::create_dir_all(&dir).expect("directory");
+    let path = dir.join("read-only.log");
+    std::fs::write(&path, "existing").expect("create file");
+    let file = File::open(&path).expect("open read-only file");
+    let mut sink = Sink::new(MAX_FILE_BYTES);
+    sink.write("pending\n");
+    assert!(sink.attach(file).is_err());
+    assert_eq!(sink.pending, ["pending\n"]);
+    assert!(sink.file.is_none());
+    let (_, writable_file) = rotate(&dir.join("fallback")).expect("fallback rotate");
+    sink.attach(writable_file).expect("fallback attach");
+    assert!(read(&dir.join("fallback").join(LOG_FILE)).contains("pending\n"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn failed_attach_retains_unwritten_pending_records_and_drop_count() {
     let dir = temp_dir("failed-attach");
     std::fs::create_dir_all(&dir).expect("directory");
     let path = dir.join("unwritable.log");
-    let file = File::create(&path).expect("create file");
-    std::fs::remove_file(&path).expect("unlink file");
+    std::fs::write(&path, "not writable through this handle").expect("create file");
+    let file = File::open(&path).expect("open read-only file");
     let mut sink = Sink::new(MAX_FILE_BYTES);
     sink.write("pending 1\n");
     sink.write("pending 2\n");
     sink.dropped = 3;
-    assert_eq!(sink.attach(file).expect_err("unlinked file should fail").kind(), std::io::ErrorKind::NotFound);
+    assert!(sink.attach(file).is_err());
     assert_eq!(sink.pending, ["pending 1\n", "pending 2\n"]);
     assert_eq!(sink.dropped, 3);
     assert!(sink.file.is_none());
+    assert!(!sink.capped);
+    let (_, writable_file) = rotate(&dir.join("fallback")).expect("fallback rotate");
+    sink.attach(writable_file).expect("fallback attach");
+    let fallback_text = read(&dir.join("fallback").join(LOG_FILE));
+    assert!(fallback_text.contains("pending 1\npending 2\n"), "{fallback_text}");
+    assert!(fallback_text.contains("3 earlier log lines were dropped"), "{fallback_text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn runtime_write_failure_stops_future_records_from_buffering() {
+    let dir = temp_dir("runtime-write-failure");
+    let (_, file) = rotate(&dir).expect("rotate");
+    let mut sink = Sink::new(MAX_FILE_BYTES);
+    sink.attach(file).expect("attach");
+    sink.file = Some(File::options().write(true).open("/dev/full").expect("open full device"));
+    sink.write("fails\n");
+    assert!(sink.file.is_none());
+    assert!(sink.capped);
+    sink.write("must not buffer\n");
+    assert!(sink.pending.is_empty());
+    assert_eq!(sink.dropped, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
