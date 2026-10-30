@@ -3,7 +3,7 @@ use crate::grid::DatePickerState;
 
 const DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-pub(super) fn open(app: &mut SheetApp) {
+pub(crate) fn open(app: &mut SheetApp) {
     let Some(d) = app.session.active() else { return };
     let cell = d.selection.active;
     let sys = d.wb.date_system;
@@ -40,7 +40,7 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
     let at = if rect.bottom() + 240.0 <= screen.bottom() { rect.left_bottom() } else { rect.left_top() };
     let mut chosen = None;
     let mut close = false;
-    let response = egui::Area::new(egui::Id::new("gridcraft.date_picker")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+    let response = egui::Area::new(egui::Id::unique("gridcraft.date_picker")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.set_min_width(224.0);
             ui.horizontal(|ui| {
@@ -143,8 +143,6 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn selected_days_use_the_workbooks_date_system_and_keep_february_1900() {
         use gridcraft_engine::core::DateSystem;
