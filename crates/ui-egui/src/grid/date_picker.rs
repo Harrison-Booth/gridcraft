@@ -182,6 +182,8 @@ fn enter_selection(
 
 #[cfg(test)]
 mod tests {
+    use super::enter_selection;
+
     #[test]
     fn selected_days_use_the_workbooks_date_system_and_keep_february_1900() {
         use gridcraft_engine::core::DateSystem;

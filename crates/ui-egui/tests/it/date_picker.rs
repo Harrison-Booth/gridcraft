@@ -33,7 +33,7 @@ fn date_picker_selects_a_date_as_one_undo_and_keeps_the_cell_format() {
         sheet.value_ref(CellRef::new(0, 0)),
         Some(&Value::Number(gridcraft_engine::core::date::serial_from_ymd(DateSystem::D1900, 2024, 2, 29).unwrap()))
     );
-    assert_eq!(doc.wb.styles.get(sheet.style_id(CellRef::new(0, 0))).num_fmt, "yyyy-mm-dd");
+    assert_eq!(doc.wb.styles.get(sheet.style_id(CellRef::new(0, 0))).num_fmt.as_str(), "yyyy-mm-dd");
     assert!(h.state().grid.date_picker.is_none());
     h.state_mut().run("edit.undo", json!({})).unwrap();
     assert_eq!(h.state().session.active().and_then(|d| d.wb.active()).and_then(|s| s.value_ref(CellRef::new(0, 0))), Some(&Value::Number(45323.0)));
@@ -43,7 +43,7 @@ fn date_picker_selects_a_date_as_one_undo_and_keeps_the_cell_format() {
 fn date_picker_uses_the_1904_epoch() {
     let mut session = Session::new();
     session.new_workbook();
-    session.active_mut().unwrap().wb.date_system = DateSystem::D1904;
+    std::sync::Arc::make_mut(&mut session.active_mut().unwrap().wb).date_system = DateSystem::D1904;
     let mut h = harness(session);
     h.state_mut().run("ui.datePicker", json!({})).unwrap();
     let state = h.state_mut().grid.date_picker.as_mut().unwrap();
