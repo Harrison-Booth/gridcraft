@@ -268,16 +268,21 @@ fn records_from_many_threads_are_whole_lines() {
 }
 
 #[test]
-fn attaching_to_an_unusable_directory_reports_an_error_and_keeps_logging() {
+fn attaching_to_an_unusable_directory_preserves_pending_records_for_fallback() {
     let dir = temp_dir("unusable");
     std::fs::create_dir_all(dir.parent().expect("parent")).expect("tmp");
     std::fs::write(&dir, "not a directory").expect("block");
     let logger = AppLogger::new(Filter::parse("info"), false);
+    record(&logger, log::Level::Info, "gridcraft", "before failed attachment");
     assert!(logger.attach_dir(&dir).is_err());
-    record(&logger, log::Level::Error, "x", "still fine");
-    // Nothing waits in memory for a file that won't come.
-    assert!(logger.sink.lock().expect("sink").pending.is_empty());
+    record(&logger, log::Level::Error, "x", "after failed attachment");
+    let fallback = temp_dir("fallback");
+    let path = logger.attach_dir(&fallback).expect("fallback attachment");
+    let text = read(&path);
+    assert!(text.contains("before failed attachment"), "{text}");
+    assert!(text.contains("after failed attachment"), "{text}");
     let _ = std::fs::remove_file(&dir);
+    let _ = std::fs::remove_dir_all(fallback);
 }
 
 #[test]

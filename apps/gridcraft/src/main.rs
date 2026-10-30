@@ -78,6 +78,7 @@ impl eframe::App for App {
     }
 }
 
+/// Return the existing platform-specific per-user settings directory.
 fn standard_config_dir() -> Option<PathBuf> {
     if cfg!(target_os = "macos") {
         std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/GridCraft"))
@@ -91,12 +92,19 @@ fn standard_config_dir() -> Option<PathBuf> {
     }
 }
 
+/// Return adjacent `GridCraftData` when `portable.txt` is beside the executable.
 fn portable_config_dir(executable: &Path) -> Option<PathBuf> {
     executable.parent().filter(|dir| dir.join("portable.txt").is_file()).map(|dir| dir.join("GridCraftData"))
 }
 
+/// Resolve the portable settings directory for this process, if enabled.
+fn portable_config_dir_for_app() -> Option<PathBuf> {
+    std::env::current_exe().ok().and_then(|exe| portable_config_dir(&exe))
+}
+
+/// Choose portable storage when writable, otherwise fall back to per-user storage.
 fn config_dir() -> Option<PathBuf> {
-    let portable = std::env::current_exe().ok().and_then(|exe| portable_config_dir(&exe));
+    let portable = portable_config_dir_for_app();
     if let Some(dir) = portable {
         // A portable install is often placed under Program Files or another read-only folder.
         // In that case, preserve settings in the normal per-user location and make the fallback visible.
@@ -109,14 +117,25 @@ fn config_dir() -> Option<PathBuf> {
     standard_config_dir()
 }
 
+/// Create portable storage and verify that existing preference files can be replaced.
 fn prepare_portable_dir(dir: &Path) -> std::io::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT_PROBE: AtomicU64 = AtomicU64::new(0);
 
     std::fs::create_dir_all(dir)?;
-    let probe = dir.join(format!(".gridcraft-write-test-{}-{}", std::process::id(), NEXT_PROBE.fetch_add(1, Ordering::Relaxed)));
-    std::fs::OpenOptions::new().write(true).create_new(true).open(&probe)?;
-    std::fs::remove_file(probe)
+    for name in ["ui.json", "prefs.json"] {
+        let path = dir.join(name);
+        match std::fs::OpenOptions::new().write(true).open(&path) {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let probe = dir.join(format!(".gridcraft-write-test-{}-{}", std::process::id(), NEXT_PROBE.fetch_add(1, Ordering::Relaxed)));
+                std::fs::OpenOptions::new().write(true).create_new(true).open(&probe)?;
+                std::fs::remove_file(probe)?;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
 }
 
 /// Runs without preferences (`GRIDCRAFT_NO_PREFS`, agents' test runs) neither read nor write
@@ -125,9 +144,40 @@ fn prefs_enabled() -> bool {
     std::env::var_os("GRIDCRAFT_NO_PREFS").is_none()
 }
 
-/// Where the log files live: `logs` in the settings folder, next to `ui.json` (see `logging`).
-fn log_dir() -> Option<std::path::PathBuf> {
-    Some(config_dir()?.join("logs"))
+/// Attach the log file, retrying the standard location after a portable-path failure.
+fn attach_log_file(logger: &logging::AppLogger) {
+    if !prefs_enabled() {
+        logger.no_file();
+        return;
+    }
+    let portable = portable_config_dir_for_app();
+    let Some(dir) = config_dir() else {
+        logger.no_file();
+        return;
+    };
+    match logger.attach_dir(&dir.join("logs")) {
+        Ok(path) => log::info!("GridCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
+        Err(e) if portable.as_ref() == Some(&dir) => {
+            log::warn!("no portable log file: {e}; trying the standard settings directory");
+            match standard_config_dir().map(|path| path.join("logs")) {
+                Some(fallback) => match logger.attach_dir(&fallback) {
+                    Ok(path) => log::info!("GridCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
+                    Err(e) => {
+                        log::warn!("no log file: {e}");
+                        logger.no_file();
+                    }
+                },
+                None => {
+                    log::warn!("no standard settings directory for log fallback");
+                    logger.no_file();
+                }
+            }
+        }
+        Err(e) => {
+            log::warn!("no log file: {e}");
+            logger.no_file();
+        }
+    }
 }
 
 fn load_prefs(app: &mut SheetApp) {
@@ -154,18 +204,48 @@ fn load_prefs(app: &mut SheetApp) {
     }
 }
 
+/// Save preferences and fall back to the standard directory if portable writes fail.
 fn save_prefs(app: &SheetApp) {
     if !prefs_enabled() {
         return;
     }
     let Some(dir) = config_dir() else { return };
-    let _ = std::fs::create_dir_all(&dir);
-    if let Ok(b) = serde_json::to_vec_pretty(&app.ui) {
-        let _ = std::fs::write(dir.join("ui.json"), b);
+    let ui = match serde_json::to_vec_pretty(&app.ui) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            log::warn!("cannot serialize UI preferences: {e}");
+            return;
+        }
+    };
+    let prefs = match serde_json::to_vec_pretty(&app.session.prefs) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            log::warn!("cannot serialize preferences: {e}");
+            return;
+        }
+    };
+    if let Err(e) = write_prefs(&dir, &ui, &prefs) {
+        if portable_config_dir_for_app().as_ref() == Some(&dir) {
+            log::warn!("cannot save portable preferences in {}: {e}; trying the standard settings directory", dir.display());
+            match standard_config_dir() {
+                Some(fallback) => {
+                    if let Err(e) = write_prefs(&fallback, &ui, &prefs) {
+                        log::warn!("cannot save preferences in {}: {e}", fallback.display());
+                    }
+                }
+                None => log::warn!("no standard settings directory for preference fallback"),
+            }
+        } else {
+            log::warn!("cannot save preferences in {}: {e}", dir.display());
+        }
     }
-    if let Ok(b) = serde_json::to_vec_pretty(&app.session.prefs) {
-        let _ = std::fs::write(dir.join("prefs.json"), b);
-    }
+}
+
+/// Write both preference files to `dir`, returning the first filesystem error.
+fn write_prefs(dir: &Path, ui: &[u8], prefs: &[u8]) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    std::fs::write(dir.join("ui.json"), ui)?;
+    std::fs::write(dir.join("prefs.json"), prefs)
 }
 
 /// Read the system clipboard through the shared handle, creating it on first use.
@@ -325,14 +405,7 @@ fn main() -> eframe::Result<()> {
     // first. Runs without preferences (agents' test runs) log to standard error only, so they
     // don't rotate away the user's own logs.
     if let Some(logger) = logger {
-        match log_dir().filter(|_| prefs_enabled()) {
-            Some(dir) => match logger.attach_dir(&dir) {
-                Ok(path) => log::info!("GridCraft {}, log file {}", env!("CARGO_PKG_VERSION"), path.display()),
-                // Standard error only by now (`attach_dir` gave up on the file); unlike `eprintln!`, never panics.
-                Err(e) => log::warn!("no log file: {e}"),
-            },
-            None => logger.no_file(),
-        }
+        attach_log_file(logger);
     }
     let mut session = Session::new();
     if let Some(s) = &sample
@@ -478,7 +551,7 @@ mod packaging_tests {
 
 #[cfg(test)]
 mod portable_preferences_tests {
-    use super::portable_config_dir;
+    use super::{portable_config_dir, prepare_portable_dir};
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -520,6 +593,17 @@ mod portable_preferences_tests {
         assert_eq!(std::fs::read(second_data.join("logs/gridcraft.log"))?, b"second");
         std::fs::remove_dir_all(first)?;
         std::fs::remove_dir_all(second)?;
+        Ok(())
+    }
+
+    #[test]
+    fn portable_directory_check_rejects_unwritable_preference_paths() -> Result<(), Box<dyn std::error::Error>> {
+        let root = temp_dir();
+        let data = root.join("GridCraftData");
+        std::fs::create_dir_all(data.join("prefs.json"))?;
+        let result = prepare_portable_dir(&data);
+        std::fs::remove_dir_all(root)?;
+        assert!(result.is_err());
         Ok(())
     }
 }

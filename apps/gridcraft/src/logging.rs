@@ -234,8 +234,8 @@ impl AppLogger {
         AppLogger { filter, stderr, sink: Mutex::new(Sink::new(MAX_FILE_BYTES)) }
     }
 
-    /// Rotate the logs in `dir` and send records to the fresh file; returns its path. On an error
-    /// standard error stays the only sink.
+    /// Rotate the logs in `dir` and send records to the fresh file; returns its path. On an error,
+    /// pending records remain buffered so the caller can try a fallback directory.
     pub fn attach_dir(&self, dir: &Path) -> Result<PathBuf, String> {
         // A thread that panicked while logging leaves the sink usable: take it back.
         let mut sink = self.sink.lock().unwrap_or_else(PoisonError::into_inner);
@@ -244,10 +244,7 @@ impl AppLogger {
                 sink.attach(file);
                 Ok(path)
             }
-            Err(e) => {
-                sink.no_file();
-                Err(format!("{}: {e}", dir.display()))
-            }
+            Err(e) => Err(format!("{}: {e}", dir.display())),
         }
     }
 
