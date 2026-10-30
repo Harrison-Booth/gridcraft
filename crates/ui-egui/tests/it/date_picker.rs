@@ -81,6 +81,18 @@ fn escape_cancels_without_changing_the_cell() {
 }
 
 #[test]
+fn opening_the_picker_moves_keyboard_focus_into_it() {
+    let mut session = Session::new();
+    session.new_workbook();
+    let mut h = harness(session);
+    let grid_focus = h.ctx.memory(|m| m.focused());
+    h.state_mut().run("ui.datePicker", json!({})).unwrap();
+    h.run_steps(1);
+    assert!(h.state().grid.date_picker.is_some());
+    assert!(h.ctx.memory(|m| m.focused()).is_some_and(|id| Some(id) != grid_focus), "opening the picker transfers keyboard focus from the grid");
+}
+
+#[test]
 fn changing_sheets_cancels_the_picker_instead_of_writing_to_the_new_sheet() {
     let mut session = Session::new();
     session.new_workbook();

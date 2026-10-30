@@ -96,7 +96,11 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
                 for slot in 0..42_i64 {
                     let day = slot - weekday + 1;
                     if (1..=i64::from(count)).contains(&day) {
-                        if ui.selectable_label(u32::try_from(day).ok() == Some(state.day), day.to_string()).clicked() {
+                        let day_response = ui.selectable_label(u32::try_from(day).ok() == Some(state.day), day.to_string());
+                        if !was_open && u32::try_from(day).ok() == Some(state.day) {
+                            day_response.request_focus();
+                        }
+                        if day_response.clicked() {
                             button_handled_enter |= enter_pressed;
                             chosen = Some(first + (day - 1) as f64);
                         }
