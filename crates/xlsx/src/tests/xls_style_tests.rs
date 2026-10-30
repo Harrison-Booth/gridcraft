@@ -197,6 +197,12 @@ fn reads_fonts_fills_borders_alignment_and_protection() {
     let (wb, report) = read_xls(&compound("Workbook", &formatted())).unwrap();
     assert!(report.warnings[0].contains("cell formatting"), "{:?}", report.warnings);
     assert!(!report.warnings.iter().any(|w| w.contains("shorter than expected")), "{:?}", report.warnings);
+    reads_primary_style(&wb);
+    reads_fallback_styles(&wb);
+    reads_cell_style_and_xlsx_roundtrip(&wb);
+}
+
+fn reads_primary_style(wb: &Workbook) {
     // The Normal style's font is the workbook default.
     let normal = wb.styles.get(StyleId::DEFAULT);
     assert_eq!((normal.font.name.as_str(), normal.font.size, normal.font.bold), ("Arial", 10.0, false));
@@ -222,7 +228,10 @@ fn reads_fonts_fills_borders_alignment_and_protection() {
     // A formatted blank cell keeps its formatting.
     assert_eq!(wb.sheets[0].style_id(CellRef::parse("B1").unwrap()), wb.sheets[0].style_id(CellRef::parse("A1").unwrap()));
     assert_eq!(wb.sheets[0].value(CellRef::parse("B1").unwrap()), Value::Empty);
+}
 
+fn reads_fallback_styles(wb: &Workbook) {
+    let normal = wb.styles.get(StyleId::DEFAULT);
     let s = style_at(&wb, "A2");
     assert_eq!(s.font, normal.font, "font index 4 falls back to the default font");
     assert_eq!(s.fill, Fill { pattern: PatternType::Gray125, fg: Color::Rgb(0xFF0000), bg: Color::Rgb(0xFFFF00) });
@@ -240,7 +249,9 @@ fn reads_fonts_fills_borders_alignment_and_protection() {
     assert_eq!(wb.sheets[0].style_id(CellRef::parse("A5").unwrap()), StyleId::DEFAULT);
     // A blank cell in the default style isn't stored.
     assert!(wb.sheets[0].cell(CellRef::parse("A7").unwrap()).is_none());
+}
 
+fn reads_cell_style_and_xlsx_roundtrip(wb: &Workbook) {
     let s = style_at(&wb, "A6");
     assert_eq!((s.font.name.as_str(), s.font.size, s.font.color), ("Times New Roman", 11.0, Color::Rgb(0xABCDEF)));
     assert_eq!((s.font.underline, s.font.vert), (Underline::SingleAccounting, VertAlign::Subscript));
