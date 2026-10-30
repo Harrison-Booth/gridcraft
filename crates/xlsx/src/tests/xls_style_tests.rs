@@ -208,7 +208,7 @@ fn reads_primary_style(wb: &Workbook) {
     assert_eq!((normal.font.name.as_str(), normal.font.size, normal.font.bold), ("Arial", 10.0, false));
     assert_eq!(normal.font.color, Color::Auto);
 
-    let s = style_at(&wb, "A1");
+    let s = style_at(wb, "A1");
     let f = &s.font;
     assert_eq!((f.name.as_str(), f.size), ("Courier New", 14.0));
     assert!(f.bold && f.italic && f.strike);
@@ -232,12 +232,12 @@ fn reads_primary_style(wb: &Workbook) {
 
 fn reads_fallback_styles(wb: &Workbook) {
     let normal = wb.styles.get(StyleId::DEFAULT);
-    let s = style_at(&wb, "A2");
+    let s = style_at(wb, "A2");
     assert_eq!(s.font, normal.font, "font index 4 falls back to the default font");
     assert_eq!(s.fill, Fill { pattern: PatternType::Gray125, fg: Color::Rgb(0xFF0000), bg: Color::Rgb(0xFFFF00) });
     assert_eq!((s.align.h, s.align.v, s.align.rotation), (HAlign::Distributed, VAlign::Distributed, 255));
 
-    let s = style_at(&wb, "A3");
+    let s = style_at(wb, "A3");
     assert_eq!(s.font, normal.font, "a font index past the end falls back to the default font");
     assert_eq!((s.align.h, s.align.v, s.align.rotation), (HAlign::Right, VAlign::Top, 90));
     assert_eq!(s.borders.right, BorderLine { style: BorderStyle::SlantDashDot, color: Color::Rgb(0x0000FF) });
@@ -252,19 +252,19 @@ fn reads_fallback_styles(wb: &Workbook) {
 }
 
 fn reads_cell_style_and_xlsx_roundtrip(wb: &Workbook) {
-    let s = style_at(&wb, "A6");
+    let s = style_at(wb, "A6");
     assert_eq!((s.font.name.as_str(), s.font.size, s.font.color), ("Times New Roman", 11.0, Color::Rgb(0xABCDEF)));
     assert_eq!((s.font.underline, s.font.vert), (Underline::SingleAccounting, VertAlign::Subscript));
 
     // User-defined styles are kept (first of a name wins); built-in ones are GridCraft's own.
     assert_eq!(wb.cell_styles.len(), 1, "{:?}", wb.cell_styles.iter().map(|(n, _)| n).collect::<Vec<_>>());
     assert_eq!(wb.cell_styles[0].0, "Fancy");
-    assert_eq!(&wb.cell_styles[0].1, style_at(&wb, "A1"));
+    assert_eq!(&wb.cell_styles[0].1, style_at(wb, "A1"));
 
     // The formatting survives a save as .xlsx.
-    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let (back, _) = read_xlsx(&write_xlsx(wb).unwrap()).unwrap();
     for a1 in ["A1", "A2", "A3", "A6"] {
-        assert_eq!(style_at(&back, a1), style_at(&wb, a1), "{a1}");
+        assert_eq!(style_at(&back, a1), style_at(wb, a1), "{a1}");
     }
     assert_eq!(back.styles.get(StyleId::DEFAULT).font.name, "Arial");
     assert_eq!(back.cell_styles.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>(), ["Fancy"]);
