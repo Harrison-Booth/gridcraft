@@ -32,7 +32,7 @@ impl InFlight {
             })
             .map_err(|e| log::warn!("AutoSave could not start a worker thread, saving in the frame instead: {e}"))
             .ok()?;
-        Some(InFlight { job, started: crate::now_ms(), rx, handle: Some(handle) })
+        Some(InFlight { job, started: crate::monotonic_ms(), rx, handle: Some(handle) })
     }
 
     #[cfg(target_arch = "wasm32")]
