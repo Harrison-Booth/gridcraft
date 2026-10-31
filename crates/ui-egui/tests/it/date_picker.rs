@@ -156,7 +156,7 @@ fn opening_the_picker_commits_an_active_cell_edit_before_capturing_the_value() {
     h.state_mut().begin_edit(Some("42".into()), false);
     h.state_mut().run("ui.datePicker", json!({})).unwrap();
     assert!(h.state().editor.is_none());
-    assert_eq!(h.state().grid.date_picker.as_ref().map(|p| (p.year, p.month, p.day)), Some((1900, 2, 10)));
+    assert_eq!(h.state().grid.date_picker.as_ref().map(|p| (p.year, p.month, p.day)), Some((1900, 2, 11)));
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn right_to_left_picker_is_anchored_to_the_cells_right_edge() {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("view.rightToLeft", json!({"on": true})).unwrap();
-    let mut h = harness(session);
+    let mut h = crate::support::harness_with(crate::support::builder().with_size(egui::vec2(1600.0, 800.0)), crate::support::app(session), 4);
     let cell_right = {
         let app = h.state();
         let sheet = app.session.active().unwrap().wb.active().unwrap();
