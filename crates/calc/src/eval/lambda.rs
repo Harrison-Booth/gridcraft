@@ -167,17 +167,25 @@ impl<'h> Evaluator<'h> {
                             Ok(offset) => offset,
                             Err(_) => return err(CellError::Num),
                         };
+                        let dimension = if by_row { arr.cols } else { arr.rows };
+                        let Some(span) = dimension.checked_sub(1).and_then(|span| u32::try_from(span).ok()) else {
+                            return err(CellError::Num);
+                        };
                         let Some((start, end)) = (if by_row {
-                            area.range.start.row.checked_add(offset).map(|row| {
-                                let start = gridcraft_core::CellRef::new(row, area.range.start.col);
-                                let end = gridcraft_core::CellRef::new(row, area.range.start.col + arr.cols as u32 - 1);
-                                (start, end)
+                            area.range.start.row.checked_add(offset).and_then(|row| {
+                                area.range.start.col.checked_add(span).map(|end_col| {
+                                    let start = gridcraft_core::CellRef::new(row, area.range.start.col);
+                                    let end = gridcraft_core::CellRef::new(row, end_col);
+                                    (start, end)
+                                })
                             })
                         } else {
-                            area.range.start.col.checked_add(offset).map(|col| {
-                                let start = gridcraft_core::CellRef::new(area.range.start.row, col);
-                                let end = gridcraft_core::CellRef::new(area.range.start.row + arr.rows as u32 - 1, col);
-                                (start, end)
+                            area.range.start.col.checked_add(offset).and_then(|col| {
+                                area.range.start.row.checked_add(span).map(|end_row| {
+                                    let start = gridcraft_core::CellRef::new(area.range.start.row, col);
+                                    let end = gridcraft_core::CellRef::new(end_row, col);
+                                    (start, end)
+                                })
                             })
                         }) else {
                             return err(CellError::Num);
