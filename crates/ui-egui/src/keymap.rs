@@ -315,7 +315,10 @@ pub(crate) fn dispatch(app: &mut SheetApp, ctx: &egui::Context, key: Key, physic
                 .unwrap_or_default();
             edit_with(app, text);
         }
-        Shortcut::DatePicker => app.run_or_alert("ui.datePicker", json!({})),
+        Shortcut::DatePicker => {
+            app.grid.ensure_visible = true;
+            app.run_or_alert("ui.datePicker", json!({}));
+        }
         Shortcut::FormulaAbove | Shortcut::ValueAbove => {
             let Some(above) = active.row.checked_sub(1).map(|r| CellRef::new(r, active.col)) else { return true };
             let text = if shortcut == Shortcut::FormulaAbove {

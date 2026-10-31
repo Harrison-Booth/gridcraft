@@ -190,3 +190,26 @@ fn right_to_left_picker_is_anchored_to_the_cells_right_edge() {
         "picker should begin at the RTL cell's right edge: {picker_left:?} vs {cell_right}"
     );
 }
+
+#[test]
+fn opening_the_picker_by_shortcut_scrolls_the_active_cell_into_view() {
+    let mut session = Session::new();
+    session.new_workbook();
+    session.execute("selection.set", json!({"cell":"Z1000"})).unwrap();
+    let mut h = harness(session);
+    h.run_steps(1);
+    h.input_mut().events.push(Event::Key {
+        key: Key::P,
+        physical_key: Some(Key::P),
+        pressed: true,
+        repeat: false,
+        modifiers: Modifiers { ctrl: true, shift: true, ..Modifiers::NONE },
+    });
+    h.run_steps(2);
+    assert!(h.state().grid.date_picker.is_some());
+    let app = h.state();
+    let sheet = app.session.active().unwrap().wb.active().unwrap();
+    let geo = gridcraft_ui_egui::grid::Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
+    let cell = geo.screen_cell_rect(sheet, CellRef::new(999, 25));
+    assert!(geo.cells.intersects(cell), "active cell should be visible after the shortcut: {cell:?}");
+}

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Geo, SheetApp, Value, json, vec2};
 use crate::grid::DatePickerState;
 
 const DAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -53,9 +53,17 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
     let sys = doc.wb.date_system;
     let rect = geo.screen_cell_rect(sh, state.cell);
     let screen = ui.ctx().content_rect();
-    let pivot = if geo.rtl { egui::Align2::RIGHT_BOTTOM } else { egui::Align2::LEFT_BOTTOM };
-    let top_pivot = if geo.rtl { egui::Align2::RIGHT_TOP } else { egui::Align2::LEFT_TOP };
-    let (at, pivot) = if rect.bottom() + 240.0 <= screen.bottom() { (rect.left_bottom(), pivot) } else { (rect.left_top(), top_pivot) };
+    let (at, pivot) = if geo.rtl {
+        if rect.bottom() + 240.0 <= screen.bottom() {
+            (rect.right_bottom(), egui::Align2::LEFT_TOP)
+        } else {
+            (rect.right_top(), egui::Align2::LEFT_BOTTOM)
+        }
+    } else if rect.bottom() + 240.0 <= screen.bottom() {
+        (rect.left_bottom(), egui::Align2::RIGHT_TOP)
+    } else {
+        (rect.left_top(), egui::Align2::RIGHT_BOTTOM)
+    };
     let mut chosen = None;
     let mut close = false;
     let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
