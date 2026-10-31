@@ -1,5 +1,8 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
-use super::*;
+use super::{
+    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Distributions
@@ -604,6 +607,9 @@ pub(super) fn weibull_dist(a: &[Arg], _: C) -> R<Value> {
     let (x, al, be, cum) = (num(a, 0)?, num(a, 1)?, num(a, 2)?, boolean(a, 3)?);
     if x < 0.0 || al <= 0.0 || be <= 0.0 {
         return Err(CellError::Num);
+    }
+    if x == 0.0 {
+        return num_val(0.0);
     }
     let t = (x / be).powf(al);
     num_val(if cum { -(-t).exp_m1() } else { al / be.powf(al) * x.powf(al - 1.0) * (-t).exp() })

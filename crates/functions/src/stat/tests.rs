@@ -480,6 +480,17 @@ fn continuous() {
 }
 
 #[test]
+fn weibull_density_at_zero_is_zero() {
+    for shape in [0.5, 1.0, 2.0] {
+        close_tol(ev("WEIBULL.DIST", vec![n(0.0), n(shape), n(1.0), b(false)]), 0.0, 0.0);
+        close_tol(ev("WEIBULL.DIST", vec![n(0.0), n(shape), n(1.0), b(true)]), 0.0, 0.0);
+    }
+    close_tol(ev("WEIBULL.DIST", vec![n(1.0), n(1.0), n(1.0), b(false)]), (-1.0f64).exp(), 1e-15);
+    close_tol(ev("WEIBULL.DIST", vec![n(1.0), n(1.0), n(1.0), b(true)]), 1.0 - (-1.0f64).exp(), 1e-15);
+    is_err(ev("WEIBULL.DIST", vec![n(-0.1), n(1.0), n(1.0), b(false)]), CellError::Num);
+}
+
+#[test]
 fn aggregate_helper() {
     let vals = vec![nv(1.0), nv(2.0), tv("x"), Value::Empty, Value::Bool(true), nv(6.0)];
     close(aggregate_values(1, &vals), 3.0);
