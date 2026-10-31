@@ -427,7 +427,15 @@ fn discrete() {
     close_tol(ev("BINOM.DIST", vec![n(6.0), n(10.0), n(0.5), b(false)]), 0.205078125, 1e-12);
     close_tol(ev("BINOM.DIST", vec![n(6.0), n(10.0), n(0.5), b(true)]), 0.828125, 1e-12);
     close_tol(ev("BINOMDIST", vec![n(6.0), n(10.0), n(0.5), b(false)]), 0.205078125, 1e-12);
+    close(ev("BINOM.DIST", vec![n(1.0), n(2_147_483_646.0), n(0.0), b(false)]), 0.0);
+    close(ev("BINOM.DIST", vec![n(1.0), n(2_147_483_646.9), n(0.0), b(false)]), 0.0);
+    is_err(ev("BINOM.DIST", vec![n(1.0), n(2_147_483_647.0), n(0.0), b(false)]), CellError::Num);
+    is_err(ev("BINOM.DIST", vec![n(1.0), n(2_147_483_647.9), n(0.0), b(false)]), CellError::Num);
     is_err(ev("BINOM.DIST", vec![n(11.0), n(10.0), n(0.5), b(false)]), CellError::Num);
+    close(ev("BINOM.DIST.RANGE", vec![n(2_147_483_646.0), n(0.0), n(1.0)]), 0.0);
+    close(ev("BINOM.DIST.RANGE", vec![n(2_147_483_646.9), n(0.0), n(1.0)]), 0.0);
+    is_err(ev("BINOM.DIST.RANGE", vec![n(2_147_483_647.0), n(0.0), n(1.0)]), CellError::Num);
+    is_err(ev("BINOM.DIST.RANGE", vec![n(2_147_483_647.9), n(0.0), n(1.0)]), CellError::Num);
     close_tol(ev("BINOM.DIST.RANGE", vec![n(60.0), n(0.75), n(48.0)]), 0.083974967, 1e-6);
     close_tol(ev("BINOM.DIST.RANGE", vec![n(60.0), n(0.75), n(45.0), n(50.0)]), 0.523629793, 1e-6);
     close(ev("BINOM.INV", vec![n(6.0), n(0.5), n(0.75)]), 4.0);

@@ -1,5 +1,8 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
-use super::*;
+use super::{
+    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Distributions
@@ -70,6 +73,8 @@ fn f_pdf(x: f64, d1: f64, d2: f64) -> f64 {
     }
     ((d1 / 2.0) * (d1 / d2).ln() + (d1 / 2.0 - 1.0) * x.ln() - ((d1 + d2) / 2.0) * (1.0 + d1 * x / d2).ln() - ln_beta(d1 / 2.0, d2 / 2.0)).exp()
 }
+
+const MAX_BINOM_TRIALS: f64 = 2_147_483_646.0;
 
 fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
     if k < 0.0 || k > n {
@@ -407,7 +412,7 @@ pub(super) fn binom_dist(a: &[Arg], _: C) -> R<Value> {
     let n = num(a, 1)?.trunc();
     let p = num(a, 2)?;
     let cum = boolean(a, 3)?;
-    if k < 0.0 || k > n || !(0.0..=1.0).contains(&p) {
+    if k < 0.0 || n > MAX_BINOM_TRIALS || k > n || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
     }
     num_val(if cum { binom_cdf(k, n, p) } else { binom_pmf(k, n, p) })
@@ -418,7 +423,7 @@ pub(super) fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
     let p = num(a, 1)?;
     let s1 = num(a, 2)?.trunc();
     let s2 = if has(a, 3) { num(a, 3)?.trunc() } else { s1 };
-    if !(0.0..=1e15).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
+    if !(0.0..=MAX_BINOM_TRIALS).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
         return Err(CellError::Num);
     }
     if s2 - s1 > 10_000.0 {
