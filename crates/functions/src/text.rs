@@ -350,10 +350,10 @@ fn numbervalue(a: &[Arg], c: &mut dyn Ctx) -> R<Value> {
 /// Formats `x` (already rounded) with `decimals` places and optional thousands separators.
 fn format_fixed(x: f64, decimals: i64, commas: bool) -> String {
     let d = decimals.max(0) as usize;
-    let s = format!("{:.*}", d, x.abs());
+    let s = x.abs().to_string();
     let (int_part, frac) = match s.split_once('.') {
-        Some((i, f)) => (i.to_string(), Some(f.to_string())),
-        None => (s.clone(), None),
+        Some((i, f)) => (i, f),
+        None => (s.as_str(), ""),
     };
     let int_part = if commas {
         let b = int_part.as_bytes();
@@ -366,12 +366,14 @@ fn format_fixed(x: f64, decimals: i64, commas: bool) -> String {
         }
         o
     } else {
-        int_part
+        int_part.to_string()
     };
     let mut out = int_part;
-    if let Some(f) = frac {
+    if d > 0 {
+        let frac_len = frac.len().min(d);
         out.push('.');
-        out.push_str(&f);
+        out.push_str(&frac[..frac_len]);
+        out.extend(std::iter::repeat_n('0', d - frac_len));
     }
     out
 }
@@ -1237,6 +1239,18 @@ mod tests {
         is_text(ev("DOLLAR", vec![n(0.5), n(0.0)]), "$1");
         is_text(ev("USDOLLAR", vec![n(1.0)]), "$1.00");
         is_text(ev("USDOLLAR", vec![n(-1234.567), n(1.0)]), "($1,234.6)");
+        let fixed_16 = format!("1.1{}", "0".repeat(15));
+        let dollar_16 = format!("$1.1{}", "0".repeat(15));
+        let fixed_20 = format!("1.005{}", "0".repeat(17));
+        let dollar_20 = format!("$1.005{}", "0".repeat(17));
+        let fixed_127 = format!("1.1{}", "0".repeat(126));
+        let dollar_127 = format!("$1.1{}", "0".repeat(126));
+        is_text(ev("FIXED", vec![n(1.1), n(16.0)]), &fixed_16);
+        is_text(ev("DOLLAR", vec![n(1.1), n(16.0)]), &dollar_16);
+        is_text(ev("FIXED", vec![n(1.005), n(20.0)]), &fixed_20);
+        is_text(ev("DOLLAR", vec![n(1.005), n(20.0)]), &dollar_20);
+        is_text(ev("FIXED", vec![n(1.1), n(127.0)]), &fixed_127);
+        is_text(ev("DOLLAR", vec![n(1.1), n(127.0)]), &dollar_127);
         is_text(ev("T", vec![t("x")]), "x");
         is_text(ev("T", vec![n(1.0)]), "");
     }
