@@ -185,7 +185,7 @@ fn right_to_left_picker_is_anchored_to_the_cells_right_edge() {
     assert!(screen.contains_rect(cell_rect), "test cell should be on screen: {cell_rect:?} in {screen:?}");
     let cell_right = cell_rect.right();
     h.state_mut().run("ui.datePicker", json!({})).unwrap();
-    h.run_steps(1);
+    h.run_steps(3);
     let picker = h.ctx.memory(|m| m.area_rect(egui::Id::unique("gridcraft.date_picker")));
     let picker_width = picker.map_or(0.0, |r| r.width());
     let picker_right = picker.map(|r| r.left() + picker_width);
