@@ -394,13 +394,20 @@ fn fixed(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (r, d) = rounded(a, 2.0)?;
     let no_commas = opt_bool(a, 2, false)?;
     let body = format_fixed(r, d, !no_commas);
+    if body.len() + if r < 0.0 { 1 } else { 0 } > 255 {
+        return Err(CellError::Value);
+    }
     text_val(if r < 0.0 { format!("-{body}") } else { body })
 }
 
 fn dollar(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     let (r, d) = rounded(a, 2.0)?;
     let body = format_fixed(r, d, true);
-    text_val(if r < 0.0 { format!("(${body})") } else { format!("${body}") })
+    let out = if r < 0.0 { format!("(${body})") } else { format!("${body}") };
+    if out.len() > 254 {
+        return Err(CellError::Value);
+    }
+    text_val(out)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1239,6 +1246,26 @@ mod tests {
         is_text(ev("USDOLLAR", vec![n(-1234.567), n(1.0)]), "($1,234.6)");
         is_text(ev("T", vec![t("x")]), "x");
         is_text(ev("T", vec![n(1.0)]), "");
+    }
+
+    #[test]
+    fn fixed_and_dollar_output_limits() {
+        assert!(matches!(ev("FIXED", vec![n(1e191), n(0.0)]), Value::Text(ref s) if s.len() == 255));
+        is_err(ev("FIXED", vec![n(1e192), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("FIXED", vec![n(-1e253), n(0.0), b(true)]), Value::Text(ref s) if s.starts_with('-')));
+        is_err(ev("FIXED", vec![n(-1e191), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("FIXED", vec![n(1e189), n(1.0)]), Value::Text(ref s) if s.len() == 255));
+        is_err(ev("FIXED", vec![n(1e190), n(1.0)]), CellError::Value);
+
+        assert!(matches!(ev("DOLLAR", vec![n(1e189), n(0.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1e190), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(-1e188), n(0.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(-1e189), n(0.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(1.23456789e187), n(2.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1.23456789e188), n(2.0)]), CellError::Value);
+        is_err(ev("DOLLAR", vec![n(-1.23456789e186), n(2.0)]), CellError::Value);
+        assert!(matches!(ev("DOLLAR", vec![n(1e189), n(-1.0)]), Value::Text(ref s) if s.len() == 254));
+        is_err(ev("DOLLAR", vec![n(1e190), n(-1.0)]), CellError::Value);
     }
 
     #[test]
