@@ -175,7 +175,7 @@ fn right_to_left_picker_is_anchored_to_the_cells_right_edge() {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("view.rightToLeft", json!({"on": true})).unwrap();
-    let mut h = crate::common::harness_with(crate::common::builder().with_size(egui::vec2(1600.0, 800.0)), crate::common::app(session), 4);
+    let mut h = crate::common::harness_with(crate::common::builder().with_size(egui::vec2(2400.0, 1000.0)), crate::common::app(session), 4);
     let cell_right = {
         let app = h.state();
         let sheet = app.session.active().unwrap().wb.active().unwrap();
@@ -184,10 +184,12 @@ fn right_to_left_picker_is_anchored_to_the_cells_right_edge() {
     };
     h.state_mut().run("ui.datePicker", json!({})).unwrap();
     h.run_steps(1);
-    let picker_right = h.ctx.memory(|m| m.area_rect(egui::Id::unique("gridcraft.date_picker"))).map(|r| r.right());
+    let picker = h.ctx.memory(|m| m.area_rect(egui::Id::unique("gridcraft.date_picker")));
+    let picker_width = picker.map_or(0.0, |r| r.width());
+    let picker_right = picker.map(|r| r.left() + picker_width);
     assert!(
-        picker_right.is_some_and(|right| (right - cell_right).abs() < 1.0),
-        "picker should end at the RTL cell's right edge: {picker_right:?} vs {cell_right}"
+        picker_width > 0.0 && picker_right.is_some_and(|right| (right - cell_right).abs() < 1.0),
+        "picker should end at the RTL cell's right edge (width {picker_width}): {picker_right:?} vs {cell_right}"
     );
 }
 
