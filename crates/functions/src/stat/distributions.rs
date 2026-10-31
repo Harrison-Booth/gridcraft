@@ -1,5 +1,8 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
-use super::*;
+use super::{
+    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Distributions
@@ -48,12 +51,22 @@ fn f_cdf(x: f64, d1: f64, d2: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
+    if x == 1.0 && d1 == d2 {
+        return 0.5;
+    }
+    if d1 >= 1e8 && d2 / d1 <= 1e-8 {
+        return reg_gamma_q(d2 / 2.0, d2 / (2.0 * (x + d2 / d1)));
+    }
     reg_inc_beta(d1 * x / (d1 * x + d2), d1 / 2.0, d2 / 2.0)
 }
 
 fn f_upper(x: f64, d1: f64, d2: f64) -> f64 {
     if x <= 0.0 {
         return 1.0;
+    }
+    if d1 >= 1e8 && d2 / d1 <= 1e-8 {
+        // With a much larger numerator degree, the scaled beta tail converges to a gamma tail.
+        return reg_gamma_p(d2 / 2.0, d2 / (2.0 * (x + d2 / d1)));
     }
     reg_inc_beta(d2 / (d2 + d1 * x), d2 / 2.0, d1 / 2.0)
 }
@@ -344,7 +357,7 @@ fn f_args(a: &[Arg]) -> R<(f64, f64, f64)> {
     let x = num(a, 0)?;
     let d1 = num(a, 1)?.trunc();
     let d2 = num(a, 2)?.trunc();
-    if d1 < 1.0 || d2 < 1.0 || d1 >= 1e10 || d2 >= 1e10 {
+    if d1 < 1.0 || d2 < 1.0 || d1 > 1e10 || d2 > 1e10 {
         return Err(CellError::Num);
     }
     Ok((x, d1, d2))
@@ -375,7 +388,8 @@ pub(super) fn f_inv(a: &[Arg], _: C) -> R<Value> {
     if p == 0.0 {
         return num_val(0.0);
     }
-    num_val(invert(|x| f_cdf(x, d1, d2), p, 0.0, 1.0, 1e60))
+    let value = if p < 0.5 { invert(|x| f_cdf(x, d1, d2), p, 0.0, 1.0, 1e60) } else { invert(|x| f_upper(x, d1, d2), 1.0 - p, 0.0, 1.0, 1e60) };
+    num_val(value)
 }
 
 pub(super) fn f_inv_rt(a: &[Arg], _: C) -> R<Value> {

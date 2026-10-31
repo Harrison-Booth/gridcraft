@@ -397,11 +397,25 @@ fn t_chi_f() {
     close_tol(ev("F.DIST.RT", vec![n(15.2069), n(6.0), n(4.0)]), 0.01, 1e-6);
     close_tol(ev("FDIST", vec![n(15.2069), n(6.0), n(4.0)]), 0.01, 1e-6);
     close_tol(ev("F.INV", vec![n(0.01), n(6.0), n(4.0)]), 0.10930991, D7);
+    close_tol(ev("F.INV", vec![n(0.99), n(6.0), n(4.0)]), 15.20686, D7);
     close_tol(ev("F.INV.RT", vec![n(0.01), n(6.0), n(4.0)]), 15.20686, D7);
     close_tol(ev("FINV", vec![n(0.01), n(6.0), n(4.0)]), 15.20686, D7);
     close_tol(ev("F.TEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
     close_tol(ev("FTEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
     is_err(ev("F.DIST", vec![n(1.0), n(0.0), n(4.0), b(true)]), CellError::Num);
+}
+
+#[test]
+fn f_distributions_accept_ten_billion_degrees() {
+    close_tol(ev("F.DIST", vec![n(0.0), n(10_000_000_000.0), n(1.0), b(false)]), 0.0, 0.0);
+    close_tol(ev("F.DIST.RT", vec![n(0.0), n(1.0), n(10_000_000_000.0)]), 1.0, 0.0);
+    close_tol(ev("F.DIST", vec![n(0.01), n(1_000_000_000.0), n(1.0), b(true)]), 1.52397e-23, 1e-28);
+    close_tol(ev("F.DIST", vec![n(1.0), n(10_000_000_000.0), n(10_000_000_000.0), b(true)]), 0.5, 0.0);
+    close_tol(ev("F.DIST", vec![n(1_000_000.0), n(10_000_000_000.0), n(1.0), b(true)]), 0.999202115, 1e-8);
+    close_tol(ev("F.INV", vec![n(0.5), n(10_000_000_000.0), n(1.0)]), 2.198110953542527, 2e-6);
+    close_tol(ev("F.DIST.RT", vec![n(0.0), n(9_999_999_999.0), n(1.0)]), 1.0, 0.0);
+    is_err(ev("F.DIST.RT", vec![n(0.0), n(10_000_000_001.0), n(1.0)]), CellError::Num);
+    is_err(ev("F.DIST.RT", vec![n(0.0), n(1.0), n(10_000_000_001.0)]), CellError::Num);
 }
 
 #[test]
