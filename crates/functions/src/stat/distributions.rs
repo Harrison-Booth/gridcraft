@@ -1,5 +1,8 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
-use super::*;
+use super::{
+    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Distributions
@@ -545,7 +548,7 @@ pub(super) fn beta_dist(a: &[Arg], _: C) -> R<Value> {
     if cum {
         return num_val(reg_inc_beta(z, al, be));
     }
-    if (z == 0.0 && al < 1.0) || (z == 1.0 && be < 1.0) {
+    if (z == 0.0 && al <= 1.0) || (z == 1.0 && be <= 1.0) {
         return Err(CellError::Num);
     }
     let lp = if z == 0.0 || z == 1.0 {
