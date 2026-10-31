@@ -480,6 +480,19 @@ fn continuous() {
 }
 
 #[test]
+fn gamma_density_at_zero_shape_one_is_num() {
+    for scale in [0.1, 0.9, 1.0, 1.9, 2.0, 10_000_000_000.0] {
+        is_err(ev("GAMMA.DIST", vec![n(0.0), n(1.0), n(scale), b(false)]), CellError::Num);
+    }
+    is_err(ev("GAMMA.DIST", vec![n(0.0), n(0.5), n(1.0), b(false)]), CellError::Num);
+    close_tol(ev("GAMMA.DIST", vec![n(0.0), n(2.0), n(1.0), b(false)]), 0.0, 0.0);
+    close_tol(ev("GAMMA.DIST", vec![n(0.0), n(1.0), n(2.0), b(true)]), 0.0, 0.0);
+    close_tol(ev("GAMMA.DIST", vec![n(2.0), n(1.0), n(2.0), b(false)]), 0.5 * (-1.0f64).exp(), 1e-15);
+    close_tol(ev("GAMMA.DIST", vec![n(2.0), n(1.0), n(2.0), b(true)]), 1.0 - (-1.0f64).exp(), 1e-15);
+    is_err(ev("GAMMA.DIST", vec![n(-0.1), n(1.0), n(2.0), b(false)]), CellError::Num);
+}
+
+#[test]
 fn aggregate_helper() {
     let vals = vec![nv(1.0), nv(2.0), tv("x"), Value::Empty, Value::Bool(true), nv(6.0)];
     close(aggregate_values(1, &vals), 3.0);
