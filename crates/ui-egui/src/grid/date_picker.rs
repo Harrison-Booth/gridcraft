@@ -55,9 +55,10 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
     let screen = ui.ctx().content_rect();
     let (at, pivot) = if geo.rtl {
         if rect.bottom() + 240.0 <= screen.bottom() {
-            (rect.right_bottom(), egui::Align2::LEFT_TOP)
+            // Anchor to the screen edge so the popup extends left from the cell in RTL.
+            (egui::pos2(rect.right() - screen.right(), rect.bottom()), egui::Align2::RIGHT_TOP)
         } else {
-            (rect.right_top(), egui::Align2::LEFT_BOTTOM)
+            (egui::pos2(rect.right() - screen.right(), rect.top()), egui::Align2::RIGHT_BOTTOM)
         }
     } else if rect.bottom() + 240.0 <= screen.bottom() {
         (rect.left_bottom(), egui::Align2::RIGHT_TOP)

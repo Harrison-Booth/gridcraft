@@ -184,10 +184,10 @@ fn right_to_left_picker_is_anchored_to_the_cells_right_edge() {
     };
     h.state_mut().run("ui.datePicker", json!({})).unwrap();
     h.run_steps(1);
-    let picker_left = h.ctx.memory(|m| m.area_rect(egui::Id::unique("gridcraft.date_picker"))).map(|r| r.left());
+    let picker_right = h.ctx.memory(|m| m.area_rect(egui::Id::unique("gridcraft.date_picker"))).map(|r| r.right());
     assert!(
-        picker_left.is_some_and(|left| (left - cell_right).abs() < 1.0),
-        "picker should begin at the RTL cell's right edge: {picker_left:?} vs {cell_right}"
+        picker_right.is_some_and(|right| (right - cell_right).abs() < 1.0),
+        "picker should end at the RTL cell's right edge: {picker_right:?} vs {cell_right}"
     );
 }
 
