@@ -191,7 +191,7 @@ fn right_to_left_picker_is_anchored_to_the_cells_right_edge() {
     let picker_right = picker.map(|r| r.left() + picker_width);
     assert!(
         picker_width > 0.0 && picker.is_some_and(|r| screen.contains_rect(r)) && picker_right.is_some_and(|right| (right - cell_right).abs() < 1.0),
-        "picker should end at the RTL cell's right edge (width {picker_width}): {picker_right:?} vs {cell_right}"
+        "picker should end at the RTL cell's right edge: picker={picker:?}, cell={cell_rect:?}, screen={screen:?}"
     );
 }
 
