@@ -175,20 +175,22 @@ fn right_to_left_picker_is_anchored_to_the_cells_right_edge() {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("view.rightToLeft", json!({"on": true})).unwrap();
-    let mut h = crate::common::harness_with(crate::common::builder().with_size(egui::vec2(2400.0, 1000.0)), crate::common::app(session), 4);
-    let cell_right = {
+    let mut h = crate::common::harness(session);
+    let (cell_rect, screen) = {
         let app = h.state();
         let sheet = app.session.active().unwrap().wb.active().unwrap();
         let geo = gridcraft_ui_egui::grid::Geo::new(sheet, app.grid.rect.unwrap(), app.view().scroll);
-        geo.screen_cell_rect(sheet, CellRef::new(0, 0)).right()
+        (geo.screen_cell_rect(sheet, CellRef::new(6, 0)), h.ctx.content_rect())
     };
+    assert!(screen.contains_rect(cell_rect), "test cell should be on screen: {cell_rect:?} in {screen:?}");
+    let cell_right = cell_rect.right();
     h.state_mut().run("ui.datePicker", json!({})).unwrap();
     h.run_steps(1);
     let picker = h.ctx.memory(|m| m.area_rect(egui::Id::unique("gridcraft.date_picker")));
     let picker_width = picker.map_or(0.0, |r| r.width());
     let picker_right = picker.map(|r| r.left() + picker_width);
     assert!(
-        picker_width > 0.0 && picker_right.is_some_and(|right| (right - cell_right).abs() < 1.0),
+        picker_width > 0.0 && picker.is_some_and(|r| screen.contains_rect(r)) && picker_right.is_some_and(|right| (right - cell_right).abs() < 1.0),
         "picker should end at the RTL cell's right edge (width {picker_width}): {picker_right:?} vs {cell_right}"
     );
 }
