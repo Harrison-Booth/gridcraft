@@ -1,5 +1,8 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
-use super::*;
+use super::{
+    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Distributions
@@ -19,7 +22,14 @@ fn t_cdf(t: f64, v: f64) -> f64 {
 }
 
 fn t_pdf(t: f64, v: f64) -> f64 {
-    (ln_gamma((v + 1.0) / 2.0) - ln_gamma(v / 2.0) - 0.5 * (v * std::f64::consts::PI).ln() - (v + 1.0) / 2.0 * (1.0 + t * t / v).ln()).exp()
+    let z = v / 2.0;
+    let log_gamma_ratio = if z >= 16.0 {
+        let inv_z = 1.0 / z;
+        0.5 * z.ln() - inv_z / 8.0 + inv_z.powi(3) / 192.0 - inv_z.powi(5) / 640.0 + 17.0 * inv_z.powi(7) / 14_336.0
+    } else {
+        ln_gamma(z + 0.5) - ln_gamma(z)
+    };
+    (log_gamma_ratio - 0.5 * (v.ln() + std::f64::consts::PI.ln()) - (v + 1.0) / 2.0 * (t * t / v).ln_1p()).exp()
 }
 
 /// t ≥ 0 with P(T > t) = q, q in (0, 0.5].

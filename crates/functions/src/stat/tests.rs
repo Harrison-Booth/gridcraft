@@ -360,6 +360,7 @@ fn normal() {
 
 #[test]
 fn t_chi_f() {
+    close_tol(ev("T.DIST", vec![n(0.0), n(6e307), b(false)]), 0.3989422804, 1e-10);
     close_tol(ev("T.DIST", vec![n(60.0), n(1.0), b(true)]), 0.99469533, D7);
     close_tol(ev("T.DIST", vec![n(8.0), n(3.0), b(false)]), 0.00073691, 1e-5);
     close_tol(ev("T.DIST.2T", vec![n(1.959999998), n(60.0)]), 0.054644930, D7);
@@ -402,6 +403,13 @@ fn t_chi_f() {
     close_tol(ev("F.TEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
     close_tol(ev("FTEST", vec![c(&[6.0, 7.0, 9.0, 15.0, 21.0]), c(&[20.0, 28.0, 31.0, 38.0, 40.0])]), 0.64831785, D7);
     is_err(ev("F.DIST", vec![n(1.0), n(0.0), n(4.0), b(true)]), CellError::Num);
+}
+
+#[test]
+fn t_density_is_stable_for_large_degrees() {
+    close_tol(ev("T.DIST", vec![n(0.0), n(100_000_000.0), b(false)]), 0.398942279404077, 1e-12);
+    close_tol(ev("T.DIST", vec![n(0.0), n(10_000_000_000.0), b(false)]), 0.3989422803914591, 1e-12);
+    close_tol(ev("T.DIST", vec![n(1.0), n(10_000_000_000_000_000.0), b(false)]), 0.24197072451914337, 1e-12);
 }
 
 #[test]
