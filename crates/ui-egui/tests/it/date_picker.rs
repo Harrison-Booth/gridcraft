@@ -175,7 +175,7 @@ fn right_to_left_picker_is_anchored_to_the_cells_right_edge() {
     let mut session = Session::new();
     session.new_workbook();
     session.execute("view.rightToLeft", json!({"on": true})).unwrap();
-    let mut h = crate::common::harness(session);
+    let mut h = harness(session);
     let (cell_rect, screen) = {
         let app = h.state();
         let sheet = app.session.active().unwrap().wb.active().unwrap();
