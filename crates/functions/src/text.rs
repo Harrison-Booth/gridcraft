@@ -111,12 +111,31 @@ fn len(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     num_val(text(a, 0)?.chars().count() as f64)
 }
 
+fn lower_char(ch: char) -> char {
+    match ch.to_lowercase().next() {
+        Some(lower) => lower,
+        None => ch,
+    }
+}
+
+fn upper_char(ch: char) -> char {
+    let mut uppercase = ch.to_uppercase();
+    match uppercase.next() {
+        Some(upper) if uppercase.next().is_none() => upper,
+        _ => ch,
+    }
+}
+
+fn proper_upper_char(ch: char) -> char {
+    if ch == '\u{130}' { 'I' } else { upper_char(ch) }
+}
+
 fn lower(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_val(text(a, 0)?.to_lowercase())
+    text_val(text(a, 0)?.chars().map(lower_char).collect::<String>())
 }
 
 fn upper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
-    text_val(text(a, 0)?.to_uppercase())
+    text_val(text(a, 0)?.chars().map(upper_char).collect::<String>())
 }
 
 fn proper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
@@ -126,9 +145,9 @@ fn proper(a: &[Arg], _c: &mut dyn Ctx) -> R<Value> {
     for ch in s.chars() {
         if ch.is_alphabetic() {
             if prev_letter {
-                out.extend(ch.to_lowercase());
+                out.push(lower_char(ch));
             } else {
-                out.extend(ch.to_uppercase());
+                out.push(proper_upper_char(ch));
             }
             prev_letter = true;
         } else {
@@ -1123,6 +1142,20 @@ mod tests {
     fn case_and_cleanup() {
         is_text(ev("UPPER", vec![t("abc")]), "ABC");
         is_text(ev("LOWER", vec![t("ABC")]), "abc");
+        is_text(ev("UPPER", vec![t("Straße")]), "STRAßE");
+        is_text(ev("LOWER", vec![t("İ")]), "i");
+        is_text(ev("PROPER", vec![t("İSTANBUL")]), "Istanbul");
+        is_text(ev("PROPER", vec![t("ß")]), "ß");
+        is_text(ev("PROPER", vec![t("ÉCOLE")]), "École");
+        let proper = ev("PROPER", vec![t("İSTANBUL Straße")]);
+        is_text(proper.clone(), "Istanbul Straße");
+        assert_eq!(
+            match proper {
+                Value::Text(s) => s.chars().count(),
+                _ => 0,
+            },
+            "Istanbul Straße".chars().count()
+        );
         is_text(ev("PROPER", vec![t("this is a TITLE")]), "This Is A Title");
         is_text(ev("PROPER", vec![t("2-way street's")]), "2-Way Street'S");
         is_text(ev("TRIM", vec![t("  a   b  c ")]), "a b c");
