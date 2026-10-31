@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    INTERFACE_SCALE_MAX, INTERFACE_SCALE_MIN, Json, NoticeKind, SheetApp, UiRequest, backstage, clamp_interface_scale, clean_error, dialogs,
+    formula_locale, i18n, json, now_ms, printing,
+};
 
 impl SheetApp {
     /// Runs an engine command (or a UI command) and handles UI requests it makes.
@@ -52,6 +55,15 @@ impl SheetApp {
         // Requests the command made (a dialog, a draft) belong to the window it left active.
         self.follow_active_window();
         self.after_engine();
+        if id == "formulas.autoSum"
+            && let Some(ed) = self.editor.as_mut()
+            && ed.text.starts_with('=')
+            && ed.text.ends_with("()")
+        {
+            ed.caret = ed.text.chars().count().saturating_sub(1);
+            ed.anchor = ed.caret;
+            ed.sync_caret = true;
+        }
         if id == "view.arrangeAll"
             && self.native_windows
             && let Ok(r) = &r
@@ -124,6 +136,10 @@ impl SheetApp {
     /// UI-only commands (dialogs, view toggles that aren't saved in the file).
     fn run_ui_command(&mut self, id: &str, p: &Json) -> Option<Result<Json, String>> {
         let r = match id {
+            "ui.datePicker" => {
+                crate::grid::date_picker::open(self);
+                Ok(Json::Null)
+            }
             "app.checkForUpdates" | "help.checkForUpdates" => {
                 self.check_for_updates();
                 Ok(Json::Null)
@@ -326,6 +342,14 @@ impl SheetApp {
             "backstage" => {
                 let page = params.get("page").and_then(Json::as_str).and_then(backstage::Page::parse).unwrap_or(backstage::Page::Home);
                 self.open_backstage(page);
+            }
+            // The macro step editor stays until it closes itself (its draft, overlays and debug
+            // run go with it), so another dialog can't replace it.
+            _ if self.dialog.as_ref().is_some_and(|d| d.name == "macroEditor") => {
+                self.message = Some((
+                    "Macro".into(),
+                    "Close the macro step editor first: it keeps its window until it closes itself, so its steps and debug run are not lost.".into(),
+                ));
             }
             other => self.dialog = dialogs::Dialog::open(self, other, params),
         }

@@ -1,4 +1,4 @@
-use super::*;
+use super::{Json, SheetApp, backstage, json, keytips};
 
 impl SheetApp {
     pub(super) fn ribbon_keys(&mut self, ctx: &egui::Context) {
@@ -14,6 +14,7 @@ impl SheetApp {
             && self.grid.fill_menu.is_none()
             && self.grid.filter_menu.is_none()
             && self.grid.list_picker.is_none()
+            && self.grid.date_picker.is_none()
             && self.grid.renaming_tab.is_none()
             && (before.is_some() || !egui::Popup::is_any_open(ctx));
         let actions = self.keytips.process(ctx, enabled);

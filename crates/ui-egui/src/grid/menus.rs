@@ -1,7 +1,7 @@
 use super::editor::popup_dismissed;
 use super::geo::Geo;
 use super::tables::filter_table_range;
-use super::*;
+use super::{Arc, Drag, FillTag, RangeRef, Rect, Sense, Sheet, SheetApp, Stroke, Tokens, col_to_letters, json, pos2, vec2};
 
 /// Draws the filter-header popup: sort, search/select-all, apply/clear, a lazily installed table autofilter, new-open search focus and dismissal.
 pub(super) fn filter_menu(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: bool) {
@@ -147,6 +147,7 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                 ("New Note", "ui:newNote"),
                 ("-", ""),
                 ("Format Cells…", "ui:formatCells"),
+                ("Date Picker…", "ui.datePicker"),
                 ("Pick From Drop-down List…", "ui:pickList"),
                 ("Define Name…", "ui:defineName"),
                 ("Link…", "ui:insertLink"),
@@ -178,6 +179,7 @@ pub(super) fn context_menu(app: &mut SheetApp, ui: &mut egui::Ui) {
                         "ui:newNote" => app.open_dialog("comment", json!({"threaded": false})),
                         "ui:defineName" => app.open_dialog("defineName", json!({})),
                         "ui:insertLink" => app.open_dialog("insertLink", json!({})),
+                        "ui.datePicker" => crate::grid::date_picker::open(app),
                         "ui:pickList" => app.open_dialog("pickList", json!({})),
                         "ui:filterValue" => {
                             if let Some(d) = app.session.active() {

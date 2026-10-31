@@ -1,10 +1,10 @@
 # UI parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-25 · **Change:** minor (AutoSum over a selected row puts its total to the right) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (opt-in keyboard date picker; Ctrl+arrow while pointing formula references; existing hyperlink fields; AutoSum over selected rows; ribbon catalog 276 / 292) · **Target:** Microsoft Excel (Microsoft 365), Excel for Mac 16.113.4
 
 Interaction, controls and feel, against Excel. Part of [target-app-parity.md](target-app-parity.md).
 **UI/UX fidelity: ~55% ready, 50–80 h** (estimated). Ribbon command coverage is measured
-separately in [parity-checklist.md](parity-checklist.md) (274 / 290).
+separately in [parity-checklist.md](parity-checklist.md) (276 / 292).
 
 Sources: `crates/ui-egui/src` (ribbon, grid, editor, formula bar, dialogs, panes),
 `crates/engine/src/cmd` (shortcuts in command specs), the owner's black-box notes
@@ -55,6 +55,7 @@ this logic, with one undo step.
 | Fill handle: drag to fill series, double-click to fill down, right-drag menu | fill done (Ctrl+drag swaps copy and series; month patterns use the workbook's 1900 or 1904 date system); right-drag menu partial: Copy Cells, Fill Series, Fill Formatting Only, Fill Without Formatting, and from a date Fill Days, Fill Weekdays, Fill Months and Fill Years, then Series…; a left-drag leaves an Auto Fill Options button with the same fill choices (gone once the workbook changes or the selection moves); Linear/Growth Trend and Flash Fill missing |
 | Drag-move and drag-copy cells (border drag, Ctrl/Option, Shift to insert) | done (M3) |
 | In-cell editing, Enter/Tab movement, Alt/Option+Enter line breaks | done |
+| Date entry (Ctrl+; enters today's date) | Date Picker is an opt-in cell context-menu action or Ctrl+Shift+P; arrow keys and Enter select a day, Escape cancels; month navigation uses the workbook's 1900/1904 date system and selection is one undo step. This is a GridCraft extension, not an observed Excel desktop behavior. |
 | Point mode (click/drag/arrow references), reference colouring, F4 | done; Command/Ctrl-click adds separate arguments with the edit's locale separator, and Shift-click extends the current reference from a fixed anchor on the same sheet. Pointer-event regressions cover repeated/reversed selections, manual separators, sheet switches and keyboard continuation. |
 | Number-format colors (`[Green]`, `[Color1]`–`[Color56]`) | Rendered in grid and PDF from shared RGB mappings (#1452) |
 | Point mode (click/drag/arrow references), reference colouring, F4 | done |
@@ -66,7 +67,7 @@ this logic, with one undo step.
 | Freeze panes, split panes | freeze done; split to verify |
 | A Table's header names and filter buttons in the column headings once its header row scrolls away | done (#1423): with the active cell in the Table, as in Excel; the button opens the column's filter menu, the rest of the heading still selects the column. Plain AutoFilter ranges keep their letters (Excel does the same) |
 | Copy as HTML table for other apps | done (#36, 10-10) |
-| Context menu on cells | 16 items (Cut, Copy, Paste, Paste Special, Insert, Delete, Clear Contents, Filter by value, Sort, New Comment, New Note, Format Cells, Pick From Drop-down List, Define Name, Link). Insert Copied Cells (Insert Cut Cells for whole rows/columns) while the clipboard holds a copy (#21). Show Details on a PivotTable's value, subtotal or grand total cell (`pivot.showDetails`). Missing: Insert Cut Cells for a cell block, paste-option icons, Quick Analysis, Get Data from Table, Show Changes, Smart Lookup |
+| Context menu on cells | 17 items (Cut, Copy, Paste, Paste Special, Insert, Delete, Clear Contents, Filter by value, Sort, New Comment, New Note, Format Cells, Date Picker, Pick From Drop-down List, Define Name, Link). Insert Copied Cells (Insert Cut Cells for whole rows/columns) while the clipboard holds a copy (#21). Show Details on a PivotTable's value, subtotal or grand total cell (`pivot.showDetails`). Missing: Insert Cut Cells for a cell block, paste-option icons, Quick Analysis, Get Data from Table, Show Changes, Smart Lookup |
 | Move and resize charts, pictures and shapes | charts can't be resized (#190) |
 | Context menus on row/column headers, sheet tabs, charts, shapes | headers and tabs done; objects partial |
 | Quick Analysis (Ctrl+Q) | missing |
@@ -77,7 +78,7 @@ this logic, with one undo step.
 
 | Area | Excel | GridCraft |
 |---|---|---|
-| Shortcuts bound to commands | 200+ documented shortcuts per platform | 59 command shortcuts plus grid and editor keys (55 distinct keys handled in `ui-egui`) |
+| Shortcuts bound to commands | 200+ documented shortcuts per platform | 60 command shortcuts plus grid and editor keys (55 distinct keys handled in `ui-egui`) |
 | Ctrl+arrow, Ctrl+Shift+arrow, Ctrl+Home/End, Page Up/Down, Alt+Page | yes | done |
 | Ctrl+1, Ctrl+; and Ctrl+Shift+; , Ctrl+D/R, Ctrl+E, Ctrl+T, Ctrl+K, Ctrl+Shift+L | yes | most done; audit pending |
 | F2, F4, F5, F9 family, Shift+F3, F11 | yes | most; F11 chart sheet missing (no chart sheets) |
@@ -106,7 +107,7 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+S, Ctrl+Shift+S, Ctrl+O, Ctrl+N, Ctrl+W | Cmd | save, save as, open, new, close | present |
 | Ctrl+F, Ctrl+H, Ctrl+G, Ctrl+K, Ctrl+T | Cmd (Ctrl+H) | find, replace, go to, hyperlink, table | present |
 | Ctrl+D, Ctrl+R, Ctrl+E, Ctrl+1, Ctrl+9 / 0, Ctrl+Shift+9 / 0 | Cmd (Ctrl+E on Mac: see below) | fill down/right, Flash Fill, Format Cells, hide/unhide | present |
-| Ctrl+- , Ctrl+Shift+= | Cmd | Delete / Insert cells dialog | present |
+| Ctrl+- , Ctrl+Shift+= , Ctrl+numpad + | Cmd | Delete / Insert cells dialog | present |
 | Ctrl+; , Ctrl+` | Control+; | current date, show formulas | present (Mac Control+; added) |
 | Arrows, Shift / Ctrl / Ctrl+Shift+arrows, Home, Ctrl+Home / End, Page Up / Down, Ctrl+Page Up / Down | Cmd+arrows | navigation and extension | present |
 | Tab, Shift+Tab, Enter, Shift+Enter, Ctrl+Space, Shift+Space, Delete, Esc | same | entry and selection | present |
@@ -142,7 +143,8 @@ otherwise. Number-format and border keys match the physical key (Ctrl+Shift+4, w
 | Ctrl+Q, Ctrl+A after a function name, Ctrl+Alt+P | same | Quick Analysis, Function Arguments, tooltips | missing |
 | Ctrl+Shift+A after a function name | Control+Shift+A | argument names: `=SUMIF(` becomes `=SUMIF(range,criteria,sum_range)`, the `(` added when missing; one Undo takes them back | **added** |
 | Ctrl+Shift+U | Control+Shift+U | expand or collapse the formula bar (`view.expandFormulaBar`), on the grid and while editing; on Windows and Linux it no longer underlines | **added** |
-| Ctrl+Shift+Page Up / Down, Ctrl+Alt+5, Ctrl+Shift+F1, Ctrl+F5–F10, Alt+F8 / F11 / F12 | same | group sheets, shape cycling, full screen, window keys, macros, VBA, Power Query | missing |
+| Alt+F8, Ctrl+Shift+letter | Option+F8, Cmd+Shift+letter | Macros dialog, a macro's own shortcut (letters GridCraft uses keep their meaning) | **added** |
+| Ctrl+Shift+Page Up / Down, Ctrl+Alt+5, Ctrl+Shift+F1, Ctrl+F5–F10, Alt+F11 / F12 | same | group sheets, shape cycling, full screen, window keys, VBA, Power Query | missing |
 | — | Cmd+= (calculate), Cmd+T (references while editing; F4 works), Shift+F7, Cmd+Shift+L | Mac-only extras | missing (Cmd+= is egui's zoom key; no thesaurus or Modify Cell Style) |
 
 On Windows, AltGr arrives as Ctrl+Alt: a Ctrl+Alt key that also types a character is treated as
@@ -151,9 +153,15 @@ a character (e.g. Ctrl+Alt+A for `ä`) never trigger a shortcut, Ctrl+letter one
 
 ## Dialogs
 
+Insert Hyperlink loads an existing cell link's address, display text and ScreenTip for editing
+(#2876). Keeping the display text unchanged preserves the cell's number or formula; Cancel
+keeps the original link and an edit can be undone in one step.
+
 Format Cells, Insert Function/Formula Builder, Find and Replace, Go To and Go To Special, Sort,
 Name Manager, Data Validation, Paste Special, Conditional Formatting manager, Page Setup, Goal
-Seek, Scenario Manager, Data Analysis, Forecast Sheet and others exist. Missing or partial: Options,
+Seek, Scenario Manager, Data Analysis, Forecast Sheet, Macros (macros, Automate scripts and a
+note on a VBA project; Run, Step Into, Edit, Create, Delete, Options), Record Macro, the macro step
+editor (Excel's VBA editor has no counterpart here) and others exist. Missing or partial: Options,
 Solver, Power Query editor, Insert Object, Equation editor, Protect/Allow Edit Ranges,
 Workbook Links, Accessibility checker. Like Excel's, every dialog opens centred and moves by its
 title bar, keeping its place while it is open (#1250).
@@ -187,8 +195,15 @@ scrollbar bugs 2–4 · pixel/feel pass against observed Excel 7–12.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Opt-in date picker: keyboard navigation, workbook date systems, and one-step cell update |
+| 2026-10-29 | minor | Formula pointing from the keyboard: Ctrl+arrow (⌘arrow) moves the pointed cell to the edge of its data and Ctrl+Shift+arrow (⌘⇧arrow) extends the pointed range there, as the same keys move and extend the selection, so typing `=COUNTIF(`, clicking the top of a column and pressing ⌘⇧↓ points at the whole column of data; the keys used to move or extend by one cell. A range reaching the sheet edge is written as whole columns or rows (`A:B`). The editor reads the modifiers of the arrow's own key event, so a keystroke pressed and released within one frame (a control client's `ui.key`, an automation tool) keeps its Shift and Ctrl |
+| 2026-10-29 | minor | Insert Hyperlink opens with an existing link's address, display text and ScreenTip (#2876). An address-only edit preserves the cell's content and formula; Cancel leaves the link unchanged, and Undo restores the edit |
+| 2026-10-27 | minor | Ctrl with the numpad's + inserts rows, columns or cells as Ctrl+Shift+= does, as in Excel; it did nothing because the numpad key arrives without Shift |
 | 2026-10-25 | minor | AutoSum (Alt+=, Home › AutoSum) over a selected row puts its total to the right of the row, or in its last cell when that is empty, as in Excel; it wrote a one-cell total under each cell. A selection's empty last column takes each row's total and its empty last row each column's, with the block's total in the corner when both are empty |
 | 2026-10-25 | minor | Paste Name lays out only the names in view, so a workbook with thousands of names opens it at once; the arrow keys still scroll the chosen name into view. Go To matches a `Sheet2!Name` reference and hides a workbook name behind the active sheet's own name in any case and script (`Größe` = `GRÖSSE`), as formulas do. The two Page Layout view rows are one; the 0.7 in side margin used when Align with Page Margins is off is marked unverified |
+| 2026-10-24 | minor | Macro step editor: step list with breakpoints, drag to reorder and a command picker, an inspector with reference boxes, a debug bar and grid overlays |
+| 2026-10-24 | minor | Automate › Macros group (Record Macro, Use Relative References, Run Macro), recording status in the status bar, Macros dialog with macros beside scripts, Record Macro dialog, Ctrl+Shift+letter macro shortcuts; View › Macros keytips open the dialogs |
+| 2026-10-24 | minor | Ribbon catalog count 275 / 291 → 276 / 292 (View › Macros › Record Macro) |
 | 2026-10-24 | minor | Go To lists the named ranges on every sheet, as Excel's does ("The Go to popup window shows named ranges on every worksheet in your workbook"): a name scoped to another sheet appears as `Sheet2!Name`, and hidden names, constants and formulas are left out. It keeps the references entered (newest first, ten at most), and a double-click on an entry goes there. The Reference box and `edit.goTo` take several names or references separated by commas (`Price, Type`, `B14:C22,F19:G30,H21:H29`) and select them all; `edit.goTo {list: true}` returns the list |
 | 2026-10-24 | minor | Right-clicking the status bar opens a menu of its statistics, as in Excel ("If you want to customize the status bar, right-click it, and then click the options that you want"): Average, Count and Sum are on by default, and Numerical Count, Minimum and Maximum are new and off by default. The choice is a preference (`view.statusBar`), kept in `prefs.json` |
 | 2026-10-24 | minor | Ctrl+Shift+U (Control+Shift+U on a Mac) expands or collapses the formula bar, as in Excel ("Expand or collapse the formula bar. Ctrl+Shift+U"), on the grid and in the cell editor or formula bar while editing. On Windows and Linux it used to underline the selection, as Ctrl+U does. The command is `view.expandFormulaBar` (`{on?}`, toggles without it) |
