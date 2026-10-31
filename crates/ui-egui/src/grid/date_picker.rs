@@ -55,10 +55,10 @@ pub(super) fn show(app: &mut SheetApp, ui: &mut egui::Ui, geo: &Geo, was_open: b
     let screen = ui.ctx().content_rect();
     let (at, pivot) = if geo.rtl {
         if rect.bottom() + 240.0 <= screen.bottom() {
-            // Area anchors align within the screen rectangle, so offset from its left edge.
-            (egui::pos2(rect.right() - screen.left(), rect.bottom()), egui::Align2::RIGHT_TOP)
+            // Area anchors start at the screen's top-left; use a negative offset from its right edge.
+            (egui::pos2(rect.right() - screen.right(), rect.bottom()), egui::Align2::RIGHT_TOP)
         } else {
-            (egui::pos2(rect.right() - screen.left(), rect.top()), egui::Align2::RIGHT_BOTTOM)
+            (egui::pos2(rect.right() - screen.right(), rect.top()), egui::Align2::RIGHT_BOTTOM)
         }
     } else if rect.bottom() + 240.0 <= screen.bottom() {
         (rect.left_bottom(), egui::Align2::RIGHT_TOP)
