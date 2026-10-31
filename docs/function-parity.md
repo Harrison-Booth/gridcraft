@@ -99,7 +99,7 @@ This improves series preparation; it does not change the model-fitting or season
 
 | Function | Excel parity note |
 |---|---|
-| HYPGEOM.DIST / HYPGEOMDIST | Valid zero-sample or zero-success populations return probability 1 at the sole supported count; counts outside support return zero in density and cumulative modes. Invalid population and sample parameters still return `#NUM!`. |
+| HYPGEOM.DIST / HYPGEOMDIST | Valid zero-sample or zero-success populations return probability 1 at the sole supported count; counts below support return zero in density and cumulative modes, while counts above support return zero in density mode and 1 in cumulative mode. Invalid population and sample parameters still return `#NUM!`. |
 
 **~82% ready.** The library is broad and has 96 test functions in `crates/functions` with many
 assertions each, but there is no conformance suite against Excel-computed results, and user
@@ -127,7 +127,7 @@ workbooks; results checked in as data, not Excel files) and fixing what it finds
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-30 | minor | HYPGEOM.DIST and HYPGEOMDIST support zero-sized samples and zero-success populations, and return zero for valid counts outside their support |
+| 2026-10-30 | minor | HYPGEOM.DIST and HYPGEOMDIST support zero-sized samples and zero-success populations; out-of-support counts return zero in density mode, zero below support in cumulative mode, and 1 above support |
 | 2026-10-25 | minor | LAMBDA row: a LAMBDA that calls itself more than 140 times, and a formula nested past the depth limit, give `#NUM!` (#1809; nesting gave `#CALC!` before). `=Foo(1)` where the defined name Foo holds `#N/A` gives `#N/A`, not `#NAME?` |
 | 2026-10-23 | minor | Number text coercion (VALUE, arithmetic, typed entry): a dollar sign before accounting parentheses (`$(1,234)`, `$ (5)`) and a percent sign after them (`(5)%`) read as negatives; `(-5)`, `((5))`, `($-5)`, `$5%`, `$(5)%` and dates or times in parentheses are `#VALUE!`, as observed in Excel 365 |
 | 2026-10-23 | minor | INDEX with only a row index on a reference of several rows and columns (`INDEX(A1:C3,2)`, `INDEX(A1:C3,0)`) is `#REF!`, as observed in Excel, so it also fails as a range endpoint and inside other functions; an empty column argument (`INDEX(A1:C3,2,)`) still gives the row. Checked that a column array with one index stays a 1×1 array (`TYPE` 64), which is what Excel returns |

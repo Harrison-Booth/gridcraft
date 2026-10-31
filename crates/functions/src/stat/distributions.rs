@@ -627,15 +627,16 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
     if k < lo {
         return num_val(0.0);
     }
+    if k >= hi {
+        return num_val(1.0);
+    }
     let mut s = 0.0;
-    let mut i = lo;
     let end = k.min(hi);
-    if end - i > 1e6 || i + 1.0 == i {
+    if end - lo > 1e6 || lo + 1.0 == lo {
         return Err(CellError::Num);
     }
-    while i <= end {
-        s += pmf(i);
-        i += 1.0;
+    for step in 0..=((end - lo) as u64) {
+        s += pmf(lo + step as f64);
     }
     num_val(s.min(1.0))
 }
