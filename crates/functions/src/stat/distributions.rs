@@ -615,19 +615,25 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
     let kk = num(a, 2)?.trunc();
     let nn = num(a, 3)?.trunc();
     let cum = if a.len() > 4 { boolean(a, 4)? } else { false };
-    if k < 0.0 || n <= 0.0 || kk <= 0.0 || nn <= 0.0 || n > nn || kk > nn || k > n.min(kk) || k < (n - nn + kk).max(0.0) {
+    if k < 0.0 || n < 0.0 || kk < 0.0 || nn <= 0.0 || n > nn || kk > nn {
         return Err(CellError::Num);
     }
+    let lo = (n - nn + kk).max(0.0);
+    let hi = n.min(kk);
     let pmf = |i: f64| (ln_comb(kk, i) + ln_comb(nn - kk, n - i) - ln_comb(nn, n)).exp();
     if !cum {
-        return num_val(pmf(k));
+        return num_val(if k < lo || k > hi { 0.0 } else { pmf(k) });
+    }
+    if k < lo {
+        return num_val(0.0);
     }
     let mut s = 0.0;
-    let mut i = (n - nn + kk).max(0.0);
-    if k - i > 1e6 || i + 1.0 == i {
+    let mut i = lo;
+    let end = k.min(hi);
+    if end - i > 1e6 || i + 1.0 == i {
         return Err(CellError::Num);
     }
-    while i <= k {
+    while i <= end {
         s += pmf(i);
         i += 1.0;
     }
