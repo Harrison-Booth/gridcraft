@@ -1,5 +1,8 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
-use super::*;
+use super::{
+    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Distributions
@@ -173,8 +176,14 @@ fn df_arg(a: &[Arg], i: usize) -> R<f64> {
 
 pub(super) fn t_dist(a: &[Arg], _: C) -> R<Value> {
     let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+    let v = num(a, 1)?.trunc();
     let cum = boolean(a, 2)?;
+    if v == 0.0 {
+        return Err(if cum { CellError::Num } else { CellError::Div0 });
+    }
+    if v < 0.0 {
+        return Err(CellError::Num);
+    }
     num_val(if cum { t_cdf(x, v) } else { t_pdf(x, v) })
 }
 

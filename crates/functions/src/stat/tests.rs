@@ -405,6 +405,17 @@ fn t_chi_f() {
 }
 
 #[test]
+fn t_dist_zero_degrees_error_depends_on_mode() {
+    for df in [0.0, 0.9, -0.1] {
+        is_err(ev("T.DIST", vec![n(0.0), n(df), b(false)]), CellError::Div0);
+        is_err(ev("T.DIST", vec![n(0.0), n(df), b(true)]), CellError::Num);
+    }
+    is_err(ev("T.DIST", vec![n(0.0), n(-1.0), b(false)]), CellError::Num);
+    close_tol(ev("T.DIST", vec![n(0.0), n(1.99), b(false)]), 1.0 / std::f64::consts::PI, 1e-15);
+    close_tol(ev("T.DIST", vec![n(0.0), n(1.0), b(false)]), 1.0 / std::f64::consts::PI, 1e-15);
+}
+
+#[test]
 fn binom_inv_huge_trials_returns() {
     // Above 2^53 neighbouring f64 values are more than 1 apart; the bisection must still end.
     let cases: [(&str, f64, f64, f64); 3] = [("BINOM.INV", 1e17, 0.5, 0.5), ("CRITBINOM", 1e300, 1.0, 0.5), ("BINOM.INV", 1e300, 0.5, 0.5)];
