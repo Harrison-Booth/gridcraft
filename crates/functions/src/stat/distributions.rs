@@ -1,5 +1,8 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
-use super::*;
+use super::{
+    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Distributions
@@ -618,7 +621,7 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
     if k < 0.0 || n < 0.0 || kk < 0.0 || nn <= 0.0 || n > nn || kk > nn {
         return Err(CellError::Num);
     }
-    let lo = (n - nn + kk).max(0.0);
+    let lo = (n - (nn - kk)).max(0.0);
     let hi = n.min(kk);
     let pmf = |i: f64| (ln_comb(kk, i) + ln_comb(nn - kk, n - i) - ln_comb(nn, n)).exp();
     if !cum {
