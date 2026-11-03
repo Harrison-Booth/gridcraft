@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Anchor, CellRef, Chart, ChartKind, EngineError, Json, LegendPos, RangeRef, Result, Series, Session, Sheet, anchor_mode_param, bad, block,
+    bool_param, cell_param_on, edit, f64_param, json, split_sheet, str_param, target_ranges, target_sheet, u32_param,
+};
 
 fn chart_areas(s: &Session, p: &Json) -> Result<Vec<RangeRef>> {
     if p.get("range").is_some() {
@@ -252,11 +255,13 @@ pub fn build_chart(s: &Session, p: &Json) -> Result<(usize, Chart)> {
             width: f64_param(p, "width").unwrap_or(480.0) as f32,
             height: f64_param(p, "height").unwrap_or(288.0) as f32,
             mode: anchor_mode_param(p).unwrap_or_default(),
+            hidden_end: None,
         },
         title,
         series,
         legend: if matches!(kind, ChartKind::Pie | ChartKind::Doughnut) { LegendPos::Right } else { LegendPos::Bottom },
         data_labels: false,
+        data_table: None,
         gridlines: !matches!(kind, ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst | ChartKind::Funnel),
         style: 1,
         x_title: None,
@@ -302,6 +307,9 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let Some(c) = sh.charts.get_mut(ci) else { return Ok(Json::Null) };
+        let moved_cell = at.is_some_and(|cell| cell != c.anchor.cell);
+        let horizontal = !moved_cell && (p.get("dx").is_some() || p.get("width").is_some());
+        let vertical = !moved_cell && (p.get("dy").is_some() || p.get("height").is_some());
         if let Some(t) = str_param(p, "type") {
             c.kind = chart_kind(t, str_param(p, "subtype").unwrap_or(""));
         }
@@ -339,6 +347,7 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(at) = at {
             c.anchor.cell = at;
+            if moved_cell { c.anchor.hidden_end = None; }
         }
         if let Some(w) = f64_param(p, "width") {
             c.anchor.width = w.clamp(20.0, 10000.0) as f32;
@@ -351,6 +360,11 @@ pub(super) fn chart_set(s: &mut Session, p: &Json) -> Result<Json> {
         }
         if let Some(v) = f64_param(p, "dy") {
             c.anchor.dy = v as f32;
+        }
+        let (snapshot, end) = (c.anchor, c.anchor.hidden_end);
+        if let Some(end) = end {
+            let end = crate::cmd::sheet::update_hidden_end(sh, &snapshot, end, horizontal, vertical);
+            if let Some(c) = sh.charts.get_mut(ci) { c.anchor.hidden_end = end; }
         }
         Ok(Json::Null)
     })

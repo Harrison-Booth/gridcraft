@@ -11,7 +11,7 @@ use gridcraft_functions::Timeline;
 use gridcraft_model::{Anchor, Cell, Chart, ChartKind, Formula, LegendPos, Series, Sheet, StyleId, Table, TableColumn, TotalsFn};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, split_sheet, str_param};
 use crate::selection::current_region;
 
 const CMD: &str = "data.forecastSheet";
@@ -315,7 +315,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         let vstyle = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.num_fmt = vfmt.clone());
         let mut sheet = Sheet::new(sheet_name.clone());
         let put = |sheet: &mut Sheet, row: u32, col: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style, py: None });
         };
         let formula = |sheet: &mut Sheet, row: u32, col: u32, text: String, style: StyleId| {
             let mut cell = Cell::formula(Formula::new(&text));
@@ -419,11 +419,20 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         sheet.charts.push(Chart {
             id: chart_id,
             kind: if opts.column_chart { ChartKind::ColumnClustered } else { ChartKind::Line },
-            anchor: Anchor { cell: CellRef::new(1, chart_col), dx: 0.0, dy: 0.0, width: 480.0, height: 288.0, mode: Default::default() },
+            anchor: Anchor {
+                cell: CellRef::new(1, chart_col),
+                dx: 0.0,
+                dy: 0.0,
+                width: 480.0,
+                height: 288.0,
+                mode: Default::default(),
+                hidden_end: None,
+            },
             title: None,
             series,
             legend: LegendPos::Bottom,
             data_labels: false,
+            data_table: None,
             gridlines: true,
             style: 1,
             x_title: None,

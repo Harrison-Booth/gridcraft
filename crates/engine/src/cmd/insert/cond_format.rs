@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Anchor, BorderLine, BorderStyle, Borders, CfOperator, CfRule, CfValueKind, Color, CondFormat, EngineError, Fill, Json, Result, Session, Shape,
+    ShapeKind, Style, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, ok, str_param, target_ranges, target_sheet, u32_param,
+};
 
 // ---------------------------------------------------------------- conditional formatting
 
@@ -325,11 +328,12 @@ pub(super) fn insert_icon(s: &mut Session, p: &Json) -> Result<Json> {
     let shape = Shape {
         id,
         kind: ShapeKind::Icon,
-        anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default() },
+        anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width: size, height: size, mode: anchor_mode_param(p).unwrap_or_default(), hidden_end: None },
         fill: color,
         line: Color::Auto,
         text: name,
         format: Default::default(),
+        math: Default::default(),
     };
     let sheet = d.wb.active_sheet();
     edit(s, |cx| {

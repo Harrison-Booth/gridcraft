@@ -1,10 +1,11 @@
 //! Worksheets and structure: insert/delete rows, columns and cells; sheet tabs.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
 use gridcraft_formula::adjust::{Axis, Edit};
-use gridcraft_model::{Anchor, AnchorMode, Sheet, Visibility};
+use gridcraft_model::{Anchor, AnchorEnd, AnchorMode, Sheet, Visibility, Workbook};
 use serde_json::{Value as Json, json};
 
 use super::{
@@ -81,11 +82,29 @@ fn lines(s: &Session, p: &Json, axis: Axis) -> Result<(u32, u32)> {
 /// Bottom-right line of an anchor (the `to` marker of a two-cell anchor) and the offset of that
 /// corner inside it, in points. Measured against `sh`'s current geometry.
 fn anchor_corner(sh: &Sheet, a: &Anchor) -> (u32, u32, f32, f32) {
+    if let Some(end) = a.hidden_end {
+        return (end.cell.col, end.cell.row, end.dx, end.dy);
+    }
     let x2 = sh.col_left(a.cell.col) + a.dx as f64 + a.width.max(0.0) as f64;
     let y2 = sh.row_top(a.cell.row) + a.dy as f64 + a.height.max(0.0) as f64;
     let tc = sh.col_at(x2);
     let tr = sh.row_at(y2);
     (tc, tr, (x2 - sh.col_left(tc)) as f32, (y2 - sh.row_top(tr)) as f32)
+}
+
+/// Recomputes only the changed component of a hidden far marker after an explicit object resize.
+pub(crate) fn update_hidden_end(sh: &Sheet, a: &Anchor, mut end: AnchorEnd, horizontal: bool, vertical: bool) -> Option<AnchorEnd> {
+    if horizontal {
+        let x2 = sh.col_left(a.cell.col) + a.dx as f64 + a.width.max(0.0) as f64;
+        end.cell.col = sh.col_at(x2);
+        end.dx = (x2 - sh.col_left(end.cell.col)) as f32;
+    }
+    if vertical {
+        let y2 = sh.row_top(a.cell.row) + a.dy as f64 + a.height.max(0.0) as f64;
+        end.cell.row = sh.row_at(y2);
+        end.dy = (y2 - sh.row_top(end.cell.row)) as f32;
+    }
+    (sh.is_row_hidden(end.cell.row) || sh.is_col_hidden(end.cell.col)).then_some(end)
 }
 
 /// Repositions one floating object's anchor for a structural insert/delete, honouring its
@@ -99,8 +118,14 @@ fn shift_anchor(sh: &Sheet, a: Anchor, corner: (u32, u32, f32, f32), axis: Axis,
         return a;
     }
     let main = if axis == Axis::Rows { a.cell.row } else { a.cell.col };
-    // A deleted anchor line collapses onto the line that takes its place.
+    // A deleted anchor line collapses onto the line that takes its place, and Excel drops the
+    // offset into it: the object's edge then sits on that line.
     let nmain = map_line(main).unwrap_or(at);
+    let a = match (map_line(main), axis) {
+        (None, Axis::Rows) => Anchor { dy: 0.0, ..a },
+        (None, Axis::Cols) => Anchor { dx: 0.0, ..a },
+        _ => a,
+    };
     let (nr, nc) = if axis == Axis::Rows { (nmain, a.cell.col) } else { (a.cell.row, nmain) };
     if a.mode == AnchorMode::MoveOnly {
         return Anchor { cell: CellRef::new(nr, nc), ..a };
@@ -113,9 +138,121 @@ fn shift_anchor(sh: &Sheet, a: Anchor, corner: (u32, u32, f32, f32), axis: Axis,
     let (nbr, nbc) = if axis == Axis::Rows { (nfar, tc) } else { (tr, nfar) };
     let x1 = sh.col_left(nc) + a.dx as f64;
     let y1 = sh.row_top(nr) + a.dy as f64;
-    let xn = sh.col_left(nbc) + tdx as f64;
-    let yn = sh.row_top(nbr) + tdy as f64;
-    Anchor { cell: CellRef::new(nr, nc), dx: a.dx, dy: a.dy, width: (xn - x1).max(0.0) as f32, height: (yn - y1).max(0.0) as f32, mode: a.mode }
+    let xn = sh.col_left(nbc) + if sh.is_col_hidden(nbc) { 0.0 } else { tdx as f64 };
+    let yn = sh.row_top(nbr) + if sh.is_row_hidden(nbr) { 0.0 } else { tdy as f64 };
+    let hidden_end = a.hidden_end.and_then(|end| {
+        let main = if axis == Axis::Rows { end.cell.row } else { end.cell.col };
+        let mapped = map_line(main)?;
+        let cell = if axis == Axis::Rows { CellRef::new(mapped, end.cell.col) } else { CellRef::new(end.cell.row, mapped) };
+        Some(AnchorEnd { cell, ..end })
+    });
+    Anchor {
+        cell: CellRef::new(nr, nc),
+        dx: a.dx,
+        dy: a.dy,
+        width: (xn - x1).max(0.0) as f32,
+        height: (yn - y1).max(0.0) as f32,
+        mode: a.mode,
+        hidden_end,
+    }
+}
+
+/// Where an object's anchor lands after a command changed row heights, column widths or hidden
+/// lines (`old` and `new` are the sheet before and after), as Excel places it: "move and size"
+/// keeps its top-left corner on its cell and follows its bottom-right corner (hiding a line shrinks
+/// it); "move but don't size" keeps its cell and size; "don't move or size" keeps its place on the
+/// sheet, so its anchor cell is found again in the new grid. An anchor the command itself changed
+/// (a move, a resize, an insert or delete that already re-fitted it) is left alone.
+fn refit_anchor(old: &Sheet, new: &Sheet, was: &Anchor, now: &Anchor) -> Anchor {
+    if was != now {
+        return *now;
+    }
+    match now.mode {
+        AnchorMode::MoveOnly => *now,
+        AnchorMode::Absolute => {
+            let x = old.col_left(was.cell.col) + was.dx as f64;
+            let y = old.row_top(was.cell.row) + was.dy as f64;
+            let (col, row) = (new.col_at(x), new.row_at(y));
+            let (dx, dy) = ((x - new.col_left(col)).max(0.0) as f32, (y - new.row_top(row)).max(0.0) as f32);
+            Anchor { cell: CellRef::new(row, col), dx, dy, ..*now }
+        }
+        AnchorMode::MoveAndSize => {
+            // A hidden first line has no room for the offset into it: Excel measures from its edge,
+            // in the old grid (where the corner is found) as in the new one.
+            let at = Anchor {
+                dx: (was.dx as f64).min(old.col_width(was.cell.col) as f64) as f32,
+                dy: (was.dy as f64).min(old.row_height(was.cell.row) as f64) as f32,
+                ..*was
+            };
+            let end = now.hidden_end.unwrap_or_else(|| {
+                let (col, row, dx, dy) = anchor_corner(old, &at);
+                AnchorEnd { cell: CellRef::new(row, col), dx, dy }
+            });
+            let row_hidden = new.is_row_hidden(end.cell.row);
+            let col_hidden = new.is_col_hidden(end.cell.col);
+            let hidden_end = (row_hidden || col_hidden).then_some(end);
+            let x1 = new.col_left(now.cell.col) + (now.dx as f64).min(new.col_width(now.cell.col) as f64);
+            let y1 = new.row_top(now.cell.row) + (now.dy as f64).min(new.row_height(now.cell.row) as f64);
+            let x2 = new.col_left(end.cell.col) + if col_hidden { 0.0 } else { end.dx as f64 };
+            let y2 = new.row_top(end.cell.row) + if row_hidden { 0.0 } else { end.dy as f64 };
+            let width = (x2 - x1).max(0.0) as f32;
+            let height = (y2 - y1).max(0.0) as f32;
+            Anchor { width, height, hidden_end, ..*now }
+        }
+    }
+}
+
+/// Re-fits every floating object of `after` to the grid its command left, honouring each object's
+/// [`AnchorMode`] (see [`refit_anchor`]). `before` is the workbook as the command found it; sheets
+/// are matched by position and name, and objects by id. Does nothing, and copies nothing, when no
+/// object's anchor changes.
+pub(crate) fn refit_objects(before: &Workbook, after: &mut Arc<Workbook>) {
+    /// A sheet index with its new chart, image and shape anchors, in that order.
+    type SheetFix = (usize, Vec<Anchor>, Vec<Anchor>, Vec<Anchor>);
+    let mut fixes: Vec<SheetFix> = Vec::new();
+    for (i, (old, new)) in before.sheets.iter().zip(after.sheets.iter()).enumerate() {
+        // Most commands leave most sheets alone, and most sheets have no objects.
+        if Arc::ptr_eq(old, new) || (old.charts.is_empty() && old.images.is_empty() && old.shapes.is_empty()) {
+            continue;
+        }
+        let same_grid = old.rows == new.rows
+            && old.cols == new.cols
+            && old.default_row_height == new.default_row_height
+            && old.default_col_width == new.default_col_width;
+        if same_grid || old.name != new.name {
+            continue;
+        }
+        // Prior anchors by object id, so a sheet of many objects is matched in one pass.
+        let old_charts: HashMap<u32, &Anchor> = old.charts.iter().map(|o| (o.id, &o.anchor)).collect();
+        let old_images: HashMap<u32, &Anchor> = old.images.iter().map(|o| (o.id, &o.anchor)).collect();
+        let old_shapes: HashMap<u32, &Anchor> = old.shapes.iter().map(|o| (o.id, &o.anchor)).collect();
+        let fit = |olds: &HashMap<u32, &Anchor>, id: u32, now: &Anchor| olds.get(&id).map_or(*now, |was| refit_anchor(old, new, was, now));
+        let charts: Vec<Anchor> = new.charts.iter().map(|n| fit(&old_charts, n.id, &n.anchor)).collect();
+        let images: Vec<Anchor> = new.images.iter().map(|n| fit(&old_images, n.id, &n.anchor)).collect();
+        let shapes: Vec<Anchor> = new.shapes.iter().map(|n| fit(&old_shapes, n.id, &n.anchor)).collect();
+        let unchanged = new.charts.iter().map(|o| &o.anchor).eq(charts.iter())
+            && new.images.iter().map(|o| &o.anchor).eq(images.iter())
+            && new.shapes.iter().map(|o| &o.anchor).eq(shapes.iter());
+        if !unchanged {
+            fixes.push((i, charts, images, shapes));
+        }
+    }
+    if fixes.is_empty() {
+        return;
+    }
+    let wb = Arc::make_mut(after);
+    for (i, charts, images, shapes) in fixes {
+        let Some(sh) = wb.sheet_mut(i) else { continue };
+        for (o, a) in sh.charts.iter_mut().zip(charts) {
+            o.anchor = a;
+        }
+        for (o, a) in sh.images.iter_mut().zip(images) {
+            o.anchor = a;
+        }
+        for (o, a) in sh.shapes.iter_mut().zip(shapes) {
+            o.anchor = a;
+        }
+    }
 }
 
 /// Shifts everything that has a position on the sheet for an insert/delete.
@@ -141,14 +278,7 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     };
     // Floating objects: snapshot their bottom-right corners against the pre-shift geometry, so a
     // re-fit after the shift measures against the grid the object actually lands on.
-    let obj_corners: Vec<(u32, u32, f32, f32)> = sh
-        .charts
-        .iter()
-        .map(|o| &o.anchor)
-        .chain(sh.images.iter().map(|o| &o.anchor))
-        .chain(sh.shapes.iter().map(|o| &o.anchor))
-        .map(|a| anchor_corner(sh, a))
-        .collect();
+    let obj_corners: Vec<(u32, u32, f32, f32)> = sh.object_anchors().map(|a| anchor_corner(sh, a)).collect();
     // Line info.
     let lines = if axis == Axis::Rows { &mut sh.rows } else { &mut sh.cols };
     let old = std::mem::take(lines);
@@ -193,22 +323,13 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
         std::mem::take(&mut sh.cell_pictures).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
-    // Floating objects follow their anchor lines per their [`AnchorMode`]. Corners were snapshotted
-    // as charts ++ images ++ shapes, matching the three slices below. New anchors are computed
-    // against the post-shift grid first (the re-fit needs its sizes), then written back.
-    let anchored = |ui: usize, a: Anchor| -> Anchor { obj_corners.get(ui).map_or(a, |&corner| shift_anchor(sh, a, corner, axis, at, &map_line)) };
-    let new_charts: Vec<Anchor> = sh.charts.iter().enumerate().map(|(i, o)| anchored(i, o.anchor)).collect();
-    let new_images: Vec<Anchor> = sh.images.iter().enumerate().map(|(i, o)| anchored(new_charts.len() + i, o.anchor)).collect();
-    let base = new_charts.len() + new_images.len();
-    let new_shapes: Vec<Anchor> = sh.shapes.iter().enumerate().map(|(i, o)| anchored(base + i, o.anchor)).collect();
-    for (o, a) in sh.charts.iter_mut().zip(new_charts) {
-        o.anchor = a;
-    }
-    for (o, a) in sh.images.iter_mut().zip(new_images) {
-        o.anchor = a;
-    }
-    for (o, a) in sh.shapes.iter_mut().zip(new_shapes) {
-        o.anchor = a;
+    // Floating objects follow their anchor lines per their [`AnchorMode`]. New anchors are
+    // computed against the post-shift grid first (the re-fit needs its sizes), then written back
+    // in the same `object_anchors` order the corners were snapshotted in.
+    let new_anchors: Vec<Anchor> =
+        sh.object_anchors().zip(&obj_corners).map(|(a, &corner)| shift_anchor(sh, *a, corner, axis, at, &map_line)).collect();
+    for (a, n) in sh.object_anchors_mut().zip(new_anchors) {
+        *a = n;
     }
     sh.sparklines.retain_mut(|sp| match map_cell(sp.cell) {
         Some(c) => {
@@ -231,9 +352,12 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
 }
 
-/// Rewrites every formula reference (and chart series) for a structural edit on `target`.
-pub(super) fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
-    super::edit::rewrite_all_formulas(wb, target, e);
+/// Rewrites every formula reference (chart series included), sparkline source and PivotTable
+/// source for a structural edit on `target`.
+pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
+    cx.edits.push((target.to_string(), e.clone()));
+    let wb = &mut cx.wb;
+    super::edit::rewrite_all_formulas(wb, target, e)?;
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let Some(sh) = wb.sheet_mut(si) else { continue };
@@ -243,15 +367,6 @@ pub(super) fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit
                 Err(_) => text.to_string(),
             }
         };
-        for ch in sh.charts.iter_mut() {
-            // The source block moves with its cells; one that was deleted is dropped.
-            ch.source = ch.source.as_deref().map(fix).filter(|s| !s.contains("#REF!"));
-            for se in ch.series.iter_mut() {
-                se.values = fix(&se.values);
-                se.categories = se.categories.as_deref().map(fix);
-                se.name = se.name.as_deref().map(fix);
-            }
-        }
         for sp in sh.sparklines.iter_mut() {
             sp.source = fix(&sp.source);
         }
@@ -268,6 +383,7 @@ pub(super) fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit
             }
         }
     }
+    Ok(())
 }
 
 /// Inserting or deleting cells moves the copied block away from the stored source range, so, like
@@ -296,7 +412,7 @@ fn check_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
         let last = if axis == Axis::Rows { u.end.row } else { u.end.col };
         if last >= at && last as u64 + count as u64 >= limit as u64 {
-            return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
+            return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
     Ok(())
@@ -325,7 +441,7 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
             // New lines take the format of the line before (Excel's "Format Same As Above").
             inherit_line_format(sh, axis, at, count);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Insert { axis, at, count });
+        rewrite(cx, &name, &Edit::Insert { axis, at, count })?;
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -390,7 +506,7 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
                 }
                 shift_sheet_features(sh, axis, at, count, false);
             }
-            rewrite(&mut cx.wb, &name, &Edit::Delete { axis, at, count });
+            rewrite(cx, &name, &Edit::Delete { axis, at, count })?;
         }
         cx.structural = true;
         Ok(Json::Null)
@@ -419,10 +535,10 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other("To prevent possible loss of data, columns cannot be shifted off of the worksheet.".into()));
     }
-    // The checks must authorize the sheet this command modifies (`target_sheet`), not whatever
-    // sheet is active: both carry the command's own `sheet` parameter on.
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1(), "sheet": p.get("sheet")}), Axis::Cols, before, count, true)?;
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1(), "sheet": p.get("sheet")}), Axis::Cols, from, count, false)?;
+    // The checks must authorize the sheet this command modifies, not whatever sheet is active:
+    // both get the index `target_sheet` resolved (from `sheet`, or a `Sheet!` range or cell).
+    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1(), "sheet": sheet}), Axis::Cols, before, count, true)?;
+    check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1(), "sheet": sheet}), Axis::Cols, from, count, false)?;
 
     let moved_from = if before <= from { from + count } else { from };
     if moved_from.checked_add(count).is_none_or(|end| end > MAX_COLS) {
@@ -442,7 +558,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             sh.cells.shift_cols(before, count as i64);
             shift_sheet_features(sh, Axis::Cols, before, count, true);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Insert { axis: Axis::Cols, at: before, count });
+        rewrite(cx, &name, &Edit::Insert { axis: Axis::Cols, at: before, count })?;
 
         let mut touched = Vec::new();
         {
@@ -480,14 +596,14 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
         for cell in touched {
             cx.touch(sheet, cell);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Move { from: source, to_row: 0, to_col: destination });
+        rewrite(cx, &name, &Edit::Move { from: source, to_row: 0, to_col: destination })?;
 
         {
             let sh = cx.sheet_mut(sheet)?;
             sh.cells.shift_cols(delete_at + count, -(count as i64));
             shift_sheet_features(sh, Axis::Cols, delete_at, count, false);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Delete { axis: Axis::Cols, at: delete_at, count });
+        rewrite(cx, &name, &Edit::Delete { axis: Axis::Cols, at: delete_at, count })?;
         *cx.sel = crate::Selection {
             active: CellRef::new(active_row, final_start),
             anchor: CellRef::new(active_row, final_start),
@@ -518,8 +634,8 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             RangeRef::new(CellRef::new(r.start.row.max(MAX_ROWS.saturating_sub(r.height())), r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col))
         };
-        if sh.cells.iter_range(doomed).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
-            return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
+        if sh.cells.iter_range(doomed).any(|(_, x)| x.has_content()) {
+            return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
     let right = shift == "right";
@@ -532,7 +648,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         }
         shift_cell_features(sh, &e);
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
-        rewrite(&mut cx.wb, &name, &e);
+        rewrite(cx, &name, &e)?;
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -567,7 +683,7 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
             shift_cell_features(sh, &e);
         }
         // References into the deleted cells become #REF!; the rest move.
-        rewrite(&mut cx.wb, &name, &e);
+        rewrite(cx, &name, &e)?;
         cx.structural = true;
         Ok(Json::Null)
     })?;

@@ -6,10 +6,12 @@
 //! `table.insertSlicer`) selects everything, i.e. applies no filter.
 
 use gridcraft_core::CellRef;
-use gridcraft_model::*;
+use gridcraft_model::{Anchor, AnchorMode, AutoFilter, FilterCriterion, Slicer, Workbook};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, bad, bool_param, cell_param_on, cmd, edit, f64_param, has_doc, str_param, target_sheet, u32_param,
+};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -140,7 +142,7 @@ fn insert_slicer(s: &mut Session, p: &Json) -> Result<Json> {
         table,
         column: column.clone(),
         caption: column,
-        anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width, height, mode: AnchorMode::MoveOnly },
+        anchor: Anchor { cell: at, dx: 4.0, dy: 4.0, width, height, mode: AnchorMode::MoveOnly, hidden_end: None },
         selected: None,
         columns,
     };
