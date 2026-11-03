@@ -1,4 +1,4 @@
-use super::*;
+use super::{Json, SheetApp, backstage, json, keytips};
 
 impl SheetApp {
     pub(super) fn ribbon_keys(&mut self, ctx: &egui::Context) {
@@ -14,6 +14,7 @@ impl SheetApp {
             && self.grid.fill_menu.is_none()
             && self.grid.filter_menu.is_none()
             && self.grid.list_picker.is_none()
+            && self.grid.date_picker.is_none()
             && self.grid.renaming_tab.is_none()
             && (before.is_some() || !egui::Popup::is_any_open(ctx));
         let actions = self.keytips.process(ctx, enabled);
@@ -59,7 +60,22 @@ impl SheetApp {
                 // Route to the ribbon control that owns this keytip: it opens its dropdown or
                 // runs its click handler with the right params (the engine command alone would
                 // be missing them).
-                keytips::Action::Control(id) => self.ui.keytip_invoke = Some(id),
+                //
+                // A control on another tab (a legacy menu key such as Alt+I, S for the Symbol
+                // gallery) shows its tab first, so the control is drawn and takes the request.
+                keytips::Action::Control(id) => {
+                    // A collapsed ribbon draws no controls either: it is expanded the same way.
+                    let other_tab = gridcraft_engine::find_command(id).and_then(|c| c.menu.first()).filter(|t| **t != self.ui.ribbon_tab);
+                    if other_tab.is_some() || self.ui.ribbon_collapsed {
+                        if let Some(tab) = other_tab {
+                            self.run_or_alert("ui.ribbonTab", json!({"tab": tab}));
+                        }
+                        self.ui.ribbon_collapsed = false;
+                        self.ui.keytip_invoke_next = Some(id);
+                    } else {
+                        self.ui.keytip_invoke = Some(id);
+                    }
+                }
             }
         }
     }
