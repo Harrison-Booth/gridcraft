@@ -307,56 +307,72 @@ fn reads_values_formulas_formats_and_layout() {
         assert!(report.warnings[0].contains("Excel 97-2003"), "{:?}", report.warnings);
         assert!(report.warnings.iter().any(|w| w.contains("Chart sheets")));
         assert_eq!(wb.sheets.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Sheet1", "Data"]);
-        assert_eq!(v(&wb, 0, "A1"), Value::from("Hello"));
-        assert_eq!(v(&wb, 0, "B1"), Value::Number(1.5));
-        assert_eq!(v(&wb, 0, "C1"), Value::Number(42.0));
-        assert_eq!(v(&wb, 0, "D1"), Value::from("Wörld"));
-        assert_eq!(v(&wb, 0, "A2"), Value::Bool(true));
-        assert_eq!(v(&wb, 0, "B2"), Value::Error(CellError::Div0));
-        assert_eq!(v(&wb, 0, "C2"), Value::Number(7.0));
-        assert_eq!(v(&wb, 0, "D2"), Value::Number(1.5));
-        // Formulas: text plus the cached result.
-        assert_eq!(ftext(&wb, "A3").as_deref(), Some("B1*2"));
-        assert_eq!(v(&wb, 0, "A3"), Value::Number(3.0));
-        assert_eq!(ftext(&wb, "B3").as_deref(), Some("SUM(B1:C1)"));
-        assert_eq!(ftext(&wb, "C3").as_deref(), Some("A1&\"!\""));
-        assert_eq!(v(&wb, 0, "C3"), Value::from("Hello!"));
-        assert_eq!(ftext(&wb, "D3").as_deref(), Some("B1>1"));
-        assert_eq!(v(&wb, 0, "D3"), Value::Bool(true));
-        assert_eq!(ftext(&wb, "E3").as_deref(), Some("Rate*2"));
-        assert_eq!(ftext(&wb, "F3").as_deref(), Some("ROUND(B1,0)"));
-        assert_eq!(ftext(&wb, "G3").as_deref(), Some("Data!A1"));
-        assert_eq!(v(&wb, 0, "H3"), Value::Error(CellError::NA));
-        // Shared formula: relative offsets resolve per cell.
-        assert_eq!(ftext(&wb, "B5").as_deref(), Some("A5*10"));
-        assert_eq!(ftext(&wb, "B6").as_deref(), Some("A6*10"));
-        // Array formula: the anchor holds it; the other cell's cached result is dropped so that
-        // the formula fills the range on recalculation (as when an .xlsx is read, #156).
-        let c5 = wb.sheets[0].cell(CellRef::parse("C5").unwrap()).unwrap().formula.clone().unwrap();
-        assert_eq!((c5.text.as_str(), c5.array), ("A5:A6*2", Some(RangeRef::parse("C5:C6").unwrap())));
-        assert_eq!(ftext(&wb, "C6"), None);
-        assert_eq!(v(&wb, 0, "C6"), Value::Empty);
-        // Number formats, merges, sizes, names, print area; embedded chart records ignored.
-        let sh = &wb.sheets[0];
-        assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("A4").unwrap())).num_fmt.as_str(), "yyyy-mm-dd");
-        assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("B4").unwrap())).num_fmt.as_str(), "0.00%");
-        assert_eq!(sh.merges, vec![RangeRef::parse("A7:B7").unwrap()]);
-        assert!(sh.cols.get(&0).unwrap().size.unwrap() > sh.default_col_width);
-        assert_eq!(sh.rows.get(&0).unwrap().size, Some(40.0));
-        assert!(!sh.rows.get(&0).unwrap().hidden && sh.rows.get(&0).unwrap().custom);
-        assert_eq!(sh.print.print_area, RangeRef::parse("A1:B2"));
-        assert_eq!(v(&wb, 0, "J10"), Value::Empty);
-        assert_eq!(wb.names.len(), 1);
-        assert_eq!((wb.names[0].name.as_str(), wb.names[0].formula.as_str()), ("Rate", "Data!$A$1"));
-        assert_eq!(v(&wb, 1, "A1"), Value::Number(7.0));
-        assert_eq!(wb.date_system, DateSystem::D1900);
-        // The import saves as .xlsx and reads back.
-        let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
-        assert_eq!(back.sheets[0].cell(CellRef::parse("A3").unwrap()).unwrap().formula.as_ref().unwrap().text, "B1*2");
-        assert_eq!(back.sheets[0].value(CellRef::parse("C3").unwrap()), Value::from("Hello!"));
+        assert_values_roundtrip(&wb);
+        assert_formula_roundtrip(&wb);
+        assert_layout_roundtrip(&wb);
+        assert_xlsx_conversion(&wb);
     }
     let (wb, _) = read_xls(&compound("Workbook", &sample(true))).unwrap();
     assert_eq!(wb.date_system, DateSystem::D1904);
+}
+
+fn assert_values_roundtrip(wb: &gridcraft_model::Workbook) {
+    assert_eq!(v(wb, 0, "A1"), Value::from("Hello"));
+    assert_eq!(v(wb, 0, "B1"), Value::Number(1.5));
+    assert_eq!(v(wb, 0, "C1"), Value::Number(42.0));
+    assert_eq!(v(wb, 0, "D1"), Value::from("Wörld"));
+    assert_eq!(v(wb, 0, "A2"), Value::Bool(true));
+    assert_eq!(v(wb, 0, "B2"), Value::Error(CellError::Div0));
+    assert_eq!(v(wb, 0, "C2"), Value::Number(7.0));
+    assert_eq!(v(wb, 0, "D2"), Value::Number(1.5));
+}
+
+fn assert_formula_roundtrip(wb: &gridcraft_model::Workbook) {
+    // Formulas: text plus the cached result.
+    assert_eq!(ftext(wb, "A3").as_deref(), Some("B1*2"));
+    assert_eq!(v(wb, 0, "A3"), Value::Number(3.0));
+    assert_eq!(ftext(wb, "B3").as_deref(), Some("SUM(B1:C1)"));
+    assert_eq!(ftext(wb, "C3").as_deref(), Some("A1&\"!\""));
+    assert_eq!(v(wb, 0, "C3"), Value::from("Hello!"));
+    assert_eq!(ftext(wb, "D3").as_deref(), Some("B1>1"));
+    assert_eq!(v(wb, 0, "D3"), Value::Bool(true));
+    assert_eq!(ftext(wb, "E3").as_deref(), Some("Rate*2"));
+    assert_eq!(ftext(wb, "F3").as_deref(), Some("ROUND(B1,0)"));
+    assert_eq!(ftext(wb, "G3").as_deref(), Some("Data!A1"));
+    assert_eq!(v(wb, 0, "H3"), Value::Error(CellError::NA));
+    // Shared formula: relative offsets resolve per cell.
+    assert_eq!(ftext(wb, "B5").as_deref(), Some("A5*10"));
+    assert_eq!(ftext(wb, "B6").as_deref(), Some("A6*10"));
+    // Array formula: the anchor holds it; the other cell's cached result is dropped so that
+    // the formula fills the range on recalculation (as when an .xlsx is read, #156).
+    let c5 = wb.sheets[0].cell(CellRef::parse("C5").unwrap()).unwrap().formula.clone().unwrap();
+    assert_eq!((c5.text.as_str(), c5.array), ("A5:A6*2", Some(RangeRef::parse("C5:C6").unwrap())));
+    assert_eq!(ftext(wb, "C6"), None);
+    assert_eq!(v(wb, 0, "C6"), Value::Empty);
+}
+
+fn assert_layout_roundtrip(wb: &gridcraft_model::Workbook) {
+    // Number formats, merges, sizes, names, print area; embedded chart records ignored.
+    let sh = &wb.sheets[0];
+    assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("A4").unwrap())).num_fmt.as_str(), "yyyy-mm-dd");
+    assert_eq!(wb.styles.get(sh.style_id(CellRef::parse("B4").unwrap())).num_fmt.as_str(), "0.00%");
+    assert_eq!(sh.merges, vec![RangeRef::parse("A7:B7").unwrap()]);
+    assert!(sh.cols.get(&0).unwrap().size.unwrap() > sh.default_col_width);
+    assert_eq!(sh.rows.get(&0).unwrap().size, Some(40.0));
+    assert!(!sh.rows.get(&0).unwrap().hidden && sh.rows.get(&0).unwrap().custom);
+    assert_eq!(sh.print.print_area, RangeRef::parse("A1:B2"));
+    assert_eq!(v(wb, 0, "J10"), Value::Empty);
+    assert_eq!(wb.names.len(), 1);
+    assert_eq!((wb.names[0].name.as_str(), wb.names[0].formula.as_str()), ("Rate", "Data!$A$1"));
+    assert_eq!(v(wb, 1, "A1"), Value::Number(7.0));
+    assert_eq!(wb.date_system, DateSystem::D1900);
+}
+
+fn assert_xlsx_conversion(wb: &gridcraft_model::Workbook) {
+    // The import saves as .xlsx and reads back.
+    let (back, _) = read_xlsx(&write_xlsx(wb).unwrap()).unwrap();
+    assert_eq!(back.sheets[0].cell(CellRef::parse("A3").unwrap()).unwrap().formula.as_ref().unwrap().text, "B1*2");
+    assert_eq!(back.sheets[0].value(CellRef::parse("C3").unwrap()), Value::from("Hello!"));
 }
 
 #[test]
@@ -607,6 +623,234 @@ fn a_format_shorter_than_its_count_keeps_its_characters() {
     assert_eq!(fmt("A2"), "yyyy-mm-dd");
     assert_eq!(fmt("A3"), "0.000");
     assert!(report.warnings.iter().any(|w| w.contains("declared length")), "{:?}", report.warnings);
+}
+
+// ---------------------------------------------------------------- notes, hyperlinks, panes
+
+/// CLSID_StdHlink, CLSID_URLMoniker and CLSID_FileMoniker as stored ([MS-XLS] 2.4.140,
+/// [MS-OSHARED] 2.3.7.2).
+const STD_HLINK: [u8; 16] = [0xD0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B];
+const URL_MONIKER: [u8; 16] = [0xE0, 0xC9, 0xEA, 0x79, 0xF9, 0xBA, 0xCE, 0x11, 0x8C, 0x82, 0x00, 0xAA, 0x00, 0x4B, 0xA9, 0x0B];
+const FILE_MONIKER: [u8; 16] = [0x03, 0x03, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
+
+fn utf16z(s: &str) -> Vec<u8> {
+    u16s(&s.encode_utf16().chain([0]).collect::<Vec<_>>())
+}
+
+/// HyperlinkString: character count including the NUL, then UTF-16.
+fn hstr(s: &str) -> Vec<u8> {
+    cat(&[&(s.encode_utf16().count() as u32 + 1).to_le_bytes(), &utf16z(s)])
+}
+
+fn url_moniker(url: &str) -> Vec<u8> {
+    let u = utf16z(url);
+    cat(&[&URL_MONIKER, &(u.len() as u32).to_le_bytes(), &u])
+}
+
+fn file_moniker(anti: u16, path: &str) -> Vec<u8> {
+    let wide = u16s(&path.encode_utf16().collect::<Vec<_>>());
+    let ansi = cat(&[b"OLD~1.XLS", &[0]]);
+    cat(&[
+        &FILE_MONIKER,
+        &anti.to_le_bytes(),
+        &(ansi.len() as u32).to_le_bytes(),
+        &ansi,
+        &u16s(&[0xFFFF, 0xDEAD]),
+        &[0; 20],
+        &(wide.len() as u32 + 6).to_le_bytes(),
+        &(wide.len() as u32).to_le_bytes(),
+        &3u16.to_le_bytes(),
+        &wide,
+    ])
+}
+
+fn hlink(r: [u16; 4], flags: u32, body: &[u8]) -> Vec<u8> {
+    rec(0x01B8, &cat(&[&u16s(&r), &STD_HLINK, &2u32.to_le_bytes(), &flags.to_le_bytes(), body]))
+}
+
+fn tooltip(r: [u16; 4], tip: &str) -> Vec<u8> {
+    rec(0x0800, &cat(&[&0x0800u16.to_le_bytes(), &u16s(&r), &utf16z(tip)]))
+}
+
+/// Obj with an FtCmo of type `ot` and an ftEnd.
+fn obj(ot: u16, id: u16) -> Vec<u8> {
+    rec(0x005D, &cat(&[&u16s(&[0x15, 0x12, ot, id, 0x4011]), &[0; 12], &u16s(&[0, 0])]))
+}
+
+/// TxO header, then its text in `Continue` records (each with its compression flag) and the
+/// formatting runs.
+fn txo(cch: u16, text_parts: &[Vec<u8>]) -> Vec<u8> {
+    let mut v = rec(0x01B6, &cat(&[&u16s(&[0x0212, 0]), &[0; 6], &u16s(&[cch, 16, 0, 0])]));
+    for p in text_parts {
+        v.extend(rec(0x003C, p));
+    }
+    v.extend(rec(0x003C, &[0; 16]));
+    v
+}
+
+fn note(row: u16, col: u16, shown: bool, id: u16, author: &str) -> Vec<u8> {
+    rec(0x001C, &cat(&[&u16s(&[row, col, if shown { 2 } else { 0 }, id]), &xlstr(author), &[0]]))
+}
+
+fn window2(grbit: u16) -> Vec<u8> {
+    rec(0x023E, &u16s(&[grbit, 0, 0, 0x40, 0, 0, 0, 0, 0]))
+}
+
+fn pane(x: u16, y: u16, top: u16, left: u16) -> Vec<u8> {
+    rec(0x0041, &cat(&[&u16s(&[x, y, top, left]), &[3, 0]]))
+}
+
+/// Two worksheets: "Notes" with notes, hyperlinks and frozen panes, "Split" with display
+/// options changed, a split pane and (optionally) a picture.
+fn objects_sample(picture: bool) -> Vec<u8> {
+    let draw = rec(0x00EC, &[0; 8]);
+    // Note 1: "Ann:\nFirst " compressed, then "çline" as UTF-16 in a second Continue.
+    let part1 = cat(&[&[0], b"Ann:\nFirst "]);
+    let part2 = cat(&[&[1], &u16s(&"çline".encode_utf16().collect::<Vec<_>>())]);
+    let part3 = cat(&[&[0], b"a\r\nb"]);
+    let notes = cat(&[
+        &draw,
+        &obj(0x19, 1),
+        &draw,
+        &txo(16, &[part1, part2]),
+        &draw,
+        &obj(0x19, 2),
+        &draw,
+        &txo(4, &[part3]),
+        &note(0, 0, false, 1, "Ann"),
+        &note(1, 1, true, 2, "Bo"),
+        &note(2, 2, false, 99, "Cy"), // no TxO for this object
+    ]);
+    let links = cat(&[
+        &hlink([4, 4, 0, 0], 0x17, &cat(&[&hstr("web"), &url_moniker("https://example.com/p?q=1")])),
+        &tooltip([4, 4, 0, 0], "Example tip"),
+        &hlink([5, 5, 0, 0], 0x0B, &cat(&[&file_moniker(2, "dir\\Book.xls"), &hstr("Sheet1!A1")])),
+        &hlink([6, 6, 0, 0], 0x03, &url_moniker("mailto:a@example.com?subject=Hi")),
+        &hlink([7, 7, 0, 0], 0x08, &hstr("'Split'!B2")),
+        &hlink([0, 1, 2, 3], 0x03, &url_moniker("https://example.org/")),
+        &tooltip([0, 1, 2, 3], "Range tip"),
+        &hlink([8, 8, 0, 0], 0x103, &hstr("\\\\srv\\share\\x.xlsx")),
+        // A moniker kind GridCraft doesn't read, and a range past the last column.
+        &hlink([9, 9, 0, 0], 0x03, &cat(&[&[0xAA; 16], &[0; 8]])),
+        &hlink([10, 10, 0, 300], 0x03, &url_moniker("https://example.net/")),
+    ]);
+    let sheet1 = cat(&[
+        &bof(0x0010),
+        &rec(0x0203, &cat(&[&cell(0, 0, 0), &1.0f64.to_le_bytes()])),
+        &notes,
+        &window2(0x06BE),
+        &pane(1, 2, 2, 1),
+        &links,
+        &eof(),
+    ]);
+    let pic = if picture { cat(&[&draw, &obj(0x08, 3)]) } else { vec![] };
+    let sheet2 = cat(&[&bof(0x0010), &pic, &window2(0x0040 | 0x0001), &pane(1200, 900, 3, 2), &eof()]);
+    let boundsheet = |pos: u32, name: &str| rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, name.len() as u8, 0], name.as_bytes()]));
+    let globals = |p1: u32, p2: u32| cat(&[&bof(0x0005), &boundsheet(p1, "Notes"), &boundsheet(p2, "Split"), &eof()]);
+    let p1 = globals(0, 0).len() as u32;
+    let p2 = p1 + sheet1.len() as u32;
+    cat(&[&globals(p1, p2), &sheet1, &sheet2])
+}
+
+#[test]
+fn reads_notes_hyperlinks_and_panes() {
+    let (wb, report) = read_xls(&compound("Workbook", &objects_sample(false))).unwrap();
+    let at = |a1: &str| CellRef::parse(a1).unwrap();
+    let s = &wb.sheets[0];
+    let n = |a1: &str| s.comments.get(&at(a1)).map(|c| (c.author.as_str(), c.text.as_str(), c.visible));
+    assert_eq!(n("A1"), Some(("Ann", "First çline", false)));
+    assert_eq!(n("B2"), Some(("Bo", "a\nb", true)));
+    assert_eq!(n("C3"), Some(("Cy", "", false)));
+    assert_eq!(s.comments.len(), 3);
+    assert!(s.comments.values().all(|c| !c.threaded));
+
+    let l = |a1: &str| s.hyperlinks.get(&at(a1)).map(|h| (h.target.as_str(), h.tooltip.as_deref(), h.external));
+    assert_eq!(l("A5"), Some(("https://example.com/p?q=1", Some("Example tip"), true)));
+    assert_eq!(l("A6"), Some(("..\\..\\dir\\Book.xls#Sheet1!A1", None, true)));
+    assert_eq!(l("A7"), Some(("mailto:a@example.com?subject=Hi", None, true)));
+    assert_eq!(l("A8"), Some(("'Split'!B2", None, false)));
+    assert_eq!(l("A9"), Some(("\\\\srv\\share\\x.xlsx", None, true)));
+    for a1 in ["C1", "D1", "C2", "D2"] {
+        assert_eq!(l(a1), Some(("https://example.org/", Some("Range tip"), true)), "{a1}");
+    }
+    assert_eq!(l("A10"), None);
+    assert_eq!(l("A11"), None);
+    assert_eq!(s.hyperlinks.len(), 9);
+    assert!(report.warnings.iter().any(|w| w.contains("hyperlinks") && w.contains("skipped")), "{:?}", report.warnings);
+
+    assert_eq!(s.freeze, Some((2, 1)));
+    assert_eq!(s.view_top_left, at("B3"));
+    assert!(s.show_gridlines && s.show_headings && s.show_zeros && !s.show_formulas);
+
+    let s2 = &wb.sheets[1];
+    assert_eq!(s2.freeze, None);
+    assert!(!s2.show_gridlines && !s2.show_headings && !s2.show_zeros && s2.show_formulas && s2.right_to_left);
+    assert!(report.warnings.iter().any(|w| w.contains("Split")), "{:?}", report.warnings);
+    // Notes are drawing objects, but they are imported: no warning about pictures.
+    assert!(!report.warnings.iter().any(|w| w.contains("Pictures") || w.contains("comments")), "{:?}", report.warnings);
+    let (_, report) = read_xls(&compound("Workbook", &objects_sample(true))).unwrap();
+    assert!(report.warnings.iter().any(|w| w.contains("Pictures")), "{:?}", report.warnings);
+
+    // Saved as .xlsx and read back, the notes, links and panes are the same.
+    let (back, _) = read_xlsx(&write_xlsx(&wb).unwrap()).unwrap();
+    let b = &back.sheets[0];
+    assert_eq!(b.freeze, s.freeze);
+    assert_eq!(b.hyperlinks, s.hyperlinks);
+    let notes = |sh: &gridcraft_model::Sheet| sh.comments.iter().map(|(k, c)| (*k, c.author.clone(), c.text.clone(), c.visible)).collect::<Vec<_>>();
+    assert_eq!(notes(b), notes(s));
+}
+
+#[test]
+fn hostile_object_records_never_panic() {
+    let stream = objects_sample(true);
+    let good = compound("Workbook", &stream);
+    for cut in (0..good.len()).step_by(11) {
+        let _ = read_xls(&good[..cut]);
+    }
+    for at in 0..stream.len() {
+        for x in [0xA5u8, 0xFF] {
+            let mut s = stream.clone();
+            s[at] ^= x;
+            let _ = read_xls(&compound("Workbook", &s));
+        }
+    }
+    // A hyperlink over the whole sheet is capped; huge declared string, path and text lengths
+    // are bounded by the record.
+    let whole = hlink([0, 65535, 0, 255], 0x03, &url_moniker("https://example.com/"));
+    let liar = hlink([0, 0, 1, 1], 0x1B, &cat(&[&u32::MAX.to_le_bytes(), b"ab"]));
+    let file = hlink([1, 1, 1, 1], 0x03, &cat(&[&FILE_MONIKER, &u16s(&[0xFFFF]), &u32::MAX.to_le_bytes(), b"x"]));
+    let big_txo = cat(&[&obj(0x19, 1), &txo(0xFFFF, &[cat(&[&[1], b"ab"])]), &note(0, 0, false, 1, "A")]);
+    let sheet = cat(&[&bof(0x0010), &whole, &liar, &file, &big_txo, &eof()]);
+    let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
+    let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
+    assert_eq!(wb.sheets[0].hyperlinks.len(), 10_000);
+    assert!(report.warnings.iter().any(|w| w.contains("first 10000 cells")), "{:?}", report.warnings);
+    assert!(wb.sheets[0].comments.contains_key(&CellRef::new(0, 0)));
+}
+
+#[test]
+fn hyperlink_targets_copied_onto_cells_are_capped_by_bytes() {
+    // A 1,700-byte target over 9,999 cells: the sheet copies at most 16 MiB of target text, so
+    // 9,868 copies fit before the 10,000-cell cap is reached. Kept small: the test writer's
+    // compound file can't hold a stream of many megabytes.
+    let long = "a".repeat(1_700);
+    let sheet = cat(&[&bof(0x0010), &hlink([0, 9_998, 0, 0], 0x03, &url_moniker(&long)), &eof()]);
+    let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
+    let (wb, report) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
+    assert_eq!(wb.sheets[0].hyperlinks.len(), 9_868);
+    assert!(report.warnings.iter().any(|w| w.contains("bytes")), "{:?}", report.warnings);
+}
+
+#[test]
+fn tooltip_goes_to_the_last_link_on_its_range() {
+    let first = hlink([0, 0, 0, 0], 0x03, &url_moniker("https://first.example/"));
+    let second = hlink([0, 0, 0, 0], 0x03, &url_moniker("https://second.example/"));
+    let sheet = cat(&[&bof(0x0010), &first, &second, &tooltip([0, 0, 0, 0], "Second tip"), &eof()]);
+    let globals = |pos: u32| cat(&[&bof(0x0005), &rec(0x0085, &cat(&[&pos.to_le_bytes(), &[0, 0, 1, 0], b"S"])), &eof()]);
+    let (wb, _) = read_xls(&compound("Workbook", &cat(&[&globals(globals(0).len() as u32), &sheet]))).unwrap();
+    let link = wb.sheets[0].hyperlinks.get(&CellRef::new(0, 0)).unwrap();
+    assert_eq!(link.target, "https://second.example/");
+    assert_eq!(link.tooltip.as_deref(), Some("Second tip"));
 }
 
 fn one_sheet_with(sheet_records: &[u8]) -> Vec<u8> {
