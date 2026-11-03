@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::*;
 
 /// Valid table name: letters, digits, `_` and `.`, starting with a letter, `_` or `\`
@@ -21,16 +23,24 @@ pub(super) fn table_name(name: &str, used: &mut HashSet<String>, n: u32) -> Stri
 pub(super) fn table_columns(t: &Table) -> Vec<String> {
     let w = t.range.width() as usize;
     let mut used = HashSet::new();
+    // The next suffix to try per lowercased base, so repeated headers don't retry every suffix
+    // already handed out.
+    let mut next: HashMap<String, u32> = HashMap::new();
     (0..w)
         .map(|i| {
             let base = t.columns.get(i).map(|c| c.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Column{}", i + 1));
-            let mut name = base.clone();
-            let mut k = 2;
-            while !used.insert(name.to_lowercase()) {
-                name = format!("{base}{k}");
-                k += 1;
+            let lower = base.to_lowercase();
+            if used.insert(lower.clone()) {
+                return base;
             }
-            name
+            let k = next.entry(lower).or_insert(2);
+            loop {
+                let name = format!("{base}{k}");
+                *k += 1;
+                if used.insert(name.to_lowercase()) {
+                    return name;
+                }
+            }
         })
         .collect()
 }
@@ -100,7 +110,34 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
     s
 }
 
-pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {
+/// The criteria saved in a table's `<autoFilter>`: its own, plus those of a sheet AutoFilter
+/// that starts on the table's header row. GridCraft filters a table through the sheet
+/// AutoFilter, but a file can't hold a sheet AutoFilter that overlaps a table (the sheet element
+/// is left out), so without this the criteria would be lost and the rows they hide would reopen
+/// as rows hidden by hand, which SUBTOTAL 1-11 counts.
+pub(super) fn table_filter(sheet: &Sheet, t: &Table) -> Vec<(u32, FilterCriterion)> {
+    let mut criteria = t.filter.clone();
+    let Some(af) = sheet.autofilter.as_ref().filter(|af| {
+        t.header_row
+            && t.filter_button
+            && af.range.start.row == t.range.start.row
+            && af.range.intersects(&t.range)
+            && t.data_range().is_some_and(|d| af.range.end.row >= d.end.row)
+    }) else {
+        return criteria;
+    };
+    for (off, c) in &af.criteria {
+        let Some(col) = af.range.start.col.checked_add(*off).and_then(|abs| abs.checked_sub(t.range.start.col)) else { continue };
+        if col < t.range.width() {
+            criteria.retain(|(o, _)| *o != col);
+            criteria.push((col, c.clone()));
+        }
+    }
+    criteria.sort_by_key(|(o, _)| *o);
+    criteria
+}
+
+pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, filter: &[(u32, FilterCriterion)], out: &mut Out) -> String {
     let mut s =
         format!("{XML_DECL}<table xmlns=\"{NS_MAIN}\" id=\"{id}\" name=\"{0}\" displayName=\"{0}\" ref=\"{1}\"", esc_attr(name), t.range.a1());
     if !t.header_row {
@@ -121,7 +158,7 @@ pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &m
     if t.header_row && t.filter_button {
         let end_row = if t.totals_row { t.range.end.row.saturating_sub(1).max(t.range.start.row) } else { t.range.end.row };
         let r = RangeRef::new(t.range.start, CellRef::new(end_row, t.range.end.col));
-        s.push_str(&autofilter_xml(r, &t.filter, out));
+        s.push_str(&autofilter_xml(r, filter, out));
     }
     let _ = write!(s, "<tableColumns count=\"{}\">", cols.len());
     for (i, name) in cols.iter().enumerate() {
@@ -370,4 +407,39 @@ pub(super) fn vml_xml(sheet: &Sheet, n: u32) -> String {
     }
     s.push_str("</xml>");
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use gridcraft_model::TableColumn;
+
+    use super::*;
+
+    #[test]
+    fn repeated_headers_are_renamed_without_retrying_suffixes() {
+        let col = |n: &str| TableColumn { name: n.into(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None };
+        let mut columns: Vec<TableColumn> = (0..10_000).map(|_| col("Total")).collect();
+        columns[1] = col("total3");
+        let t = Table {
+            id: 1,
+            name: "T".into(),
+            range: RangeRef::parse("A1:NTP2").unwrap(),
+            header_row: true,
+            totals_row: false,
+            columns,
+            style: String::new(),
+            banded_rows: false,
+            banded_cols: false,
+            first_col: false,
+            last_col: false,
+            filter_button: false,
+            filter: vec![],
+            table_type: None,
+            connection_id: None,
+        };
+        let names = table_columns(&t);
+        assert_eq!(names.len(), 10_000);
+        assert_eq!(&names[..4], ["Total", "total3", "Total2", "Total4"]);
+        assert_eq!(names.iter().map(|n| n.to_lowercase()).collect::<HashSet<_>>().len(), 10_000);
+    }
 }
