@@ -1,5 +1,7 @@
 use super::format::{cell_format_code, r1c1_to_a1};
-use super::*;
+use super::{Area, Arg, Array, CellError, Ev, Evaluator, Expr, FnCtx, MAX_CELLS, Value, err};
+use gridcraft_core::{CellRef, MAX_COLS, MAX_ROWS, RangeRef};
+use std::sync::Arc;
 
 impl<'h> Evaluator<'h> {
     /// Whole rows/columns trimmed for ROW()/COLUMN() arrays.
@@ -356,6 +358,12 @@ impl<'h> Evaluator<'h> {
                     }
                 }
                 Ev::V(v) => {
+                    if name == "AGGREGATE" && func <= 13 {
+                        return match v {
+                            Value::Error(error) => err(error),
+                            _ => err(CellError::Value),
+                        };
+                    }
                     let n = match &v {
                         Value::Array(a) => u64::try_from(a.data.len()).unwrap_or(u64::MAX),
                         _ => 1,
