@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Anchor, CellPicture, CellRef, Color, EngineError, Image, Json, PROTECTED, Result, Session, Shape, ShapeKind, Sparkline, SparklineKind,
+    anchor_mode_name, anchor_mode_param, bad, bool_param, cell_param, edit, f64_param, json, locked_cell_error, ok, str_param, u32_param,
+};
 
 pub(super) fn insert_sparkline(s: &mut Session, p: &Json) -> Result<Json> {
     let src = str_param(p, "range").ok_or_else(|| bad("insert.sparkline", "missing `range`"))?.to_string();
@@ -137,6 +140,8 @@ pub(super) fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
     });
     let shape = Shape {
         id,
+        name: None,
+        text_link: None,
         kind,
         anchor: Anchor {
             cell: at,
@@ -150,6 +155,7 @@ pub(super) fn insert_shape(s: &mut Session, p: &Json) -> Result<Json> {
         line,
         text: str_param(p, "text").unwrap_or("").into(),
         format: Default::default(),
+        math: Default::default(),
     };
     let sheet = d.wb.active_sheet();
     edit(s, |cx| {
@@ -179,12 +185,13 @@ pub(super) fn shape_set_text(s: &mut Session, p: &Json) -> Result<Json> {
     if sh.is_protected() {
         return Err(EngineError::Other(PROTECTED.into()));
     }
-    if shape.text == text {
+    if shape.text == text && shape.text_link.is_none() {
         return ok();
     }
     edit(s, |cx| {
         let shape = cx.sheet_mut(sheet)?.shapes.iter_mut().find(|shape| shape.id == id).ok_or_else(|| bad("shape.setText", "no such text box"))?;
         shape.text = text.into();
+        shape.text_link = None;
         Ok(Json::Null)
     })
 }

@@ -56,12 +56,15 @@ fn exported_ink_has_a_visible_unfilled_path_and_correct_stroke() {
     for (id, width) in [(1, 3), (2, 12)] {
         sheet.shapes.push(Shape {
             id,
+            name: None,
+            text_link: None,
             kind: ShapeKind::Ink,
             anchor: Anchor { width: 100.0, height: 50.0, mode: AnchorMode::Absolute, ..Default::default() },
             fill: Color::Rgb(width << 16),
             line: Color::Rgb(0xA12BCD),
             text: "-10.0,5.0;50.0,40.0;90.0,10.0".into(),
             format: Default::default(),
+            math: Default::default(),
         });
     }
     let wb = Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() };

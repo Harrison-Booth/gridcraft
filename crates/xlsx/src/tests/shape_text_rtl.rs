@@ -39,12 +39,15 @@ fn text_box(text: &str, format: ShapeFormat) -> Workbook {
     let mut sheet = Sheet::new("Sheet1");
     sheet.shapes.push(Shape {
         id: 1,
+        name: None,
+        text_link: None,
         kind: ShapeKind::TextBox,
         anchor: Anchor { width: 120.0, height: 40.0, ..Default::default() },
         fill: Color::Auto,
         line: Color::Auto,
         text: text.into(),
         format,
+        math: Default::default(),
     });
     Workbook { sheets: vec![Arc::new(sheet)], ..Default::default() }
 }
