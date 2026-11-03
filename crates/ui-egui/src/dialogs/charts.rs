@@ -1,5 +1,5 @@
 use super::show::ok_cancel;
-use super::*;
+use super::{Color32, Dialog, Icon, Json, Sense, SheetApp, Stroke, StrokeKind, icons, json, vec2};
 
 /// Every chart type the All Charts tab offers: `(type, subtype, label)` for `insert.chart`.
 const ALL_CHARTS: [(&str, &str, &str); 21] = [
@@ -114,7 +114,7 @@ pub(super) fn recommended_charts(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut 
         match app.run("insert.chart", params) {
             Ok(r) => {
                 // The new chart is selected, as after inserting any object.
-                app.selected_chart = r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok());
+                app.select_object_id(r.get("chart").and_then(Json::as_u64).and_then(|id| u32::try_from(id).ok()));
                 *open = false;
             }
             Err(e) => app.message = Some((d.title.clone(), crate::clean_error(&e))),
@@ -160,6 +160,12 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
     d.values.insert("remove".into(), json!(remove));
     ui.add_space(6.0);
     edit(ui, d, "categories", "Horizontal (Category) Axis Labels:");
+    ui.add_space(6.0);
+    let flag = |d: &Dialog, k: &str| d.values.get(k).and_then(Json::as_bool).unwrap_or(false);
+    let mut hidden = flag(d, "hidden");
+    if ui.checkbox(&mut hidden, "Show data in hidden rows and columns").changed() {
+        d.values.insert("hidden".into(), json!(hidden));
+    }
     ok_cancel(ui, confirm, open);
     if *confirm {
         *confirm = false;
@@ -174,6 +180,9 @@ pub(super) fn select_data(app: &mut SheetApp, ui: &mut egui::Ui, d: &mut Dialog,
         }
         if text(d, "categories") != text(d, "categories0") || (range_changed && !text(d, "categories").is_empty()) {
             params.insert("categories".into(), json!(text(d, "categories")));
+        }
+        if flag(d, "hidden") != flag(d, "hidden0") {
+            params.insert("showHiddenData".into(), json!(flag(d, "hidden")));
         }
         if params.len() == 1 {
             *open = false;

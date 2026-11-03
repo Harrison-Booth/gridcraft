@@ -41,6 +41,7 @@ fn workbook(categories: &str, values: &str) -> Workbook {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
         x_title: None,
@@ -48,6 +49,7 @@ fn workbook(categories: &str, values: &str) -> Workbook {
         source: None,
         by_rows: false,
         pivot: None,
+        show_hidden_data: false,
     });
     Workbook { sheets: vec![Arc::new(s)], ..Workbook::default() }
 }

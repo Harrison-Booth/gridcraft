@@ -130,6 +130,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         series,
         legend,
         data_labels,
+        data_table: None,
         gridlines: plot.kids("axis").any(|a| a.child("majorGridlines").is_some()),
         style: 2,
         x_title: axis_title("0"),
@@ -137,6 +138,7 @@ pub fn read_chartex(root: &El) -> Option<Chart> {
         source: None,
         by_rows: false,
         pivot: None,
+        show_hidden_data: false,
     })
 }
 

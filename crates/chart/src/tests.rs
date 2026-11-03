@@ -5,6 +5,8 @@ use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, Sparkl
 
 use crate::*;
 
+mod data_table;
+
 const ALL_KINDS: [ChartKind; 26] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
@@ -43,6 +45,7 @@ fn chart(kind: ChartKind) -> Chart {
         series: vec![],
         legend: LegendPos::Bottom,
         data_labels: true,
+        data_table: None,
         gridlines: true,
         style: 0,
         x_title: Some("Quarter".into()),
@@ -50,6 +53,7 @@ fn chart(kind: ChartKind) -> Chart {
         source: None,
         by_rows: false,
         pivot: None,
+        show_hidden_data: false,
     }
 }
 
@@ -956,6 +960,128 @@ fn histogram_boundary_values_match_interval_labels() {
 }
 
 #[test]
+fn hidden_rows_and_columns_are_left_out_unless_shown() {
+    use gridcraft_model::LineInfo;
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for r in 0..4u32 {
+            s.set_value(CellRef::new(r, 0), Value::from(["a", "b", "c", "d"][r as usize]));
+            s.set_value(CellRef::new(r, 1), Value::Number(f64::from(r) + 1.0));
+            s.set_value(CellRef::new(r, 2), Value::Number(f64::from(r) * 10.0));
+        }
+        s.rows.insert(1, LineInfo { hidden: true, ..Default::default() });
+    }
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![
+        Series { categories: Some("Sheet1!$A$1:$A$4".into()), values: "Sheet1!$B$1:$B$4".into(), ..Series::default() },
+        Series { categories: Some("Sheet1!$A$1:$A$4".into()), values: "Sheet1!$C$1:$C$4".into(), ..Series::default() },
+    ];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(1.0), Some(3.0), Some(4.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+    // A hidden column removes its series, legend entry included.
+    wb.sheet_mut(0).unwrap().cols.insert(2, LineInfo { hidden: true, ..Default::default() });
+    assert_eq!(resolve(&wb, 0, &c).series.len(), 1);
+    c.show_hidden_data = true;
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.len(), 2);
+    assert_eq!(d.series[0].values.len(), 4);
+    assert_eq!(d.categories.len(), 4);
+}
+
+#[test]
+fn hidden_reference_keeps_literal_values_and_categories_aligned() {
+    use gridcraft_model::LineInfo;
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (r, label) in ["a", "b", "c", "d"].iter().enumerate() {
+            s.set_value(CellRef::new(r as u32, 0), Value::from(*label));
+            s.set_value(CellRef::new(r as u32, 1), Value::Number((r + 1) as f64 * 10.0));
+        }
+        s.rows.insert(1, LineInfo { hidden: true, ..Default::default() });
+    }
+
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { categories: Some("Sheet1!$A$1:$A$4".into()), values: "{10,20,30,40}".into(), ..Series::default() }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+
+    c.series[0].categories = Some("{\"a\",\"b\",\"c\",\"d\"}".into());
+    c.series[0].values = "Sheet1!$B$1:$B$4".into();
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+
+    // A union is evaluated without dropping hidden rows before applying its category mask.
+    c.series[0].categories = Some("Sheet1!$A$1:$A$4".into());
+    c.series[0].values = "(Sheet1!$B$1:$B$2,Sheet1!$B$3:$B$4)".into();
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+
+    // A category union uses the values reference's mask before it drops hidden positions.
+    c.series[0].categories = Some("(Sheet1!$A$1:$A$2,Sheet1!$A$3:$A$4)".into());
+    c.series[0].values = "Sheet1!$B$1:$B$4".into();
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.categories, vec!["a", "c", "d"]);
+}
+
+#[test]
+fn hidden_y_range_keeps_literal_scatter_and_bubble_data_aligned() {
+    use gridcraft_model::LineInfo;
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (r, value) in [10.0, 20.0, 30.0, 40.0].into_iter().enumerate() {
+            s.set_value(CellRef::new(r as u32, 1), Value::Number(value));
+        }
+        s.rows.insert(1, LineInfo { hidden: true, ..Default::default() });
+    }
+    let mut c = chart(ChartKind::Bubble);
+    c.series = vec![Series {
+        categories: Some("{1,2,3,4}".into()),
+        values: "Sheet1!$B$1:$B$4".into(),
+        bubble_sizes: Some("{100,200,300,400}".into()),
+        ..Series::default()
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series[0].values, vec![Some(10.0), Some(30.0), Some(40.0)]);
+    assert_eq!(d.series[0].x, Some(vec![Some(1.0), Some(3.0), Some(4.0)]));
+    assert_eq!(d.series[0].sizes, Some(vec![Some(100.0), Some(300.0), Some(400.0)]));
+}
+
+#[test]
+fn hidden_cells_leave_multi_level_categories() {
+    use gridcraft_model::LineInfo;
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        for (r, (y, m)) in [("2023", "jan"), ("", "feb"), ("2024", "jan"), ("", "feb")].iter().enumerate() {
+            if !y.is_empty() {
+                s.set_value(CellRef::new(r as u32, 0), Value::from(*y));
+            }
+            s.set_value(CellRef::new(r as u32, 1), Value::from(*m));
+            s.set_value(CellRef::new(r as u32, 2), Value::Number(r as f64));
+        }
+        s.rows.insert(1, LineInfo { hidden: true, ..Default::default() });
+    }
+    let mut c = chart(ChartKind::Line);
+    c.series = vec![Series { categories: Some("Sheet1!$A$1:$B$4".into()), values: "Sheet1!$C$1:$C$4".into(), ..Series::default() }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["jan", "jan", "feb"]);
+    assert_eq!(d.category_levels, vec![vec!["2023".to_string(), "2024".into(), String::new()]]);
+    // The innermost level is the last visible column.
+    wb.sheet_mut(0).unwrap().cols.insert(1, LineInfo { hidden: true, ..Default::default() });
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.categories, vec!["2023", "2024", ""]);
+    assert!(d.category_levels.is_empty());
+}
+
+#[test]
 fn union_series_references() {
     let mut wb = Workbook::new();
     {
@@ -1254,4 +1380,76 @@ fn box_whisker_draws_each_series_quartile_method() {
     assert_eq!(heights.len(), 2);
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
+}
+
+#[test]
+fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
+    // #2012: `'Bob''s'!Title` kept the doubled quote, so the sheet wasn't found and the series
+    // was named by the literal text.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "Bob's".into();
+        s.set_value(CellRef::new(0, 0), Value::from("Takings"));
+        s.set_value(CellRef::new(1, 0), Value::Number(4.0));
+        s.set_value(CellRef::new(2, 0), Value::Number(9.0));
+    }
+    wb.names.push(gridcraft_model::DefinedName {
+        name: "Title".into(),
+        scope: Some(0),
+        formula: "'Bob''s'!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        name: Some("'Bob''s'!Title".into()),
+        categories: None,
+        values: "'Bob''s'!$A$2:$A$3".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+#[test]
+fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
+    // `'a!b'!Title`: the sheet name holds a `!`, so the evaluator must split the parsed name at
+    // the last one, not the first.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "a!b".into();
+        s.set_value(CellRef::new(0, 0), Value::from("Takings"));
+        s.set_value(CellRef::new(1, 0), Value::Number(4.0));
+        s.set_value(CellRef::new(2, 0), Value::Number(9.0));
+    }
+    wb.names.push(gridcraft_model::DefinedName {
+        name: "Title".into(),
+        scope: Some(0),
+        formula: "'a!b'!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        name: Some("'a!b'!Title".into()),
+        categories: None,
+        values: "'a!b'!$A$2:$A$3".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }
