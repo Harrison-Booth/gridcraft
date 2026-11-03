@@ -1,5 +1,8 @@
 use super::descriptive::{arg_nums, arg_pairs, mean, var_s};
-use super::*;
+use super::{
+    Arg, C, CellError, R, Value, arg, as_array, boolean, erf, gamma, has, invert, ln_beta, ln_gamma, norm_cdf, norm_inv, norm_pdf, num, num_val,
+    reg_gamma_p, reg_gamma_q, reg_inc_beta,
+};
 
 // ---------------------------------------------------------------------------------------------
 // Distributions
@@ -19,7 +22,14 @@ fn t_cdf(t: f64, v: f64) -> f64 {
 }
 
 fn t_pdf(t: f64, v: f64) -> f64 {
-    (ln_gamma((v + 1.0) / 2.0) - ln_gamma(v / 2.0) - 0.5 * (v * std::f64::consts::PI).ln() - (v + 1.0) / 2.0 * (1.0 + t * t / v).ln()).exp()
+    let z = v / 2.0;
+    let log_gamma_ratio = if z >= 16.0 {
+        let inv_z = 1.0 / z;
+        0.5 * z.ln() - inv_z / 8.0 + inv_z.powi(3) / 192.0 - inv_z.powi(5) / 640.0 + 17.0 * inv_z.powi(7) / 14_336.0
+    } else {
+        ln_gamma(z + 0.5) - ln_gamma(z)
+    };
+    (log_gamma_ratio - 0.5 * (v.ln() + std::f64::consts::PI.ln()) - (v + 1.0) / 2.0 * (t * t / v).ln_1p()).exp()
 }
 
 /// t ≥ 0 with P(T > t) = q, q in (0, 0.5].
@@ -48,12 +58,22 @@ fn f_cdf(x: f64, d1: f64, d2: f64) -> f64 {
     if x <= 0.0 {
         return 0.0;
     }
+    if x == 1.0 && d1 == d2 {
+        return 0.5;
+    }
+    if d1 >= 1e8 && d2 / d1 <= 1e-8 {
+        return reg_gamma_q(d2 / 2.0, d2 / (2.0 * (x + d2 / d1)));
+    }
     reg_inc_beta(d1 * x / (d1 * x + d2), d1 / 2.0, d2 / 2.0)
 }
 
 fn f_upper(x: f64, d1: f64, d2: f64) -> f64 {
     if x <= 0.0 {
         return 1.0;
+    }
+    if d1 >= 1e8 && d2 / d1 <= 1e-8 {
+        // With a much larger numerator degree, the scaled beta tail converges to a gamma tail.
+        return reg_gamma_p(d2 / 2.0, d2 / (2.0 * (x + d2 / d1)));
     }
     reg_inc_beta(d2 / (d2 + d1 * x), d2 / 2.0, d1 / 2.0)
 }
@@ -70,6 +90,8 @@ fn f_pdf(x: f64, d1: f64, d2: f64) -> f64 {
     }
     ((d1 / 2.0) * (d1 / d2).ln() + (d1 / 2.0 - 1.0) * x.ln() - ((d1 + d2) / 2.0) * (1.0 + d1 * x / d2).ln() - ln_beta(d1 / 2.0, d2 / 2.0)).exp()
 }
+
+const MAX_BINOM_TRIALS: f64 = 2_147_483_646.0;
 
 fn binom_pmf(k: f64, n: f64, p: f64) -> f64 {
     if k < 0.0 || k > n {
@@ -173,8 +195,14 @@ fn df_arg(a: &[Arg], i: usize) -> R<f64> {
 
 pub(super) fn t_dist(a: &[Arg], _: C) -> R<Value> {
     let x = num(a, 0)?;
-    let v = df_arg(a, 1)?;
+    let v = num(a, 1)?.trunc();
     let cum = boolean(a, 2)?;
+    if v == 0.0 {
+        return Err(if cum { CellError::Num } else { CellError::Div0 });
+    }
+    if v < 0.0 {
+        return Err(CellError::Num);
+    }
     num_val(if cum { t_cdf(x, v) } else { t_pdf(x, v) })
 }
 
@@ -206,6 +234,9 @@ pub(super) fn tdist_legacy(a: &[Arg], _: C) -> R<Value> {
 pub(super) fn t_inv(a: &[Arg], _: C) -> R<Value> {
     let p = num(a, 0)?;
     let v = df_arg(a, 1)?;
+    if p == 0.0 {
+        return Err(CellError::Div0);
+    }
     if !(p > 0.0 && p < 1.0) {
         return Err(CellError::Num);
     }
@@ -344,7 +375,7 @@ fn f_args(a: &[Arg]) -> R<(f64, f64, f64)> {
     let x = num(a, 0)?;
     let d1 = num(a, 1)?.trunc();
     let d2 = num(a, 2)?.trunc();
-    if d1 < 1.0 || d2 < 1.0 || d1 >= 1e10 || d2 >= 1e10 {
+    if d1 < 1.0 || d2 < 1.0 || d1 > 1e10 || d2 > 1e10 {
         return Err(CellError::Num);
     }
     Ok((x, d1, d2))
@@ -375,7 +406,8 @@ pub(super) fn f_inv(a: &[Arg], _: C) -> R<Value> {
     if p == 0.0 {
         return num_val(0.0);
     }
-    num_val(invert(|x| f_cdf(x, d1, d2), p, 0.0, 1.0, 1e60))
+    let value = if p < 0.5 { invert(|x| f_cdf(x, d1, d2), p, 0.0, 1.0, 1e60) } else { invert(|x| f_upper(x, d1, d2), 1.0 - p, 0.0, 1.0, 1e60) };
+    num_val(value)
 }
 
 pub(super) fn f_inv_rt(a: &[Arg], _: C) -> R<Value> {
@@ -407,7 +439,7 @@ pub(super) fn binom_dist(a: &[Arg], _: C) -> R<Value> {
     let n = num(a, 1)?.trunc();
     let p = num(a, 2)?;
     let cum = boolean(a, 3)?;
-    if k < 0.0 || k > n || !(0.0..=1.0).contains(&p) {
+    if k < 0.0 || n > MAX_BINOM_TRIALS || k > n || !(0.0..=1.0).contains(&p) {
         return Err(CellError::Num);
     }
     num_val(if cum { binom_cdf(k, n, p) } else { binom_pmf(k, n, p) })
@@ -418,7 +450,7 @@ pub(super) fn binom_dist_range(a: &[Arg], _: C) -> R<Value> {
     let p = num(a, 1)?;
     let s1 = num(a, 2)?.trunc();
     let s2 = if has(a, 3) { num(a, 3)?.trunc() } else { s1 };
-    if !(0.0..=1e15).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
+    if !(0.0..=MAX_BINOM_TRIALS).contains(&n) || !(0.0..=1.0).contains(&p) || s1 < 0.0 || s1 > n || s2 < s1 || s2 > n {
         return Err(CellError::Num);
     }
     if s2 - s1 > 10_000.0 {
@@ -496,13 +528,7 @@ pub(super) fn gamma_dist(a: &[Arg], _: C) -> R<Value> {
         return num_val(reg_gamma_p(al, x / be));
     }
     if x == 0.0 {
-        return if al < 1.0 {
-            Err(CellError::Num)
-        } else if al == 1.0 {
-            num_val(1.0 / be)
-        } else {
-            num_val(0.0)
-        };
+        return if al <= 1.0 { Err(CellError::Num) } else { num_val(0.0) };
     }
     num_val(((al - 1.0) * x.ln() - x / be - al * be.ln() - ln_gamma(al)).exp())
 }
@@ -545,7 +571,7 @@ pub(super) fn beta_dist(a: &[Arg], _: C) -> R<Value> {
     if cum {
         return num_val(reg_inc_beta(z, al, be));
     }
-    if (z == 0.0 && al < 1.0) || (z == 1.0 && be < 1.0) {
+    if (z == 0.0 && al <= 1.0) || (z == 1.0 && be <= 1.0) {
         return Err(CellError::Num);
     }
     let lp = if z == 0.0 || z == 1.0 {
@@ -605,6 +631,9 @@ pub(super) fn weibull_dist(a: &[Arg], _: C) -> R<Value> {
     if x < 0.0 || al <= 0.0 || be <= 0.0 {
         return Err(CellError::Num);
     }
+    if x == 0.0 {
+        return num_val(0.0);
+    }
     let t = (x / be).powf(al);
     num_val(if cum { -(-t).exp_m1() } else { al / be.powf(al) * x.powf(al - 1.0) * (-t).exp() })
 }
@@ -615,23 +644,69 @@ pub(super) fn hypgeom_dist(a: &[Arg], _: C) -> R<Value> {
     let kk = num(a, 2)?.trunc();
     let nn = num(a, 3)?.trunc();
     let cum = if a.len() > 4 { boolean(a, 4)? } else { false };
-    if k < 0.0 || n <= 0.0 || kk <= 0.0 || nn <= 0.0 || n > nn || kk > nn || k > n.min(kk) || k < (n - nn + kk).max(0.0) {
+    if k < 0.0 || n < 0.0 || kk < 0.0 || nn <= 0.0 || n > nn || kk > nn {
         return Err(CellError::Num);
     }
+    if n == 0.0 || kk == 0.0 {
+        return num_val(if cum || k == 0.0 { 1.0 } else { 0.0 });
+    }
+    let exact_lo = match (integer_count(n), integer_count(nn), integer_count(kk)) {
+        (Some(n), Some(nn), Some(kk)) => Some(n.saturating_sub(nn.saturating_sub(kk))),
+        _ => None,
+    };
+    let (lo, below_lo) = match exact_lo {
+        Some(exact) => {
+            let lo = exact as f64;
+            let below = integer_count(k).map_or(k < lo, |k| k < exact);
+            (lo, below)
+        }
+        None => {
+            let (lo, tail) = lower_support_fallback(n, nn, kk);
+            let below = k < lo || (k == lo && tail > 0.0);
+            (lo + tail, below)
+        }
+    };
+    let hi = n.min(kk);
     let pmf = |i: f64| (ln_comb(kk, i) + ln_comb(nn - kk, n - i) - ln_comb(nn, n)).exp();
     if !cum {
-        return num_val(pmf(k));
+        return num_val(if below_lo || k > hi { 0.0 } else { pmf(k) });
+    }
+    if below_lo {
+        return num_val(0.0);
+    }
+    if k >= hi {
+        return num_val(1.0);
     }
     let mut s = 0.0;
-    let mut i = (n - nn + kk).max(0.0);
-    if k - i > 1e6 || i + 1.0 == i {
+    let end = k.min(hi);
+    if end - lo > 1e6 || lo + 1.0 == lo {
         return Err(CellError::Num);
     }
-    while i <= k {
-        s += pmf(i);
-        i += 1.0;
+    for step in 0..=((end - lo) as u64) {
+        s += pmf(lo + step as f64);
     }
     num_val(s.min(1.0))
+}
+
+fn lower_support_fallback(n: f64, nn: f64, kk: f64) -> (f64, f64) {
+    let (difference, difference_tail) = two_sum(n, -nn);
+    let (sum, sum_tail) = two_sum(difference, kk);
+    let (hi, tail) = two_sum(sum, difference_tail + sum_tail);
+    if hi < 0.0 || (hi == 0.0 && tail <= 0.0) { (0.0, 0.0) } else { (hi, tail) }
+}
+
+/// Returns the rounded sum and its rounding error, so cancellation does not discard small terms.
+fn two_sum(a: f64, b: f64) -> (f64, f64) {
+    let sum = a + b;
+    let b_virtual = sum - a;
+    let a_virtual = sum - b_virtual;
+    let b_roundoff = b - b_virtual;
+    let a_roundoff = a - a_virtual;
+    (sum, a_roundoff + b_roundoff)
+}
+
+fn integer_count(value: f64) -> Option<u128> {
+    (value < u128::MAX as f64).then_some(value as u128)
 }
 
 pub(super) fn negbinom_dist(a: &[Arg], _: C) -> R<Value> {
