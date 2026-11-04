@@ -1,7 +1,6 @@
 use super::geo::Geo;
-use super::interact::delete_selected_object;
 use super::menus::is_checkbox;
-use super::*;
+use super::{CellRef, Drag, Sheet, SheetApp, json};
 
 /// Grid keyboard handling when no text field has focus.
 pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Response, geo: &Geo, sh: &Sheet) {
@@ -14,7 +13,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
     let other_focus = ctx.memory(|m| m.focused()).is_some_and(|f| f != resp.id && (editing || !stale.contains(&f)));
     // An open filter menu owns the keyboard even when a click inside it left focus on nothing (#1516).
     // So do the fill menu (its Esc closes it, not the copy) and the right-drag that opens it (an
-    // arrow key would move the selection the menu fills from).
+    // arrow key would move the selection the menu fills from), and a macro's question.
     if editing
         || app.dialog.is_some()
         || other_focus
@@ -22,6 +21,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
         || app.grid.filter_menu.is_some()
         || app.grid.fill_menu.is_some()
         || matches!(app.grid.drag, Drag::Fill { menu: true, .. })
+        || app.macros.question.is_some()
     {
         return;
     }
@@ -51,11 +51,9 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                 app.copy_to_clipboard(ctx, "edit.cut");
             }
             egui::Event::Paste(text) => app.paste_external(text),
-            // GridCraft has no image-clipboard pipeline and no cell-picture insert-from-clipboard
-            // command. Choosing to ignore `PasteImage` is explicit: inserting the bytes as a
-            // floating picture without a chosen anchor/size would be a new feature, not parity.
-            // A text representation, when the clipboard has one, still arrives as `Paste` above.
-            egui::Event::PasteImage(_) => {}
+            // A picture with no text on the clipboard (a screenshot, a browser image) is pasted as
+            // a floating picture at the active cell, as Excel does.
+            egui::Event::PasteImage(image) => app.paste_color_image(&image),
             // PRIMARY middle-click paste belongs to egui's TextEdit; the grid has no caret to
             // insert text at, so a middle click on a cell is deliberately not a paste.
             egui::Event::MiddleClickPaste { .. } => {}
@@ -69,9 +67,13 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             }
             egui::Event::Key { key, physical_key, pressed: true, modifiers: m, .. } => {
                 use egui::Key;
-                if crate::keymap::dispatch(app, ctx, key, physical_key, m, geo, sh) {
-                    shortcut_ran = true;
-                    continue;
+                match dispatch_shortcut(app, ctx, key, physical_key, m, geo, sh) {
+                    Some(true) => return,
+                    Some(false) => {
+                        shortcut_ran = true;
+                        continue;
+                    }
+                    None => {}
                 }
                 let cmd = m.command;
                 let shift = m.shift;
@@ -123,9 +125,10 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     }
                     Key::Tab => app.move_after_enter(0, if shift { -1 } else { 1 }),
                     Key::F2 => app.begin_edit(None, false),
-                    Key::Delete if delete_selected_object(app, sh) => {}
+                    // With an object selected, Delete and Backspace delete it, not the cells.
+                    Key::Delete if app.delete_selected_object() => {}
                     Key::Delete => app.run_or_alert("edit.clearContents", json!({})),
-                    Key::Backspace if delete_selected_object(app, sh) => {}
+                    Key::Backspace if app.delete_selected_object() => {}
                     Key::Backspace => {
                         // Excel for Mac: Delete clears the cell and starts editing it.
                         app.run_or_alert("edit.clearContents", json!({}));
@@ -133,6 +136,7 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                             app.begin_edit(Some(String::new()), false);
                         }
                     }
+                    Key::Escape if app.selected_object.is_some() => app.selected_object = None,
                     Key::Escape => {
                         app.session.clipboard = None;
                         app.session.format_painter = None;
@@ -143,6 +147,8 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
                     }
                     Key::F9 => app.run_or_alert("formulas.calculateNow", json!({})),
                     Key::F4 if !cmd => {}
+                    // Ctrl+Shift+letter (⌘⇧letter) runs the macro with that shortcut, unless GridCraft uses it.
+                    _ if cmd && shift && !m.alt && crate::macro_ui::run_shortcut(app, key) => {}
                     _ if cmd && !crate::keymap::altgr_text(ctx, m, ctx.os() == egui::os::OperatingSystem::Mac) => {
                         crate::ribbon::shortcut(app, key, m)
                     }
@@ -152,4 +158,21 @@ pub(super) fn keyboard(app: &mut SheetApp, ctx: &egui::Context, resp: &egui::Res
             _ => {}
         }
     }
+}
+
+fn dispatch_shortcut(
+    app: &mut SheetApp,
+    ctx: &egui::Context,
+    key: egui::Key,
+    physical_key: Option<egui::Key>,
+    modifiers: egui::Modifiers,
+    geo: &Geo,
+    sh: &Sheet,
+) -> Option<bool> {
+    if !crate::keymap::dispatch(app, ctx, key, physical_key, modifiers, geo, sh) {
+        return None;
+    }
+    // A shortcut that opened a dialog hands it the rest of this frame's input: the text some
+    // hosts send with Alt+Q must not start a cell edit.
+    Some(app.dialog.is_some())
 }

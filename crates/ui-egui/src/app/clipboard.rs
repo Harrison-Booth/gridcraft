@@ -1,15 +1,23 @@
-use super::*;
+use super::{Json, SheetApp, json};
 
 impl SheetApp {
     /// Copy or cut the selected cells to the system clipboard. Engine-only commands keep
     /// their existing internal clipboard behavior and do not write to the host clipboard.
     pub fn copy_to_clipboard(&mut self, ctx: &egui::Context, command: &str) {
+        self.copy_to_clipboard_ok(ctx, command);
+    }
+
+    /// [`Self::copy_to_clipboard`], telling whether the command ran (an error is alerted and is `false`).
+    pub(super) fn copy_to_clipboard_ok(&mut self, ctx: &egui::Context, command: &str) -> bool {
         // Only ask the engine for HTML when the host can publish it.
         let result = match self.run_command(command, json!({"html": self.services.copy_html.is_some()})) {
             Ok(result) => result,
-            Err(e) => return self.alert(e),
+            Err(e) => {
+                self.alert(e);
+                return false;
+            }
         };
-        let Some(text) = result.get("text").and_then(Json::as_str) else { return };
+        let Some(text) = result.get("text").and_then(Json::as_str) else { return true };
         // The system clipboard gets this copy, so its text decides what Paste pastes.
         self.clipboard_text_at_copy = None;
         self.cut_text = (command == "edit.cut").then(|| text.replace("\r\n", "\n"));
@@ -17,11 +25,12 @@ impl SheetApp {
             && let Some(copy_html) = &mut self.services.copy_html
         {
             match copy_html(html, text) {
-                Ok(()) => return,
+                Ok(()) => return true,
                 Err(error) => log::warn!("HTML clipboard unavailable; copying plain text: {error}"),
             }
         }
         ctx.copy_text(text.to_string());
+        true
     }
 
     /// Paste text that came from the system clipboard (Cmd/Ctrl+V, or the ribbon and menu Paste),
@@ -32,9 +41,14 @@ impl SheetApp {
     /// clipboard is pasted instead, which reports "Nothing to paste.". Other text means the
     /// clipboard has moved on, so the cut's text is forgotten and pastes normally later.
     pub fn paste_external(&mut self, text: String) {
+        self.paste_external_ok(text);
+    }
+
+    /// [`Self::paste_external`], telling whether the paste ran.
+    fn paste_external_ok(&mut self, text: String) -> bool {
         if Self::same_clipboard_text(Some(&text), self.cut_text.as_deref()) {
             if self.session.clipboard.is_none() {
-                return self.run_or_alert("edit.paste", json!({}));
+                return self.run_or_alert_ok("edit.paste", json!({}));
             }
         } else {
             self.cut_text = None;
@@ -44,16 +58,53 @@ impl SheetApp {
             Some(html) => json!({"text": text, "html": html}),
             None => json!({"text": text}),
         };
-        self.run_or_alert("edit.paste", params);
+        self.run_or_alert_ok("edit.paste", params)
     }
 
     /// Ribbon and menu Paste: paste the text on the system clipboard, as Cmd/Ctrl+V does. With no
-    /// text there, no host clipboard (web), or the text that was there when GridCraft last copied
-    /// without publishing, GridCraft's own clipboard is pasted.
+    /// text there but a picture, the picture is pasted. With neither, no host clipboard (web), or
+    /// the text that was there when GridCraft last copied without publishing, GridCraft's own
+    /// clipboard is pasted.
     pub fn paste_from_clipboard(&mut self) {
+        self.paste_from_clipboard_ok();
+    }
+
+    /// [`Self::paste_from_clipboard`], telling whether the paste ran.
+    pub(super) fn paste_from_clipboard_ok(&mut self) -> bool {
         match self.system_clipboard_text() {
-            Some(text) if self.session.clipboard.is_none() || self.clipboard_text_at_copy.as_ref() != Some(&text) => self.paste_external(text),
-            _ => self.run_or_alert("edit.paste", json!({})),
+            Some(text) if self.session.clipboard.is_none() || self.clipboard_text_at_copy.as_ref() != Some(&text) => self.paste_external_ok(text),
+            Some(_) => self.run_or_alert_ok("edit.paste", json!({})),
+            None => match self.services.paste_image.as_mut().and_then(|read| read()) {
+                Some(image) => {
+                    self.paste_picture(image);
+                    true
+                }
+                None => self.run_or_alert_ok("edit.paste", json!({})),
+            },
+        }
+    }
+
+    /// Paste a picture from the system clipboard (a screenshot, an image copied in a browser) as
+    /// a floating picture whose top-left corner is the active cell, as Excel does.
+    pub fn paste_picture(&mut self, image: image::RgbaImage) {
+        match encode_png(&image) {
+            Ok(png) => self.run_or_alert("insert.picture", json!({"base64": gridcraft_engine::io::base64_encode(&png), "mime": "image/png"})),
+            Err(e) => self.alert(e),
+        }
+    }
+
+    /// Cmd/Ctrl+V with a picture and no text on the clipboard (egui's `Event::PasteImage`).
+    pub fn paste_color_image(&mut self, image: &egui::ColorImage) {
+        let [w, h] = image.size;
+        // A side too large for u32 is too large to paste; check before copying the pixels.
+        let (w, h) = (u32::try_from(w).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX));
+        if let Err(e) = check_picture_size(w, h) {
+            return self.alert(e);
+        }
+        let rgba = image.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+        match image::RgbaImage::from_raw(w, h, rgba) {
+            Some(image) => self.paste_picture(image),
+            None => self.alert("The picture on the clipboard can't be read.".into()),
         }
     }
 
@@ -74,4 +125,30 @@ impl SheetApp {
             _ => false,
         }
     }
+}
+
+/// Largest clipboard picture pasted, per side and in total (an 8K screenshot fits).
+const MAX_PICTURE_SIDE: u32 = 16_384;
+const MAX_PICTURE_PIXELS: u64 = 64 * 1024 * 1024;
+
+/// Refuse empty clipboard pictures and sizes that would exhaust memory.
+fn check_picture_size(w: u32, h: u32) -> Result<(), String> {
+    if w == 0 || h == 0 {
+        return Err("The picture on the clipboard is empty.".into());
+    }
+    if w > MAX_PICTURE_SIDE || h > MAX_PICTURE_SIDE || u64::from(w) * u64::from(h) > MAX_PICTURE_PIXELS {
+        return Err("The picture on the clipboard is too large to paste.".into());
+    }
+    Ok(())
+}
+
+/// PNG bytes of a clipboard picture, refusing sizes that would exhaust memory.
+fn encode_png(image: &image::RgbaImage) -> Result<Vec<u8>, String> {
+    let (w, h) = image.dimensions();
+    check_picture_size(w, h)?;
+    let mut png = Vec::new();
+    image
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| format!("The picture on the clipboard can't be pasted: {e}"))?;
+    Ok(png)
 }
