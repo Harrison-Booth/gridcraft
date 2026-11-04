@@ -23,7 +23,8 @@ use crate::theme::{self, Tokens};
 mod options;
 mod print;
 
-use options::{options, platform};
+use options::options;
+pub(crate) use options::platform;
 use print::print;
 
 /// Width of the navigation column.
@@ -114,6 +115,8 @@ pub struct Backstage {
     pub page: Page,
     /// Info: property drafts while a field is being edited (committed when it loses focus).
     props: [String; 6],
+    /// Focus at the end of the previous frame, before egui clears it on Esc.
+    text_edit_focused: bool,
     /// Print: the whole workbook rather than the active sheet.
     pub print_all: bool,
     /// Print: fit each sheet on one page.
@@ -138,6 +141,7 @@ impl Backstage {
         Backstage {
             page,
             props: Default::default(),
+            text_edit_focused: false,
             print_all: false,
             fit_to_page: false,
             preview_page: 0,
@@ -160,7 +164,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
     let Some(mut bs) = app.backstage.take() else { return };
     let ctx = ui.ctx().clone();
     // Esc inside a text field leaves the field; it closes the view only from outside one.
-    let typing = ctx.text_edit_focused();
+    let typing = bs.text_edit_focused;
     let t = Tokens::get(&ctx);
     let lang = app.ui.language;
     let mut out = Outcome::default();
@@ -229,6 +233,7 @@ pub fn show(app: &mut SheetApp, ui: &mut Ui) {
             });
         });
     });
+    bs.text_edit_focused = ctx.text_edit_focused();
     if !typing
         && app.dialog.is_none()
         && app.message.is_none()
@@ -815,6 +820,18 @@ fn account(app: &mut SheetApp, ui: &mut Ui) {
             ui.add_space(14.0);
             ui.label(RichText::new(lang.tr("About GridCraft")).font(theme::ui_bold(13.5)).color(t.text));
             dim(ui, lang.tr("Version, contributors and the AI models that helped"));
+        });
+    });
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        if square_button(ui, Icon::Info, lang.tr("Report an Issue…")).clicked() {
+            app.run_or_alert("help.reportIssue", json!({}));
+        }
+        ui.add_space(12.0);
+        ui.vertical(|ui| {
+            ui.add_space(14.0);
+            ui.label(RichText::new(lang.tr("Report an Issue…")).font(theme::ui_bold(13.5)).color(t.text));
+            dim(ui, lang.tr("Opens a new GitHub issue with the version and system filled in"));
         });
     });
 }
