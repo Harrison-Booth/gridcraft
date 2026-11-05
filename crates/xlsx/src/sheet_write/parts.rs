@@ -1,4 +1,11 @@
+use std::collections::HashMap;
+
 use super::*;
+
+use quick_xml::events::{BytesStart, Event};
+use quick_xml::{Reader, Writer};
+
+use crate::xml::parse;
 
 /// Valid table name: letters, digits, `_` and `.`, starting with a letter, `_` or `\`
 /// (Microsoft "Names in formulas" rules).
@@ -21,16 +28,24 @@ pub(super) fn table_name(name: &str, used: &mut HashSet<String>, n: u32) -> Stri
 pub(super) fn table_columns(t: &Table) -> Vec<String> {
     let w = t.range.width() as usize;
     let mut used = HashSet::new();
+    // The next suffix to try per lowercased base, so repeated headers don't retry every suffix
+    // already handed out.
+    let mut next: HashMap<String, u32> = HashMap::new();
     (0..w)
         .map(|i| {
             let base = t.columns.get(i).map(|c| c.name.clone()).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Column{}", i + 1));
-            let mut name = base.clone();
-            let mut k = 2;
-            while !used.insert(name.to_lowercase()) {
-                name = format!("{base}{k}");
-                k += 1;
+            let lower = base.to_lowercase();
+            if used.insert(lower.clone()) {
+                return base;
             }
-            name
+            let k = next.entry(lower).or_insert(2);
+            loop {
+                let name = format!("{base}{k}");
+                *k += 1;
+                if used.insert(name.to_lowercase()) {
+                    return name;
+                }
+            }
         })
         .collect()
 }
@@ -100,6 +115,84 @@ pub(super) fn autofilter_xml(range: RangeRef, criteria: &[(u32, FilterCriterion)
     s
 }
 
+/// Rewrites a retained query table part for the columns as saved. Each `queryTableField` takes its
+/// column's new `tableColumn` id, linked through the field id a column keeps
+/// (`TableColumn::query_field_id`). A field whose column is gone is dropped, and the count follows.
+pub(super) fn remap_query_fields(query: &str, t: &Table) -> String {
+    let new_id: HashMap<u32, u32> = t.columns.iter().enumerate().filter_map(|(i, c)| Some((c.query_field_id?, u32::try_from(i + 1).ok()?))).collect();
+    let Ok(root) = parse(query.as_bytes()) else { return query.to_string() };
+    let kept = root
+        .path(&["queryTableRefresh", "queryTableFields"])
+        .map_or(0, |fs| fs.kids("queryTableField").filter(|f| f.attr_u32("id").is_some_and(|id| new_id.contains_key(&id))).count());
+    let mut reader = Reader::from_reader(query.as_bytes());
+    let mut writer = Writer::new(Vec::new());
+    let mut buf = Vec::new();
+    // Depth inside a dropped field, whose children go with it.
+    let mut dropped = 0usize;
+    loop {
+        buf.clear();
+        let ev = match reader.read_event_into(&mut buf) {
+            Ok(Event::Eof) => break,
+            Ok(ev) => ev,
+            Err(_) => return query.to_string(),
+        };
+        if dropped > 0 {
+            match ev {
+                Event::Start(_) => dropped += 1,
+                Event::End(_) => dropped -= 1,
+                _ => {}
+            }
+            continue;
+        }
+        let out = match ev {
+            Event::Start(e) if e.local_name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
+                Some(f) => Event::Start(f),
+                None => {
+                    dropped = 1;
+                    continue;
+                }
+            },
+            Event::Empty(e) if e.local_name().as_ref() == b"queryTableField" => match query_field_el(&e, &new_id) {
+                Some(f) => Event::Empty(f),
+                None => continue,
+            },
+            Event::Start(e) if e.local_name().as_ref() == b"queryTableFields" => Event::Start(set_attr(&e, b"count", &kept.to_string())),
+            Event::Empty(e) if e.local_name().as_ref() == b"queryTableFields" => Event::Empty(set_attr(&e, b"count", &kept.to_string())),
+            other => other,
+        };
+        if writer.write_event(out).is_err() {
+            return query.to_string();
+        }
+    }
+    String::from_utf8(writer.into_inner()).unwrap_or_else(|_| query.to_string())
+}
+
+/// A `queryTableField` with its `tableColumnId` set to its column's new id; None when the column is gone.
+fn query_field_el(e: &BytesStart, new_id: &HashMap<u32, u32>) -> Option<BytesStart<'static>> {
+    let id = e.attributes().flatten().find(|a| a.key.as_ref() == b"id")?;
+    let new = new_id.get(&std::str::from_utf8(&id.value).ok()?.trim().parse::<u32>().ok()?)?;
+    Some(set_attr(e, b"tableColumnId", &new.to_string()))
+}
+
+/// The element with attribute `key` set to `value`, every other attribute kept in order.
+fn set_attr(e: &BytesStart, key: &[u8], value: &str) -> BytesStart<'static> {
+    let mut out = e.to_owned();
+    out.clear_attributes();
+    let mut set = false;
+    for a in e.attributes().flatten() {
+        if a.key.as_ref() == key {
+            out.push_attribute((key, value.as_bytes()));
+            set = true;
+        } else {
+            out.push_attribute(a);
+        }
+    }
+    if !set {
+        out.push_attribute((key, value.as_bytes()));
+    }
+    out
+}
+
 pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &mut Out) -> String {
     let mut s =
         format!("{XML_DECL}<table xmlns=\"{NS_MAIN}\" id=\"{id}\" name=\"{0}\" displayName=\"{0}\" ref=\"{1}\"", esc_attr(name), t.range.a1());
@@ -111,10 +204,11 @@ pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &m
     } else {
         s.push_str(" totalsRowShown=\"0\"");
     }
-    if let Some(ty) = &t.table_type {
+    // `queryTable` needs its part: without it the table is plain.
+    if let Some(ty) = t.table_type.as_ref().filter(|ty| *ty != "queryTable" || t.query_table.is_some()) {
         let _ = write!(s, " tableType=\"{}\"", esc_attr(ty));
     }
-    if let Some(c) = t.connection_id {
+    if let Some(c) = t.connection_id.filter(|_| t.table_type.as_deref() != Some("queryTable") || t.query_table.is_some()) {
         let _ = write!(s, " connectionId=\"{c}\"");
     }
     s.push('>');
@@ -131,6 +225,11 @@ pub(super) fn table_xml(t: &Table, cols: &[String], name: &str, id: u32, out: &m
             let _ = write!(s, " uniqueName=\"{}\"", esc_attr(u));
         }
         let _ = write!(s, " name=\"{}\"", esc_attr(&encode_xstring(name)));
+        if t.query_table.is_some()
+            && let Some(f) = col.and_then(|c| c.query_field_id)
+        {
+            let _ = write!(s, " queryTableFieldId=\"{f}\"");
+        }
         let totals = col.map(|c| c.totals).unwrap_or_default();
         if t.totals_row {
             let f = match totals {
@@ -348,13 +447,14 @@ fn note_anchor(cell: CellRef, b: Option<&NoteBox>) -> (String, (f64, f64)) {
     (format!("{}, {}", corner(&b.from), corner(&b.to)), b.size_pt.unwrap_or(DEFAULT_NOTE_SIZE_PT))
 }
 
-/// Legacy VML shapes Excel uses to display notes.
-pub(super) fn vml_xml(sheet: &Sheet, n: u32) -> String {
+/// Legacy VML shapes Excel uses to display notes (numbered from `base + 1`), followed by the
+/// form control shapes `controls`. `idmap` lists the shape blocks the drawing uses.
+pub(super) fn vml_xml(sheet: &Sheet, idmap: &str, base: u64, controls: &str) -> String {
     let mut s = format!(
-        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{n}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
+        "<xml xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:x=\"urn:schemas-microsoft-com:office:excel\"><o:shapelayout v:ext=\"edit\"><o:idmap v:ext=\"edit\" data=\"{idmap}\"/></o:shapelayout><v:shapetype id=\"_x0000_t202\" coordsize=\"21600,21600\" o:spt=\"202\" path=\"m,l,21600r21600,l21600,xe\"><v:stroke joinstyle=\"miter\"/><v:path gradientshapeok=\"t\" o:connecttype=\"rect\"/></v:shapetype>"
     );
     for (i, (cell, c)) in sheet.comments.iter().enumerate() {
-        let id = n as u64 * 1024 + 1 + i as u64;
+        let id = base + 1 + i as u64;
         let vis = if c.visible { "visible" } else { "hidden" };
         let (anchor, (w, h)) = note_anchor(*cell, c.note_box.as_ref());
         let _ = write!(
@@ -368,6 +468,51 @@ pub(super) fn vml_xml(sheet: &Sheet, n: u32) -> String {
             if c.visible { "<x:Visible/>" } else { "" }
         );
     }
+    s.push_str(controls);
     s.push_str("</xml>");
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use gridcraft_model::TableColumn;
+
+    use super::*;
+
+    #[test]
+    fn repeated_headers_are_renamed_without_retrying_suffixes() {
+        let col = |n: &str| TableColumn {
+            name: n.into(),
+            totals: TotalsFn::None,
+            totals_label: None,
+            formula: None,
+            query_field_id: None,
+            unique_name: None,
+            xml: None,
+        };
+        let mut columns: Vec<TableColumn> = (0..10_000).map(|_| col("Total")).collect();
+        columns[1] = col("total3");
+        let t = Table {
+            id: 1,
+            name: "T".into(),
+            range: RangeRef::parse("A1:NTP2").unwrap(),
+            header_row: true,
+            totals_row: false,
+            columns,
+            style: String::new(),
+            banded_rows: false,
+            banded_cols: false,
+            first_col: false,
+            last_col: false,
+            filter_button: false,
+            filter: vec![],
+            table_type: None,
+            connection_id: None,
+            query_table: None,
+        };
+        let names = table_columns(&t);
+        assert_eq!(names.len(), 10_000);
+        assert_eq!(&names[..4], ["Total", "total3", "Total2", "Total4"]);
+        assert_eq!(names.iter().map(|n| n.to_lowercase()).collect::<HashSet<_>>().len(), 10_000);
+    }
 }

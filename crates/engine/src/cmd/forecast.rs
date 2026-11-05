@@ -11,7 +11,7 @@ use gridcraft_functions::Timeline;
 use gridcraft_model::{Anchor, Cell, Chart, ChartKind, Formula, LegendPos, Series, Sheet, StyleId, Table, TableColumn, TotalsFn};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{CommandSpec, EngineError, Result, Session, bad, bool_param, cmd, edit, has_doc, split_sheet, str_param};
 use crate::selection::current_region;
 
 const CMD: &str = "data.forecastSheet";
@@ -315,7 +315,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
         let vstyle = cx.wb.styles.derive(StyleId::DEFAULT, |st| st.num_fmt = vfmt.clone());
         let mut sheet = Sheet::new(sheet_name.clone());
         let put = |sheet: &mut Sheet, row: u32, col: u32, v: Value, style: StyleId| {
-            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style });
+            sheet.set_cell(CellRef::new(row, col), Cell { value: v, formula: None, style, py: None });
         };
         let formula = |sheet: &mut Sheet, row: u32, col: u32, text: String, style: StyleId| {
             let mut cell = Cell::formula(Formula::new(&text));
@@ -388,7 +388,15 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             totals_row: false,
             columns: headers
                 .iter()
-                .map(|h| TableColumn { name: h.clone(), totals: TotalsFn::None, totals_label: None, formula: None, unique_name: None, xml: None })
+                .map(|h| TableColumn {
+                    name: h.clone(),
+                    totals: TotalsFn::None,
+                    totals_label: None,
+                    formula: None,
+                    unique_name: None,
+                    query_field_id: None,
+                    xml: None,
+                })
                 .collect(),
             style: "TableStyleMedium2".into(),
             banded_rows: true,
@@ -399,6 +407,7 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             filter: vec![],
             table_type: None,
             connection_id: None,
+            query_table: None,
         });
         let q = gridcraft_formula::quote_sheet(&sheet_name);
         let col_ref = |c: u32| format!("{q}!${0}$2:${0}${end_row}", col_letters(c));
@@ -424,8 +433,11 @@ fn forecast_sheet(s: &mut Session, p: &Json) -> Result<Json> {
             series,
             legend: LegendPos::Bottom,
             data_labels: false,
+            data_table: None,
             gridlines: true,
             style: 1,
+            hole_size: 75,
+            first_slice_angle: 0,
             x_title: None,
             y_title: None,
             source: None,

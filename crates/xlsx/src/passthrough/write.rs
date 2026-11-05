@@ -15,6 +15,12 @@ pub struct KeptOut {
 }
 
 impl KeptOut {
+    /// Reserves a part name GridCraft writes itself, so kept parts don't take it. False when it is
+    /// taken.
+    pub fn reserve(&mut self, name: &str) -> bool {
+        self.used.insert(name.to_ascii_lowercase())
+    }
+
     /// Reserves the VML shape blocks the kept header and footer drawings of `wb` use, so that the
     /// notes drawings GridCraft writes don't reuse their shape ids.
     pub fn reserve_vml_blocks(&mut self, wb: &Workbook) {
@@ -31,7 +37,7 @@ impl KeptOut {
 
     /// A part name for a kept part: its original name when that can't collide with anything
     /// written, otherwise a fresh one in the same folder.
-    pub(super) fn claim(&mut self, original: &str) -> String {
+    pub(crate) fn claim(&mut self, original: &str) -> String {
         let lower = original.to_ascii_lowercase();
         let own = OWN_DIRS.iter().any(|d| lower.starts_with(d));
         if own && self.used.insert(lower) {
