@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    Cell, CellRef, EngineError, Formula, Json, MAX_ROWS, RangeRef, Result, Session, StyleId, Value, bad, bool_param, cell_param_on, edit, json,
+    locked_cell_error, str_param, target_range, target_ranges, target_sheet,
+};
 
 // ---------------------------------------------------------------- entry
 
@@ -78,7 +81,7 @@ pub(crate) fn input_to_cell(input: &str, sheet: usize, at: CellRef, wb: &mut gri
 /// and refuses a formula that still doesn't parse.
 pub(crate) fn parse_typed_formula(body: &str) -> Result<gridcraft_formula::Expr> {
     // Excel closes missing parentheses for you.
-    let parsed = gridcraft_formula::parse_closing_parens(body, gridcraft_formula::parse);
+    let parsed = gridcraft_formula::parse_closing_parens(body, gridcraft_formula::parse_typed);
     parsed.map_err(|e| EngineError::Other(format!("There's a problem with this formula: {e}")))
 }
 
