@@ -87,7 +87,7 @@ pub fn holds_source_in_corner(src: RangeRef, target: RangeRef) -> bool {
 
 /// Fills `target` (which contains `src` at one edge) from the pattern in `src`.
 pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: FillMode) -> Result<()> {
-    let custom = cx.wb.custom_lists.clone();
+    let custom: Vec<&[String]> = cx.custom_lists.iter().chain(cx.wb.custom_lists.iter()).map(Vec::as_slice).collect();
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     // Direction: down/up if target extends rows, else right/left.
     let vertical = target.height() != src.height() || target.width() == src.width();
@@ -171,10 +171,12 @@ pub fn fill(cx: &mut Ctx, sheet: usize, src: RangeRef, target: RangeRef, mode: F
                             cell.formula = Some(Arc::new(Formula::from_expr(shifted)));
                             cell.value = Value::Empty;
                         }
-                    } else if let Some(v) = match per_cell.get(src_i) {
-                        Some(p) => p.value(k as i64 / src_cells.len() as i64 + 1, forward, 1),
-                        None => pattern.value(step, forward, src_cells.len()),
-                    } {
+                    } else if cell.py.is_none()
+                        && let Some(v) = match per_cell.get(src_i) {
+                            Some(p) => p.value(k as i64 / src_cells.len() as i64 + 1, forward, 1),
+                            None => pattern.value(step, forward, src_cells.len()),
+                        }
+                    {
                         cell.value = v;
                     }
                     cell.style = style;
@@ -294,9 +296,10 @@ impl Pattern {
         })
     }
 
-    fn detect(cells: &[(CellRef, Option<Cell>)], custom: &[Vec<String>], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
+    fn detect(cells: &[(CellRef, Option<Cell>)], custom: &[&[String]], sys: gridcraft_core::DateSystem, fmt: &str) -> Pattern {
         let vals: Vec<Value> = cells.iter().map(|(_, c)| c.as_ref().map(|c| c.value.clone()).unwrap_or_default()).collect();
-        if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some())) {
+        // Formulas and Python cells copy.
+        if cells.iter().any(|(_, c)| c.as_ref().is_some_and(|c| c.formula.is_some() || c.py.is_some())) {
             return Pattern::Copy;
         }
         // Numbers.
@@ -345,8 +348,8 @@ impl Pattern {
         // Text.
         if !vals.is_empty() && vals.iter().all(|v| v.is_text()) {
             let texts: Vec<String> = vals.iter().filter_map(|v| v.as_text().map(str::to_string)).collect();
-            let all_lists: Vec<Vec<String>> = custom.iter().cloned().chain(lists()).collect();
-            for list in &all_lists {
+            let builtins = lists();
+            for list in custom.iter().copied().chain(builtins.iter().map(Vec::as_slice)) {
                 let idx: Vec<Option<usize>> = texts.iter().map(|t| list.iter().position(|l| l.eq_ignore_ascii_case(t))).collect();
                 if idx.iter().all(Option::is_some) {
                     let idx: Vec<usize> = idx.into_iter().flatten().collect();
@@ -356,7 +359,7 @@ impl Pattern {
                     let t0 = texts.first().cloned().unwrap_or_default();
                     let upper = t0.chars().all(|c| !c.is_lowercase()) && t0.chars().any(char::is_alphabetic) && t0.len() > 1;
                     let lower = t0.chars().all(|c| !c.is_uppercase());
-                    return Pattern::List { list: list.clone(), last, first, step, upper, lower };
+                    return Pattern::List { list: list.to_vec(), last, first, step, upper, lower };
                 }
             }
             // Text with a number at the end (or start).
@@ -540,8 +543,19 @@ fn split_num(t: &str) -> Option<(String, i64, String, usize)> {
     Some((prefix, n, suffix, width))
 }
 
+/// Options for filling a numeric or date series.
+pub struct SeriesOptions<'a> {
+    pub range: RangeRef,
+    pub rows: bool,
+    pub kind: &'a str,
+    pub step: f64,
+    pub stop: Option<f64>,
+    pub unit: &'a str,
+}
+
 /// Home › Fill › Series.
-pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, step: f64, stop: Option<f64>, unit: &str) -> Result<()> {
+pub fn series(cx: &mut Ctx, sheet: usize, options: SeriesOptions<'_>) -> Result<()> {
+    let SeriesOptions { range: r, rows, kind, step, stop, unit } = options;
     let sys = cx.wb.date_system;
     let Some(sh) = cx.wb.sheet(sheet) else { return Ok(()) };
     let lanes: Vec<u32> = if rows { (r.start.row..=r.end.row).collect() } else { (r.start.col..=r.end.col).collect() };
@@ -561,20 +575,9 @@ pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, s
                     match (unit, d) {
                         ("month", Some(_)) => (step as i64).checked_mul(i as i64).and_then(|m| add_months_clamped(sys, start, m)).unwrap_or(v),
                         ("year", Some(_)) => (step as i64).checked_mul(i as i64 * 12).and_then(|m| add_months_clamped(sys, start, m)).unwrap_or(v),
-                        ("weekday", Some(_)) => {
-                            let mut n = v;
-                            let mut left = step.abs() as i64;
-                            while left > 0 {
-                                n += step.signum();
-                                let Some(day) = datetime_from_serial(sys, n) else {
-                                    return Err(crate::EngineError::Other("The weekday series runs past the supported date range.".into()));
-                                };
-                                if day.weekday != 0 && day.weekday != 6 {
-                                    left -= 1;
-                                }
-                            }
-                            n
-                        }
+                        // Whole weeks at a time: a huge step costs no more than a small one.
+                        ("weekday", Some(_)) => add_weekdays(sys, v, step as i64)
+                            .ok_or_else(|| crate::EngineError::Other("The weekday series runs past the supported date range.".into()))?,
                         _ => v + step,
                     }
                 }
@@ -582,12 +585,12 @@ pub fn series(cx: &mut Ctx, sheet: usize, r: RangeRef, rows: bool, kind: &str, s
             };
             // The stop value bounds the series in the direction it runs (a growth by 0.5 falls).
             if let Some(s) = stop
-                && ((v >= prev && v > s) || (v < prev && v < s))
+                && ((v >= prev && round15(v) > s) || (v < prev && round15(v) < s))
             {
                 break;
             }
             let c = if rows { CellRef::new(lane, r.start.col + i) } else { CellRef::new(r.start.row + i, lane) };
-            writes.push((c, Cell { value: Value::number(round15(v)), formula: None, style }));
+            writes.push((c, Cell { value: Value::number(round15(v)), formula: None, style, py: None }));
         }
     }
     let sh = cx.sheet_mut(sheet)?;
@@ -646,7 +649,7 @@ pub fn flash_fill(cx: &mut Ctx, sheet: usize, at: CellRef) -> Result<usize> {
     }
     let sh = cx.sheet_mut(sheet)?;
     for (c, out) in &writes {
-        sh.set_cell(*c, Cell { value: Value::text(out.as_str()), formula: None, style });
+        sh.set_cell(*c, Cell { value: Value::text(out.as_str()), formula: None, style, py: None });
     }
     for (c, _) in writes {
         cx.touch(sheet, c);
@@ -796,6 +799,21 @@ mod tests {
     }
 
     #[test]
+    fn series_keeps_value_equal_to_stop_after_float_drift() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.execute("cell.set", serde_json::json!({"cell": "A1", "input": "1"})).unwrap();
+        s.execute("edit.fillSeries", serde_json::json!({"range": "A1:A6", "type": "linear", "step": 0.1, "stop": 1.3})).unwrap();
+        s.execute("cell.set", serde_json::json!({"cell": "B1", "input": "0.1"})).unwrap();
+        s.execute("edit.fillSeries", serde_json::json!({"range": "B1:B4", "type": "growth", "step": 3, "stop": 0.3})).unwrap();
+        let sh = s.doc().unwrap().wb.active().unwrap();
+        let col = |c: u32, n: u32| (0..n).map(|r| sh.value(CellRef::new(r, c))).collect::<Vec<_>>();
+        let n = Value::number;
+        assert_eq!(col(0, 6), vec![n(1.0), n(1.1), n(1.2), n(1.3), Value::Empty, Value::Empty]);
+        assert_eq!(col(1, 4), vec![n(0.1), n(0.3), Value::Empty, Value::Empty]);
+    }
+
+    #[test]
     fn flash_programs() {
         let p = learn(&[("John Smith".into(), "Smith, John".into())]).unwrap();
         assert_eq!(p.apply("Ada Lovelace").as_deref(), Some("Lovelace, Ada"));
@@ -831,6 +849,21 @@ mod tests {
             fill(serde_json::json!([["Product 1"], ["On backorder"]]), "E1:E2", "E1:E6"),
             ["Product 1", "On backorder", "Product 2", "On backorder", "Product 3", "On backorder"]
         );
+    }
+
+    #[test]
+    fn saved_custom_list_fills_forward_and_backward_from_middle() {
+        let mut s = crate::Session::new();
+        s.new_workbook();
+        s.prefs.custom_lists.push(["Bronze", "Silver", "Gold"].map(str::to_string).to_vec());
+        for (cell, target, expected) in [("A2", "A2:A4", vec!["Silver", "Gold", "Bronze"]), ("B2", "B1:B2", vec!["Bronze", "Silver"])] {
+            s.execute("cell.set", serde_json::json!({"cell": cell, "input": "Silver"})).unwrap();
+            s.execute("edit.autoFill", serde_json::json!({"source": cell, "target": target})).unwrap();
+            let r = RangeRef::parse(target).unwrap();
+            let sh = s.doc().unwrap().wb.active().unwrap();
+            let values: Vec<String> = r.iter().map(|c| crate::display::cell_text(&s.doc().unwrap().wb, sh, c)).collect();
+            assert_eq!(values, expected.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        }
     }
 
     #[test]
