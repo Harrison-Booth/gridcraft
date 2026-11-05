@@ -100,6 +100,11 @@ fn windows_and_mac_variants() {
     assert_eq!(lookup(Key::ArrowLeft, Some(Key::Num4), alt_shift, false), run("data.ungroup"));
     assert_eq!(lookup(Key::PageDown, Some(Key::Num3), Modifiers::ALT, false), Some(Shortcut::ScreenRight));
     assert_eq!(lookup(Key::PageDown, Some(Key::Num3), CTRL_SHIFT, false), None);
+    // Ctrl+. is Next Corner of Selection, with Control on a Mac too (#1442); Cmd+Shift+. stays
+    // Increase Font Size.
+    assert_eq!(lookup(Key::Period, Some(Key::Period), cmd, false), run("selection.nextCorner"));
+    assert_eq!(lookup(Key::Period, Some(Key::Period), ctrl, true), run("selection.nextCorner"));
+    assert_eq!(lookup(Key::Period, Some(Key::Period), Modifiers { shift: true, ..mac_cmd }, true), run("home.increaseFontSize"));
     // Plain keys stay with the grid (typing, navigation).
     assert_eq!(lookup(Key::A, Some(Key::A), Modifiers::NONE, false), None);
     assert_eq!(lookup(Key::F2, Some(Key::F2), Modifiers::NONE, false), None);
@@ -297,4 +302,83 @@ fn ctrl_alt_letter_that_typed_text_is_not_select_all() {
     h.run_steps(2);
     assert_eq!(h.state().session.active().unwrap().selection.current().a1(), "B2");
     assert_eq!(h.state().editor.as_ref().unwrap().text, "\u{e4}");
+}
+
+#[test]
+fn end_mode_makes_the_next_arrow_jump_once() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    assert!(h.state().grid.end_mode);
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert!(!h.state().grid.end_mode);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A3");
+    // Any other key cancels it, so the next arrow is a single step.
+    key(&mut h, Key::End, Modifiers::NONE);
+    key(&mut h, Key::Escape, Modifiers::NONE);
+    assert!(!h.state().grid.end_mode);
+    key(&mut h, Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+}
+
+#[test]
+fn held_end_key_toggles_end_mode_once() {
+    let mut h = harness(book("A1"));
+    let press = |repeat| Event::Key { key: Key::End, physical_key: Some(Key::End), pressed: true, repeat, modifiers: Modifiers::NONE };
+    h.input_mut().events.extend([press(false), press(true), press(true)]);
+    h.run_steps(2);
+    assert!(h.state().grid.end_mode);
+}
+
+#[test]
+fn modified_shortcut_ends_end_mode_before_the_arrow() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    key(&mut h, Key::End, CTRL);
+    assert!(!h.state().grid.end_mode);
+    let landed = h.state().session.active().unwrap().selection.active;
+    key(&mut h, Key::ArrowDown, Modifiers::NONE);
+    assert_eq!(h.state().session.active().unwrap().selection.active.row, landed.row + 1);
+}
+
+#[test]
+fn end_mode_ends_when_the_grid_loses_the_keyboard() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    assert!(h.state().grid.end_mode);
+    h.state_mut().message = Some(("GridCraft".into(), "x".into()));
+    h.run_steps(2);
+    assert!(!h.state().grid.end_mode);
+}
+
+#[test]
+fn end_mode_ends_when_the_window_loses_focus() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    assert!(h.state().grid.end_mode);
+    h.input_mut().events.push(Event::WindowFocused(false));
+    h.run_steps(2);
+    assert!(!h.state().grid.end_mode);
+}
+
+#[test]
+fn clipboard_events_end_end_mode() {
+    for event in [Event::Copy, Event::Cut, Event::Paste("x".into())] {
+        let mut h = harness(book("A1"));
+        key(&mut h, Key::End, Modifiers::NONE);
+        h.input_mut().events.push(event);
+        h.run_steps(2);
+        assert!(!h.state().grid.end_mode);
+        key(&mut h, Key::ArrowDown, Modifiers::NONE);
+        assert_eq!(h.state().session.active().unwrap().selection.active.a1(), "A2");
+    }
+}
+
+#[test]
+fn end_mode_leaves_shift_arrow_extending_one_cell() {
+    let mut h = harness(book("A1"));
+    key(&mut h, Key::End, Modifiers::NONE);
+    key(&mut h, Key::ArrowDown, Modifiers::SHIFT);
+    assert!(!h.state().grid.end_mode);
+    // Shift keeps the active cell on the anchor; only the moving end extends, one row.
+    assert_eq!(h.state().session.active().unwrap().selection.moving_end().a1(), "A2");
 }
