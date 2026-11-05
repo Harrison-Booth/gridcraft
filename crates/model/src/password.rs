@@ -49,6 +49,7 @@ impl PasswordHash {
                     return Err("the stored password hash is damaged".into());
                 };
                 let got = match algorithm.to_ascii_uppercase().replace('_', "-").as_str() {
+                    "SHA-1" => iterated::<sha1::Sha1>(password, &salt, *spin_count),
                     "SHA-512" => iterated::<sha2::Sha512>(password, &salt, *spin_count),
                     "SHA-384" => iterated::<sha2::Sha384>(password, &salt, *spin_count),
                     "SHA-256" => iterated::<sha2::Sha256>(password, &salt, *spin_count),
@@ -106,28 +107,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_hash_matches_the_published_example() {
+    fn legacy_hash_matches_the_published_example() -> Result<(), Box<dyn std::error::Error>> {
         // The hash Excel writes for the password "password" (`password="83AF"`).
         assert_eq!(legacy_hash("password"), 0x83AF);
-        assert!(PasswordHash::Legacy(0x83AF).verify("password").unwrap());
-        assert!(!PasswordHash::Legacy(0x83AF).verify("Password").unwrap());
+        assert!(PasswordHash::Legacy(0x83AF).verify("password")?);
+        assert!(!PasswordHash::Legacy(0x83AF).verify("Password")?);
         assert_eq!(legacy_hash(""), 0xCE4B);
+        Ok(())
     }
 
     #[test]
-    fn iterated_hash_verifies_and_refuses_what_it_cannot_check() {
-        let h = PasswordHash::new_sha512("s3cret", b"0123456789abcdef");
+    fn sha1_iterated_hash_verifies_the_correct_password() {
+        // Known answer for "s3cret", salt "0123456789abcdef", spin count 10, computed outside this code.
+        let h = PasswordHash::Iterated {
+            algorithm: "SHA-1".into(),
+            hash: "b2+ArdbduWEP3TNb+4NZg6qjkEk=".into(),
+            salt: crate::b64::encode(b"0123456789abcdef"),
+            spin_count: 10,
+        };
         assert!(h.verify("s3cret").unwrap());
         assert!(!h.verify("s3cret ").unwrap());
+    }
+
+    #[test]
+    fn iterated_hash_verifies_and_refuses_what_it_cannot_check() -> Result<(), Box<dyn std::error::Error>> {
+        let h = PasswordHash::new_sha512("s3cret", b"0123456789abcdef");
+        assert!(h.verify("s3cret")?);
+        assert!(!h.verify("s3cret ")?);
         assert!(matches!(&h, PasswordHash::Iterated { algorithm, spin_count: DEFAULT_SPIN_COUNT, .. } if algorithm == "SHA-512"));
-        let PasswordHash::Iterated { hash, salt, .. } = h else { return };
+        let PasswordHash::Iterated { hash, salt, .. } = h else { return Err("not an iterated hash".into()) };
         let other =
             |algorithm: &str, spin_count| PasswordHash::Iterated { algorithm: algorithm.into(), hash: hash.clone(), salt: salt.clone(), spin_count };
-        assert!(other("SHA-1", 10).verify("s3cret").is_err());
+        assert!(!other("SHA-1", 10).verify("s3cret").unwrap());
         assert!(other("MD5", 10).verify("s3cret").is_err());
         assert!(other("SHA-512", MAX_SPIN_COUNT + 1).verify("s3cret").is_err());
-        assert!(!other("SHA-256", 2).verify("s3cret").unwrap());
+        assert!(!other("SHA-256", 2).verify("s3cret")?);
         let broken = PasswordHash::Iterated { algorithm: "SHA-512".into(), hash: "!!".into(), salt: salt.clone(), spin_count: 1 };
         assert!(broken.verify("s3cret").is_err());
+        Ok(())
     }
 }
