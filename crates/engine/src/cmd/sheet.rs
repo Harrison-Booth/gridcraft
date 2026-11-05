@@ -43,17 +43,33 @@ pub fn specs() -> Vec<CommandSpec> {
             Axis::Cols
         )),
         cmd!("sheet.moveColumns", "Move Columns", [], None, "{cols?: \"B:C\", before: zero-based column index}", has_doc, move_columns),
-        cmd!("home.insertCells", "Insert Cells…", ["Home", "Cells", "Insert"], None, "{range?, shift: right|down|row|column}", has_doc, insert_cells),
+        cmd!(
+            "home.insertCells",
+            "Insert Cells…",
+            ["Home", "Cells", "Insert"],
+            None,
+            "{range?, shift: right|down|row|column, unmerge?: bool}",
+            has_doc,
+            insert_cells
+        ),
         cmd!(
             "home.insertCopiedCells",
             "Insert Copied Cells",
             ["Home", "Cells", "Insert"],
             None,
-            "{at?: \"B3\", shift?: down|right}: inserts the copied cells at `at` (the active cell) and pastes them there. Whole copied rows or columns insert whole rows or columns; other blocks shift the cells at `at` down (default) or right. A cut of whole rows or columns moves them (Insert Cut Cells)",
+            "{at?: \"B3\", shift?: down|right, unmerge?: bool}: inserts the copied cells at `at` (the active cell) and pastes them there. Whole copied rows or columns insert whole rows or columns; other blocks shift the cells at `at` down (default) or right. A cut of whole rows or columns moves them (Insert Cut Cells). `unmerge: true` unmerges the merged cells a shift would split",
             has_clipboard,
             insert_copied_cells
         ),
-        cmd!("home.deleteCells", "Delete Cells…", ["Home", "Cells", "Delete"], None, "{range?, shift: left|up|row|column}", has_doc, delete_cells),
+        cmd!(
+            "home.deleteCells",
+            "Delete Cells…",
+            ["Home", "Cells", "Delete"],
+            None,
+            "{range?, shift: left|up|row|column, unmerge?: bool}",
+            has_doc,
+            delete_cells
+        ),
         cmd!("home.insertSheet", "Insert Sheet", ["Home", "Cells", "Insert"], Some("Shift+F11"), "{name?, before?: index}", has_doc, insert_sheet),
         cmd!("home.deleteSheet", "Delete Sheet", ["Home", "Cells", "Delete"], None, "{sheet?}", has_doc, delete_sheet),
         cmd!("sheet.rename", "Rename Sheet", ["Home", "Cells", "Format"], None, "{sheet?, name}", has_doc, rename_sheet),
@@ -141,14 +157,7 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     };
     // Floating objects: snapshot their bottom-right corners against the pre-shift geometry, so a
     // re-fit after the shift measures against the grid the object actually lands on.
-    let obj_corners: Vec<(u32, u32, f32, f32)> = sh
-        .charts
-        .iter()
-        .map(|o| &o.anchor)
-        .chain(sh.images.iter().map(|o| &o.anchor))
-        .chain(sh.shapes.iter().map(|o| &o.anchor))
-        .map(|a| anchor_corner(sh, a))
-        .collect();
+    let obj_corners: Vec<(u32, u32, f32, f32)> = sh.object_anchors().map(|a| anchor_corner(sh, a)).collect();
     // Line info.
     let lines = if axis == Axis::Rows { &mut sh.rows } else { &mut sh.cols };
     let old = std::mem::take(lines);
@@ -193,22 +202,13 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
         std::mem::take(&mut sh.cell_pictures).into_iter().filter_map(|(c, v)| map_cell(c).filter(CellRef::is_valid).map(|c| (c, v))).collect();
     sh.comments = std::mem::take(&mut sh.comments).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
     sh.hyperlinks = std::mem::take(&mut sh.hyperlinks).into_iter().filter_map(|(c, v)| map_cell(c).map(|c| (c, v))).collect();
-    // Floating objects follow their anchor lines per their [`AnchorMode`]. Corners were snapshotted
-    // as charts ++ images ++ shapes, matching the three slices below. New anchors are computed
-    // against the post-shift grid first (the re-fit needs its sizes), then written back.
-    let anchored = |ui: usize, a: Anchor| -> Anchor { obj_corners.get(ui).map_or(a, |&corner| shift_anchor(sh, a, corner, axis, at, &map_line)) };
-    let new_charts: Vec<Anchor> = sh.charts.iter().enumerate().map(|(i, o)| anchored(i, o.anchor)).collect();
-    let new_images: Vec<Anchor> = sh.images.iter().enumerate().map(|(i, o)| anchored(new_charts.len() + i, o.anchor)).collect();
-    let base = new_charts.len() + new_images.len();
-    let new_shapes: Vec<Anchor> = sh.shapes.iter().enumerate().map(|(i, o)| anchored(base + i, o.anchor)).collect();
-    for (o, a) in sh.charts.iter_mut().zip(new_charts) {
-        o.anchor = a;
-    }
-    for (o, a) in sh.images.iter_mut().zip(new_images) {
-        o.anchor = a;
-    }
-    for (o, a) in sh.shapes.iter_mut().zip(new_shapes) {
-        o.anchor = a;
+    // Floating objects follow their anchor lines per their [`AnchorMode`]. New anchors are
+    // computed against the post-shift grid first (the re-fit needs its sizes), then written back
+    // in the same `object_anchors` order the corners were snapshotted in.
+    let new_anchors: Vec<Anchor> =
+        sh.object_anchors().zip(&obj_corners).map(|(a, &corner)| shift_anchor(sh, *a, corner, axis, at, &map_line)).collect();
+    for (a, n) in sh.object_anchors_mut().zip(new_anchors) {
+        *a = n;
     }
     sh.sparklines.retain_mut(|sp| match map_cell(sp.cell) {
         Some(c) => {
@@ -231,9 +231,12 @@ fn shift_sheet_features(sh: &mut Sheet, axis: Axis, at: u32, count: u32, insert:
     }
 }
 
-/// Rewrites every formula reference (and chart series) for a structural edit on `target`.
-pub(super) fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit) {
-    super::edit::rewrite_all_formulas(wb, target, e);
+/// Rewrites every formula reference (chart series included), sparkline source and PivotTable
+/// source for a structural edit on `target`.
+pub(super) fn rewrite(cx: &mut Ctx, target: &str, e: &Edit) -> Result<()> {
+    cx.edits.push((target.to_string(), e.clone()));
+    let wb = &mut cx.wb;
+    super::edit::rewrite_all_formulas(wb, target, e)?;
     for si in 0..wb.sheets.len() {
         let host = wb.sheets.get(si).map(|s| s.name.clone()).unwrap_or_default();
         let Some(sh) = wb.sheet_mut(si) else { continue };
@@ -243,15 +246,6 @@ pub(super) fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit
                 Err(_) => text.to_string(),
             }
         };
-        for ch in sh.charts.iter_mut() {
-            // The source block moves with its cells; one that was deleted is dropped.
-            ch.source = ch.source.as_deref().map(fix).filter(|s| !s.contains("#REF!"));
-            for se in ch.series.iter_mut() {
-                se.values = fix(&se.values);
-                se.categories = se.categories.as_deref().map(fix);
-                se.name = se.name.as_deref().map(fix);
-            }
-        }
         for sp in sh.sparklines.iter_mut() {
             sp.source = fix(&sp.source);
         }
@@ -268,6 +262,7 @@ pub(super) fn rewrite(wb: &mut gridcraft_model::Workbook, target: &str, e: &Edit
             }
         }
     }
+    Ok(())
 }
 
 /// Inserting or deleting cells moves the copied block away from the stored source range, so, like
@@ -296,7 +291,7 @@ fn check_push_off_sheet(s: &Session, sheet: usize, axis: Axis, at: u32, count: u
     if let Some(u) = s.doc()?.wb.sheet(sheet).and_then(|sh| sh.used_range()) {
         let last = if axis == Axis::Rows { u.end.row } else { u.end.col };
         if last >= at && last as u64 + count as u64 >= limit as u64 {
-            return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
+            return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
     }
     Ok(())
@@ -325,7 +320,7 @@ fn insert_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
             // New lines take the format of the line before (Excel's "Format Same As Above").
             inherit_line_format(sh, axis, at, count);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Insert { axis, at, count });
+        rewrite(cx, &name, &Edit::Insert { axis, at, count })?;
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -390,7 +385,7 @@ fn delete_lines(s: &mut Session, p: &Json, axis: Axis) -> Result<Json> {
                 }
                 shift_sheet_features(sh, axis, at, count, false);
             }
-            rewrite(&mut cx.wb, &name, &Edit::Delete { axis, at, count });
+            rewrite(cx, &name, &Edit::Delete { axis, at, count })?;
         }
         cx.structural = true;
         Ok(Json::Null)
@@ -419,10 +414,10 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
     {
         return Err(EngineError::Other("To prevent possible loss of data, columns cannot be shifted off of the worksheet.".into()));
     }
-    // The checks must authorize the sheet this command modifies (`target_sheet`), not whatever
-    // sheet is active: both carry the command's own `sheet` parameter on.
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1(), "sheet": p.get("sheet")}), Axis::Cols, before, count, true)?;
-    check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1(), "sheet": p.get("sheet")}), Axis::Cols, from, count, false)?;
+    // The checks must authorize the sheet this command modifies, not whatever sheet is active:
+    // both get the index `target_sheet` resolved (from `sheet`, or a `Sheet!` range or cell).
+    check_lines_protection(s, &json!({"cols": RangeRef::cols(before, before).a1(), "sheet": sheet}), Axis::Cols, before, count, true)?;
+    check_lines_protection(s, &json!({"cols": RangeRef::cols(from, end - 1).a1(), "sheet": sheet}), Axis::Cols, from, count, false)?;
 
     let moved_from = if before <= from { from + count } else { from };
     if moved_from.checked_add(count).is_none_or(|end| end > MAX_COLS) {
@@ -442,7 +437,7 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
             sh.cells.shift_cols(before, count as i64);
             shift_sheet_features(sh, Axis::Cols, before, count, true);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Insert { axis: Axis::Cols, at: before, count });
+        rewrite(cx, &name, &Edit::Insert { axis: Axis::Cols, at: before, count })?;
 
         let mut touched = Vec::new();
         {
@@ -480,14 +475,14 @@ fn move_columns(s: &mut Session, p: &Json) -> Result<Json> {
         for cell in touched {
             cx.touch(sheet, cell);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Move { from: source, to_row: 0, to_col: destination });
+        rewrite(cx, &name, &Edit::Move { from: source, to_row: 0, to_col: destination })?;
 
         {
             let sh = cx.sheet_mut(sheet)?;
             sh.cells.shift_cols(delete_at + count, -(count as i64));
             shift_sheet_features(sh, Axis::Cols, delete_at, count, false);
         }
-        rewrite(&mut cx.wb, &name, &Edit::Delete { axis: Axis::Cols, at: delete_at, count });
+        rewrite(cx, &name, &Edit::Delete { axis: Axis::Cols, at: delete_at, count })?;
         *cx.sel = crate::Selection {
             active: CellRef::new(active_row, final_start),
             anchor: CellRef::new(active_row, final_start),
@@ -510,6 +505,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let e = Edit::InsertCells { axis: if shift == "right" { Axis::Cols } else { Axis::Rows }, range: r };
     let sheet = target_sheet(s, p)?;
+    let mut unmerge = Vec::new();
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
         // Refuse to push data off the sheet: cells in the last `width`/`height` positions would be dropped.
@@ -518,13 +514,15 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         } else {
             RangeRef::new(CellRef::new(r.start.row.max(MAX_ROWS.saturating_sub(r.height())), r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col))
         };
-        if sh.cells.iter_range(doomed).any(|(_, x)| x.formula.is_some() || !x.value.is_empty()) {
-            return Err(EngineError::Other("To prevent possible loss of data, Excel cannot shift nonblank cells off of the worksheet.".into()));
+        if sh.cells.iter_range(doomed).any(|(_, x)| x.has_content()) {
+            return Err(EngineError::Other("To prevent possible loss of data, GridCraft cannot shift nonblank cells off of the worksheet.".into()));
         }
+        unmerge = check_merge_shift(sh, &e, p)?;
     }
     let right = shift == "right";
     let out = edit(s, |cx| {
         let sh = cx.sheet_mut(sheet)?;
+        sh.merges.retain(|m| !unmerge.contains(m));
         if right {
             sh.cells.shift_cols_in_rows(r.start.row, r.end.row, r.start.col, r.width() as i64);
         } else {
@@ -532,7 +530,7 @@ fn insert_cells(s: &mut Session, p: &Json) -> Result<Json> {
         }
         shift_cell_features(sh, &e);
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
-        rewrite(&mut cx.wb, &name, &e);
+        rewrite(cx, &name, &e)?;
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -550,14 +548,17 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let e = Edit::DeleteCells { axis: if shift == "left" { Axis::Cols } else { Axis::Rows }, range: r };
     let sheet = target_sheet(s, p)?;
+    let mut unmerge = Vec::new();
     if let Some(sh) = s.doc()?.wb.sheet(sheet) {
         check_table_shift(sh, &e)?;
+        unmerge = check_merge_shift(sh, &e, p)?;
     }
     let left = shift == "left";
     let out = edit(s, |cx| {
         let name = cx.wb.sheet(sheet).map(|s| s.name.clone()).unwrap_or_default();
         {
             let sh = cx.sheet_mut(sheet)?;
+            sh.merges.retain(|m| !unmerge.contains(m));
             sh.take_cells(r);
             if left {
                 sh.cells.shift_cols_in_rows(r.start.row, r.end.row, r.end.col + 1, -(r.width() as i64));
@@ -567,7 +568,7 @@ fn delete_cells(s: &mut Session, p: &Json) -> Result<Json> {
             shift_cell_features(sh, &e);
         }
         // References into the deleted cells become #REF!; the rest move.
-        rewrite(&mut cx.wb, &name, &e);
+        rewrite(cx, &name, &e)?;
         cx.structural = true;
         Ok(Json::Null)
     })?;
@@ -606,9 +607,10 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
     let revision = d.revision;
     let before = (d.wb.clone(), d.selection.clone());
+    let unmerge = bool_param(p, "unmerge").unwrap_or(false);
     // Inside an undo group the nested steps add no undo entries of their own.
     let nested_entries = !s.in_group(d.uid);
-    let result = insert_copied_steps(s, &clip, sheet, at, shift, cut);
+    let result = insert_copied_steps(s, &clip, sheet, at, shift, cut, unmerge);
     let d = s.doc_mut()?;
     // The nested steps collapse into this command's single undo step.
     if nested_entries {
@@ -633,7 +635,15 @@ fn insert_copied_cells(s: &mut Session, p: &Json) -> Result<Json> {
     }
 }
 
-fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, at: CellRef, shift: &str, cut: bool) -> Result<(RangeRef, Json)> {
+fn insert_copied_steps(
+    s: &mut Session,
+    clip: &crate::Clipboard,
+    sheet: usize,
+    at: CellRef,
+    shift: &str,
+    cut: bool,
+    unmerge: bool,
+) -> Result<(RangeRef, Json)> {
     let sel = clip.selected;
     let rows = sel.is_full_rows();
     let cols = sel.is_full_cols();
@@ -657,7 +667,8 @@ fn insert_copied_steps(s: &mut Session, clip: &crate::Clipboard, sheet: usize, a
             .offset(clip.range.height() as i64 - 1, clip.range.width() as i64 - 1)
             .ok_or_else(|| EngineError::Other("The copied cells don't fit on the sheet at this position.".into()))?;
         let block = RangeRef::new(at, end);
-        s.execute("home.insertCells", json!({"range": block.a1(), "shift": shift, "sheet": sheet}))?;
+        // The Insert Paste dialog confirms the unmerge itself; the nested insert takes its answer.
+        s.execute("home.insertCells", json!({"range": block.a1(), "shift": shift, "sheet": sheet, "unmerge": unmerge}))?;
         (block, at)
     };
     // Inserting ended copy mode; bring the clipboard back for the paste. A cut reads the live
@@ -831,6 +842,47 @@ fn shift_table_columns(t: &mut gridcraft_model::Table, at: u32, count: u32, inse
             t.columns.drain(a..b);
         }
     }
+}
+
+/// What Insert/Delete Cells says when the shift would split merged cells. The UI matches on it to
+/// ask before running the command again with `unmerge: true`.
+pub const UNMERGE_ERROR: &str = "would split merged cells";
+
+/// The merged areas Insert/Delete Cells would split: those reaching into the cells that shift
+/// (the edited range and everything beyond it, across the range's rows or columns) while sticking
+/// out of that band sideways. Merges within the band's width shift, grow or shrink with it; merges
+/// outside it stay put. Excel asks before such a shift and unmerges the areas it would split.
+fn merges_split_by_shift(sh: &Sheet, e: &Edit) -> Vec<RangeRef> {
+    let (axis, r) = match *e {
+        Edit::InsertCells { axis, range } | Edit::DeleteCells { axis, range } => (axis, range),
+        _ => return Vec::new(),
+    };
+    let band = match axis {
+        Axis::Rows => RangeRef::new(CellRef::new(r.start.row, r.start.col), CellRef::new(MAX_ROWS - 1, r.end.col)),
+        Axis::Cols => RangeRef::new(CellRef::new(r.start.row, r.start.col), CellRef::new(r.end.row, MAX_COLS - 1)),
+    };
+    // A merge across the band's full width (rows for a vertical shift) moves, grows or shrinks
+    // whole, even when it starts before the edited cells.
+    let whole = |m: &RangeRef| match axis {
+        Axis::Rows => m.start.col >= r.start.col && m.end.col <= r.end.col,
+        Axis::Cols => m.start.row >= r.start.row && m.end.row <= r.end.row,
+    };
+    sh.merges.iter().filter(|m| m.intersects(&band) && !whole(m)).copied().collect()
+}
+
+/// Refuses an Insert/Delete Cells that would split merged cells, unless `unmerge: true` says to
+/// unmerge them first (Excel's OK). Returns the merges to unmerge.
+fn check_merge_shift(sh: &Sheet, e: &Edit, p: &Json) -> Result<Vec<RangeRef>> {
+    let split = merges_split_by_shift(sh, e);
+    if !split.is_empty() && !bool_param(p, "unmerge").unwrap_or(false) {
+        let areas: Vec<String> = split.iter().take(3).map(|m| m.a1()).collect();
+        return Err(EngineError::Other(format!(
+            "Shifting these cells {UNMERGE_ERROR} ({}{}); pass unmerge: true to unmerge them and continue.",
+            areas.join(", "),
+            if split.len() > areas.len() { ", …" } else { "" }
+        )));
+    }
+    Ok(split)
 }
 
 /// Like Excel, Insert/Delete Cells never shifts part of a table: cells shifted up or down must
