@@ -2,9 +2,11 @@
 //! `data.sortAscending`) plus primitive editing commands (`cell.set`, `selection.set`).
 
 pub mod analysis;
+pub mod controls;
 pub mod data;
 pub mod draw;
 pub mod edit;
+pub mod equation;
 pub mod extra;
 pub mod file;
 pub mod forecast;
@@ -12,8 +14,10 @@ pub mod format;
 pub mod formulas;
 pub mod insert;
 pub mod inspect;
+pub mod macros;
 pub mod pivot;
 pub mod print;
+pub mod python;
 pub mod review;
 pub mod sheet;
 pub mod slicer;
@@ -39,7 +43,11 @@ pub struct CommandSpec {
     pub label: &'static str,
     /// Ribbon/menu placement, e.g. `["Home", "Font"]`. Empty = not in menus.
     pub menu: &'static [&'static str],
+    /// Portable notation: `Cmd` is ⌘ on macOS and Ctrl elsewhere.
     pub shortcut: Option<&'static str>,
+    /// macOS override when its key differs. Equal to `shortcut` marks a Mac-only shortcut
+    /// (Align Left/Center): other platforms show none. See [`CommandInfo::shortcut_for_platform`].
+    pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
     pub enabled: Enabled,
     pub run: Run,
@@ -53,10 +61,30 @@ pub struct CommandInfo {
     pub label: &'static str,
     pub menu: Vec<&'static str>,
     pub shortcut: Option<&'static str>,
+    pub shortcut_mac: Option<&'static str>,
     pub params: &'static str,
     pub enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disabled_reason: Option<String>,
+}
+
+impl CommandInfo {
+    /// Format the portable shortcut notation for the runtime operating system.
+    pub fn shortcut_for_platform(&self, mac: bool) -> Option<String> {
+        let keys = if mac {
+            self.shortcut_mac.or(self.shortcut)
+        } else if self.shortcut_mac.is_some() && self.shortcut_mac == self.shortcut {
+            // An identical Mac override marks a Mac-only display shortcut.
+            // The portable field remains unchanged for legacy CLI consumers.
+            None
+        } else {
+            self.shortcut
+        }?;
+        if mac {
+            return Some(keys.to_owned());
+        }
+        Some(keys.split('+').map(|part| if part == "Cmd" { "Ctrl" } else { part }).collect::<Vec<_>>().join("+"))
+    }
 }
 
 impl CommandSpec {
@@ -67,6 +95,7 @@ impl CommandSpec {
             label: self.label,
             menu: self.menu.to_vec(),
             shortcut: self.shortcut,
+            shortcut_mac: self.shortcut_mac,
             params: self.params,
             enabled: e.is_ok(),
             disabled_reason: e.err(),
@@ -87,6 +116,113 @@ pub fn journal_params(params: &Json) -> Json {
         Json::Object(o) => Json::Object(o.iter().filter(|(k, _)| !is_secret_param(k)).map(|(k, v)| (k.clone(), v.clone())).collect()),
         other => other.clone(),
     }
+}
+
+/// Params that choose where a command acts, and the alias of `mode` that every object command
+/// reads. The shared helpers read them for commands whose params doc names only `range` or `mode`,
+/// so [`check_params`] always lets them through.
+const SHARED_KEYS: &[&str] = &["range", "cell", "sheet", "window", "doc", "anchorMode"];
+
+/// Commands [`check_params`] leaves alone: they copy their params into another command or read
+/// them in a way a params doc cannot list (found by listing the commands whose code uses `p`
+/// other than to read a named key).
+const FREE_FORM_PARAMS: &[&str] = &[
+    "data.analysisToolPak",
+    "data.removeDuplicates",
+    "data.textToColumns",
+    "data.flashFill",
+    "edit.paste",
+    "chart.changeType",
+    "arrange.group",
+    "table.removeDuplicates",
+    "automate.recordActions",
+    "automate.runScript",
+    "pageLayout.themeColors",
+    "pageLayout.themeFonts",
+    "pageLayout.background",
+    "home.drawBorder",
+    "formulas.recentlyUsed",
+    "formulas.moreFunctions",
+    "file.save",
+    "file.saveAs",
+    "home.doubleUnderline",
+    "home.formatCells",
+    "formulas.selectPrecedents",
+    "formulas.selectDependents",
+    "home.formatAsTable",
+    "insert.recommendedCharts",
+    "insert.textBox",
+    "table.summarizePivot",
+    "pivot.grandTotals",
+    "pivot.subtotals",
+    "pivot.refresh",
+    "data.refreshAll",
+    "pageLayout.pageSetup",
+    "data.solver",
+    "data.solverReport",
+];
+
+/// The names of the params a params doc lists: the words that start a `{…}` group or follow a comma
+/// directly inside one (outside quotes, brackets and parentheses), and the alternative names of
+/// `input | value`. The words of a value, such as `index` in `before?: index` or `a | b` after a
+/// colon, are not names. The doc's response after `→` is not input and is not read.
+pub(crate) fn documented_keys(doc: &str) -> Vec<&str> {
+    let (mut keys, mut depth, mut nest, mut quote, mut start, mut escaped) = (Vec::new(), 0usize, 0usize, None, None, false);
+    let (mut expect, mut is_key, mut in_value) = (false, false, false);
+    for (i, c) in doc.char_indices().chain(std::iter::once((doc.len(), ' '))) {
+        if let Some(from) = start {
+            if c.is_alphanumeric() || c == '_' {
+                continue;
+            }
+            if is_key {
+                keys.extend(doc.get(from..i));
+            }
+            start = None;
+        }
+        match (quote, c) {
+            (Some(_), _) if escaped => escaped = false,
+            (Some(_), '\\') => escaped = true,
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), _) => {}
+            (None, '"' | '`') => quote = Some(c),
+            (None, '{') => {
+                depth += 1;
+                (expect, in_value) = (true, false);
+            }
+            (None, '→') => break,
+            (None, '}') => depth = depth.saturating_sub(1),
+            (None, '[' | '(') => nest += 1,
+            (None, ']' | ')') => nest = nest.saturating_sub(1),
+            (None, ',') if depth > 0 && nest == 0 => (expect, in_value) = (true, false),
+            (None, ':') if depth > 0 && nest == 0 => in_value = true,
+            (None, '|') if depth > 0 && nest == 0 && !in_value => expect = true,
+            (None, c) if depth > 0 && (c.is_alphabetic() || c == '_') => {
+                (start, is_key, expect) = (Some(i), expect && nest == 0, false);
+            }
+            _ => {}
+        }
+    }
+    keys
+}
+
+/// Refuses a key in `params` that the command's params doc does not list, naming it, so a typo
+/// (`{"nam": "Report"}`) is an error instead of a command that ran with its defaults (#2256).
+/// For callers that take a command and its params from a script, an agent or a person: commands
+/// the engine runs for itself are not checked. A command with no params doc to read, or listed in
+/// [`FREE_FORM_PARAMS`], accepts anything.
+pub fn check_params(id: &str, params: &Json) -> Result<()> {
+    let (Some(spec), Some(given)) = (find_command(id), params.as_object()) else { return Ok(()) };
+    if FREE_FORM_PARAMS.contains(&id) || !spec.params.contains('{') {
+        return Ok(());
+    }
+    let known = documented_keys(spec.params);
+    let mut unknown: Vec<&str> = given.keys().map(String::as_str).filter(|k| !SHARED_KEYS.contains(k) && !known.contains(k)).collect();
+    if unknown.is_empty() {
+        return Ok(());
+    }
+    unknown.sort_unstable();
+    let (plural, list) = (if unknown.len() == 1 { "key" } else { "keys" }, unknown.join("`, `"));
+    Err(bad(id, format!("unknown {plural} `{list}` (takes {})", spec.params)))
 }
 
 pub fn always(_: &Session) -> std::result::Result<(), String> {
@@ -117,13 +253,13 @@ pub fn has_clipboard(s: &Session) -> std::result::Result<(), String> {
 
 macro_rules! cmd {
     ($id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: true }
     };
     (query $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: false, undoable: false }
     };
     (noundo $id:literal, $label:literal, [$($m:literal),*], $sc:expr, $params:literal, $en:expr, $run:expr) => {
-        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
+        $crate::cmd::CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: $sc, shortcut_mac: None, params: $params, enabled: $en, run: $run, journal: true, undoable: false }
     };
 }
 pub(crate) use cmd;
@@ -137,16 +273,20 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(format::specs());
         v.extend(sheet::specs());
         v.extend(insert::specs());
+        v.extend(controls::specs());
+        v.extend(equation::specs());
         v.extend(data::specs());
         v.extend(formulas::specs());
         v.extend(review::specs());
         v.extend(view::specs());
         v.extend(inspect::specs());
         v.extend(extra::specs());
+        v.extend(macros::specs());
         v.extend(draw::specs());
         v.extend(spelling::specs());
         v.extend(solver::specs());
         v.extend(pivot::specs());
+        v.extend(python::specs());
         v.extend(slicer::specs());
         v.extend(whatif::specs());
         v.extend(forecast::specs());
@@ -178,6 +318,7 @@ pub fn register_test_command(id: &'static str, run: Run) {
         label: id,
         menu: &[],
         shortcut: None,
+        shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
         run,
@@ -195,6 +336,7 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
         label: id,
         menu: &[],
         shortcut: None,
+        shortcut_mac: None,
         params: "",
         enabled: |_| Ok(()),
         run,
@@ -205,7 +347,6 @@ pub(crate) fn register_undoable_test_command(id: &'static str, run: Run) {
 }
 
 fn test_commands() -> std::sync::MutexGuard<'static, Vec<&'static CommandSpec>> {
-    #[allow(clippy::unwrap_used)] // a poisoned test registry has no meaningful recovery
     match TEST_COMMANDS.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
@@ -338,6 +479,9 @@ pub struct Ctx<'a> {
     /// The command applied sheet protection itself (row/column inserts and deletes the
     /// protection allows), so cells it shifts aren't refused as edits of locked cells.
     pub protection_checked: bool,
+    /// The structural edits the command made, in order (the sheet's name, the edit), as
+    /// references were rewritten for them.
+    pub edits: Vec<(String, gridcraft_formula::adjust::Edit)>,
 }
 
 pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
@@ -349,34 +493,60 @@ pub(crate) fn edit<R>(s: &mut Session, f: impl FnOnce(&mut Ctx) -> Result<R>) ->
     })
 }
 
+fn wall_clock() -> std::time::Duration {
+    std::time::SystemTime::UNIX_EPOCH.elapsed().unwrap_or_default()
+}
+
 pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>) -> Result<R> {
-    // `GRIDCRAFT_PROFILE` timing. Read the clock only when profiling, and never on wasm: there
-    // `Instant::now` traps (`RuntimeError: unreachable`), which broke every edit in the web app.
-    #[allow(clippy::disallowed_methods)]
-    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| std::time::Instant::now()) };
+    // `GRIDCRAFT_PROFILE` timing, never on wasm where the clock traps. `elapsed` on the epoch
+    // reads the wall clock without the (disallowed) `now`.
+    let t0 = if cfg!(target_arch = "wasm32") { None } else { std::env::var_os("GRIDCRAFT_PROFILE").map(|_| wall_clock()) };
+    let since = |t0: std::time::Duration| wall_clock().saturating_sub(t0);
     let mut sel = d.selection.clone();
-    let mut ctx = Ctx { wb: (*d.wb).clone(), changed: Vec::new(), structural: false, sel: &mut sel, fit_rows: Vec::new(), protection_checked: false };
+    let mut ctx = Ctx {
+        wb: (*d.wb).clone(),
+        changed: Vec::new(),
+        structural: false,
+        sel: &mut sel,
+        fit_rows: Vec::new(),
+        protection_checked: false,
+        edits: Vec::new(),
+    };
     let r = f(&mut ctx)?;
-    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, .. } = ctx;
+    let Ctx { mut wb, changed, structural, mut fit_rows, protection_checked, edits, .. } = ctx;
+    // Equations whose source changed (or that arrived without a layout, as from a paste) are
+    // laid out here, so painting only ever reads the cache.
+    wb.refresh_equations();
     if !protection_checked {
         check_protection(&d.wb, &wb, &d.unlocked_ranges)?;
     }
     if !structural {
         check_arrays(&d.wb, &wb)?;
     }
+    if let Some(log) = d.touched.as_mut() {
+        for (si, c) in changed.iter().take(TOUCH_LOG_LIMIT.saturating_sub(log.len())) {
+            if let Some(sh) = wb.sheet(*si) {
+                log.push((sh.name.clone(), *c));
+            }
+        }
+    }
+    if let Some(log) = d.edits.as_mut() {
+        log.extend(edits);
+    }
     if changed.len() <= 200_000 {
         fit_rows.extend(changed.iter().map(|(s, c)| (*s, c.row)));
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: edit {:?}, {} changed", t0.elapsed(), changed.len());
+        eprintln!("commit: edit {:?}, {} changed", since(t0), changed.len());
     }
     if structural {
         d.calc.recalc_all(&mut wb);
     } else if !changed.is_empty() {
         d.calc.cells_changed(&mut wb, &changed);
     }
+    controls::sync_linked_values(&mut wb);
     if let Some(t0) = t0 {
-        eprintln!("commit: + recalc {:?}", t0.elapsed());
+        eprintln!("commit: + recalc {:?}", since(t0));
     }
     fit_rows.sort_unstable();
     fit_rows.dedup();
@@ -384,19 +554,26 @@ pub(crate) fn commit<R>(d: &mut DocState, f: impl FnOnce(&mut Ctx) -> Result<R>)
         auto_row_height(&mut wb, si, row);
     }
     if let Some(t0) = t0 {
-        eprintln!("commit: + rows {:?}", t0.elapsed());
+        eprintln!("commit: + rows {:?}", since(t0));
     }
     d.wb = std::sync::Arc::new(wb);
     d.selection = sel;
     Ok(r)
 }
 
+/// The most cells a dry run's touch log keeps; a footprint whose log is full may be missing writes
+/// that kept a cell's value, so a shift is refused then.
+pub(crate) const TOUCH_LOG_LIMIT: usize = 1_000_000;
+
 /// Excel's message for an edit of a locked cell on a protected sheet.
 pub(crate) const PROTECTED: &str = "The cell or chart you're trying to change is on a protected sheet.";
 
 /// Refuses an edit that changed what a locked cell on a protected sheet holds (its value or
-/// formula), whichever command made it. Sheets are matched by name, so moving, renaming or
-/// deleting a sheet isn't an edit of its cells.
+/// formula), or that unlocked it, whichever command made it. Sheets are matched by name, so
+/// moving, renaming or deleting a sheet isn't an edit of its cells. A sort or duplicate removal
+/// that moves an unlocked cell with equal content onto a locked one changes no content but would
+/// leave the cell editable, so the effective lock (row and column formats included) is compared
+/// as well.
 fn check_protection(old: &Workbook, new: &Workbook, unlocked: &[(String, String)]) -> Result<()> {
     for sh in &old.sheets {
         if !sh.is_protected() {
@@ -407,7 +584,8 @@ fn check_protection(old: &Workbook, new: &Workbook, unlocked: &[(String, String)
             continue;
         }
         for c in sh.cells.diff(&after.cells) {
-            if !same_content(sh.cell(c), after.cell(c))
+            let unlocked_now = !new.styles.get(after.style_id(c)).protection.locked;
+            if (unlocked_now || !same_content(sh.cell(c), after.cell(c)))
                 && old.styles.get(sh.style_id(c)).protection.locked
                 && let Some(m) = locked_cell_error(sh, c, unlocked)
             {
@@ -435,10 +613,14 @@ pub(crate) fn refuse_unless_allowed(s: &Session, sheet: usize, what: &str, pick:
 pub(crate) fn locked_cell_error(sh: &gridcraft_model::Sheet, c: CellRef, unlocked: &[(String, String)]) -> Option<String> {
     let mut needs_password = None;
     for r in sh.edit_ranges.iter().filter(|r| r.contains(c)) {
-        if r.password.is_none() || unlocked.iter().any(|(s, t)| *s == sh.name && *t == r.title) {
+        // A range limited to Windows users or groups (a security descriptor) can't be checked
+        // here, so without a password it stays locked rather than opening to every editor.
+        if (r.password.is_none() && r.security_descriptor.is_none()) || unlocked.iter().any(|(s, t)| *s == sh.name && *t == r.title) {
             return None;
         }
-        needs_password.get_or_insert(r.title.as_str());
+        if r.password.is_some() {
+            needs_password.get_or_insert(r.title.as_str());
+        }
     }
     Some(match needs_password {
         Some(t) => format!("The range \"{t}\" needs its password before it can be changed (Review › Allow Edit Ranges)."),
@@ -460,7 +642,7 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
             continue;
         }
         for c in sh.cells.diff(&after.cells) {
-            let filled = after.cell(c).is_some_and(|x| x.formula.is_some() || !x.value.is_empty());
+            let filled = after.cell(c).is_some_and(gridcraft_model::Cell::has_content);
             if !filled || !sh.spill.contains_key(&c) || same_content(sh.cell(c), after.cell(c)) {
                 continue;
             }
@@ -476,13 +658,18 @@ fn check_arrays(old: &Workbook, new: &Workbook) -> Result<()> {
     Ok(())
 }
 
-/// Two cells hold the same value or formula (formats aside).
+/// Two cells hold the same value, formula or Python code (formats aside; a Python cell's result
+/// is not something the person edits).
 fn same_content(a: Option<&gridcraft_model::Cell>, b: Option<&gridcraft_model::Cell>) -> bool {
-    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| c.formula.is_none() && c.value.is_empty());
+    let empty = |c: Option<&gridcraft_model::Cell>| c.is_none_or(|c| !c.has_content());
     match (a, b) {
         (Some(a), Some(b)) => match (&a.formula, &b.formula) {
             (Some(x), Some(y)) => x.text == y.text && x.array == y.array,
-            (None, None) => a.value == b.value,
+            (None, None) => match (&a.py, &b.py) {
+                (Some(x), Some(y)) => x.code == y.code && x.object == y.object,
+                (None, None) => a.value == b.value,
+                _ => false,
+            },
             _ => false,
         },
         _ => empty(a) && empty(b),
