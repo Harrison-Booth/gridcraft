@@ -2,10 +2,16 @@
 //! tools, Get Data, scripts (Automate), cell checkboxes, theme colours and fonts.
 
 use gridcraft_core::{CellRef, RangeRef, Value};
-use gridcraft_model::*;
+use gridcraft_model::{
+    Anchor, Chart, Color, DefinedName, HAlign, LegendPos, NumFmt, Shape, ShapeKind, Sheet, SheetViewMode, TableColumn, TotalsFn, Trendline,
+    TrendlineKind, Workbook,
+};
 use serde_json::{Value as Json, json};
 
-use super::*;
+use super::{
+    CommandSpec, EngineError, Result, Session, always, anchor_mode_name, bad, bool_param, cell_param, cell_param_on, cmd, edit, f64_param, has_doc,
+    ok, split_sheet, str_param, target_range, target_ranges, target_sheet, u32_param,
+};
 
 mod cells;
 mod chart;
@@ -22,7 +28,7 @@ use objects::{align, arrange, rotate, selection_pane, shape_fill, shape_outline}
 pub(crate) use scripts::has_scripts;
 use scripts::{all_scripts, delete_script, new_script, record, run_script, stop_action, trust_scripts};
 use window::{arrange_all, custom_views, hide_window, new_window, ruler, set_view, split, switch_windows, unhide_window, watch_window};
-pub(crate) use window::{keep_watch_list, window_param};
+pub(crate) use window::{keep_view_modes, keep_watch_list, window_param};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -32,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Chart Element",
             ["Chart Design", "Chart Layouts"],
             None,
-            "{chart?, element: title|legend|dataLabels|gridlines|axisTitles|smooth|trendline, on?: bool, position?: bottom|top|left|right; trendline: series?: index (default all), type?: linear|exponential|linearForecast|movingAverage|logarithmic|power|polynomial, order?: 2..6, period?: 2..255, forward?, backward?, displayEquation?, displayRSquared?}",
+            "{chart?, element: title|legend|dataLabels|dataTable|gridlines|axisTitles|smooth|trendline, on?: bool, position?: bottom|top|left|right; dataTable: dataTableKeys?: bool, dataTableHorizontalBorder?: bool, dataTableVerticalBorder?: bool, dataTableOutline?: bool; trendline: series?: index (default all), type?: linear|exponential|linearForecast|movingAverage|logarithmic|power|polynomial, order?: 2..6, period?: 2..255, forward?, backward?, displayEquation?, displayRSquared?}",
             has_doc,
             add_element
         ),
@@ -91,7 +97,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Bring Forward",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape, id, toFront?: bool}",
+            "{kind: chart|image|shape|slicer|equation, id, toFront?: bool}",
             has_doc,
             |s, p| arrange(s, p, true)
         ),
@@ -100,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Send Backward",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape, id, toBack?: bool}",
+            "{kind: chart|image|shape|slicer|equation, id, toBack?: bool}",
             has_doc,
             |s, p| arrange(s, p, false)
         ),
@@ -110,7 +116,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Align",
             ["Page Layout", "Arrange"],
             None,
-            "{kind: chart|image|shape, ids: [..], align: left|center|right|top|middle|bottom}",
+            "{kind: chart|image|shape|slicer|equation, ids: [..], align: left|center|right|top|middle|bottom}",
             has_doc,
             align
         ),
@@ -226,15 +232,20 @@ pub fn specs() -> Vec<CommandSpec> {
             new_script
         ),
         cmd!(query "automate.allScripts", "All Scripts", ["Automate", "Scripting Tools"], None, "{} → saved scripts", has_doc, all_scripts),
-        cmd!(
-            "automate.runScript",
-            "Run Script",
-            [],
-            None,
-            "{name, trusted?: bool (runs a script from an untrusted workbook this once)} — refuses scripts in a workbook opened from a file until it is trusted, and steps that reach outside the workbook (file.*, link.*, any `path` param)",
-            has_doc,
-            run_script
-        ),
+        // The journal stores its exact steps as one replayable command, preserving the script's
+        // single undo boundary even if the stored script is later deleted.
+        CommandSpec {
+            id: "automate.runScript",
+            label: "Run Script",
+            menu: &[],
+            shortcut: None,
+            shortcut_mac: None,
+            params: "{name?, commands?: [{command, params}] (journal replay), trusted?: bool (runs a script from an untrusted workbook this once)} — refuses scripts in a workbook opened from a file until it is trusted, and steps that reach outside the workbook (file.*, link.*, any `path` param)",
+            enabled: has_doc,
+            run: run_script,
+            journal: false,
+            undoable: true,
+        },
         cmd!(
             noundo "automate.trustScripts",
             "Trust Scripts",
@@ -304,7 +315,7 @@ pub fn specs() -> Vec<CommandSpec> {
             new_cell_style
         ),
         cmd!(query "home.addIns", "Add-ins", ["Home", "Add-ins"], None, "{} → GridCraft extends through MCP and scripts instead of add-ins", always, |_, _| Ok(json!({"addIns": [], "hint": "Use gridcraft-cli mcp or Automate › scripts"}))),
-        cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → recently used functions in this workbook", has_doc, recently_used),
+        cmd!(query "formulas.recentlyUsed", "Recently Used", ["Formulas", "Function Library"], None, "{} → the functions most recently entered in formulas, newest first", has_doc, recently_used),
         cmd!(query "formulas.financial", "Financial", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Financial"}))),
         cmd!(query "formulas.logical", "Logical", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Logical"}))),
         cmd!(query "formulas.text", "Text", ["Formulas", "Function Library"], None, "{}", always, |s, _| s.execute("formulas.functions", json!({"category": "Text"}))),
