@@ -21,10 +21,18 @@ pub enum CellError {
     Calc,
     /// Circular reference that could not be resolved (shown as 0 by Excel; we keep it explicit).
     Circ,
+    /// A Python cell's code raised an error, or Python stopped.
+    Python,
+    /// A Python cell is waiting to run.
+    Busy,
+    /// A Python cell ran longer than the time limit.
+    Timeout,
+    /// Python can't run here: the workbook's content isn't enabled, or this build has no Python.
+    Blocked,
 }
 
 impl CellError {
-    pub const ALL: [CellError; 10] = [
+    pub const ALL: [CellError; 14] = [
         CellError::Null,
         CellError::Div0,
         CellError::Value,
@@ -35,6 +43,10 @@ impl CellError {
         CellError::GettingData,
         CellError::Spill,
         CellError::Calc,
+        CellError::Python,
+        CellError::Busy,
+        CellError::Timeout,
+        CellError::Blocked,
     ];
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -49,9 +61,16 @@ impl CellError {
             CellError::Spill => "#SPILL!",
             CellError::Calc => "#CALC!",
             CellError::Circ => "#CIRC!",
+            CellError::Python => "#PYTHON!",
+            CellError::Busy => "#BUSY!",
+            CellError::Timeout => "#TIMEOUT!",
+            CellError::Blocked => "#BLOCKED!",
         }
     }
-    /// `ERROR.TYPE` number.
+    /// `ERROR.TYPE` number. Microsoft documents 1 to 8; 9 (#SPILL!), 11 (#BLOCKED!) and 14 (#CALC!)
+    /// are the numbers Excel returns. Microsoft documents no number for #PYTHON!, #BUSY! or
+    /// #TIMEOUT!: 19, 20 and 21 are GridCraft's own choice, after the numbers Excel is known to use,
+    /// and may change if Excel's numbers become known.
     pub fn code(&self) -> u32 {
         match self {
             CellError::Null => 1,
@@ -65,6 +84,10 @@ impl CellError {
             CellError::Spill => 9,
             CellError::Calc => 14,
             CellError::Circ => 15,
+            CellError::Blocked => 11,
+            CellError::Python => 19,
+            CellError::Busy => 20,
+            CellError::Timeout => 21,
         }
     }
     pub fn parse(s: &str) -> Option<CellError> {
@@ -339,12 +362,16 @@ pub fn compare_text(a: &str, b: &str) -> Ordering {
 }
 
 /// Sorting order used by Sort (ascending): numbers, text, booleans, errors, then blanks last.
+/// Numbers compare exactly, not at the 15 digits of [`compare`]. Observed in Excel 365: SORT,
+/// SORTBY, Data > Sort, the AutoFilter sort and table sort all put 0.3 before `=0.1+0.2`
+/// (0.30000000000000004) ascending and after it descending, whatever the input order.
 pub fn sort_compare(a: &Value, b: &Value) -> Ordering {
     match (a, b) {
         (Value::Empty, Value::Empty) => Ordering::Equal,
         (Value::Empty, _) => Ordering::Greater,
         (_, Value::Empty) => Ordering::Less,
         (Value::Error(_), Value::Error(_)) => Ordering::Equal,
+        (Value::Number(x), Value::Number(y)) => x.partial_cmp(y).unwrap_or(Ordering::Equal),
         _ => compare(a, b),
     }
 }
@@ -454,11 +481,25 @@ mod tests {
     }
 
     #[test]
-    fn arrays() {
-        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).unwrap();
+    fn sort_orders_numbers_exactly() {
+        let num = Value::Number;
+        let e = 0.1 + 0.2;
+        assert_eq!(sort_compare(&num(0.3), &num(e)), Ordering::Less);
+        assert_eq!(sort_compare(&num(e), &num(0.3)), Ordering::Greater);
+        assert_eq!(sort_compare(&num(100.0), &num(100.0 + 1e-14)), Ordering::Less);
+        assert_eq!(sort_compare(&num(0.0), &num(-0.0)), Ordering::Equal);
+        assert_eq!(sort_compare(&num(1.0), &Value::from("a")), Ordering::Less);
+        // `=` keeps its 15-digit comparison.
+        assert_eq!(compare(&num(0.3), &num(e)), Ordering::Equal);
+    }
+
+    #[test]
+    fn arrays() -> Result<(), std::io::Error> {
+        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).ok_or_else(|| std::io::Error::other("valid array"))?;
         assert_eq!(a.transpose().get(0, 1), Some(&Value::Number(3.0)));
         assert!(Array::new(2, 2, vec![]).is_none());
         let row = Array::row(vec![1.0.into(), 2.0.into()]);
         assert_eq!(row.get_broadcast(5, 1), Value::Number(2.0));
+        Ok(())
     }
 }
