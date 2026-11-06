@@ -41,13 +41,17 @@ fn workbook(categories: &str, values: &str) -> Workbook {
         }],
         legend: LegendPos::Bottom,
         data_labels: false,
+        data_table: None,
         gridlines: true,
         style: 2,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: None,
         y_title: None,
         source: None,
         by_rows: false,
         pivot: None,
+        kept: None,
     });
     Workbook { sheets: vec![Arc::new(s)], ..Workbook::default() }
 }
