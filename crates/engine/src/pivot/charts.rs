@@ -1,5 +1,5 @@
 use super::output::Output;
-use super::*;
+use super::{CellRef, Chart, Series, Workbook, quote_sheet};
 
 // ---------------------------------------------------------------- PivotCharts
 
@@ -76,6 +76,9 @@ pub fn chart_series(sheet: &str, origin: CellRef, out: &Output) -> Vec<Series> {
                 quartiles: Default::default(),
                 smooth: false,
                 trendlines: Vec::new(),
+                points: Vec::new(),
+                invert_if_negative: false,
+                invert_color: None,
             })
         })
         .collect()

@@ -5,6 +5,8 @@ use gridcraft_model::{Anchor, Chart, ChartKind, Color, LegendPos, Series, Sparkl
 
 use crate::*;
 
+mod data_table;
+
 const ALL_KINDS: [ChartKind; 26] = [
     ChartKind::ColumnClustered,
     ChartKind::ColumnStacked,
@@ -43,13 +45,17 @@ fn chart(kind: ChartKind) -> Chart {
         series: vec![],
         legend: LegendPos::Bottom,
         data_labels: true,
+        data_table: None,
         gridlines: true,
         style: 0,
+        hole_size: 75,
+        first_slice_angle: 0,
         x_title: Some("Quarter".into()),
         y_title: Some("Revenue".into()),
         source: None,
         by_rows: false,
         pivot: None,
+        vary_colors: None,
     }
 }
 
@@ -65,6 +71,7 @@ fn series(name: &str, values: &[f64], color: Rgba, kind: ChartKind) -> SeriesDat
         smooth: false,
         trendlines: Vec::new(),
         number_format: "$#,##0".into(),
+        ..Default::default()
     }
 }
 
@@ -83,6 +90,7 @@ fn sample(kind: ChartKind) -> ChartData {
             b,
             series("South", &[9000.0, 11000.0, 8000.0, 15000.0, 21000.0, 17000.0], [25, 107, 36, 255], k2),
         ],
+        ..Default::default()
     }
 }
 
@@ -144,6 +152,337 @@ fn every_kind_renders_sanely() {
             assert!(n_shapes > 2, "{kind:?}: nothing drawn");
         }
     }
+}
+
+#[test]
+fn doughnut_draws_each_series_as_a_ring() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.hole_size = 25;
+    c.first_slice_angle = 0;
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B", "C"].iter().map(|s| s.to_string()).collect(),
+        series: vec![
+            series("Inner", &[1.0, 2.0, 3.0], [20, 96, 130, 255], ChartKind::Doughnut),
+            series("Middle", &[3.0, 2.0, 1.0], [221, 132, 82, 255], ChartKind::Doughnut),
+            series("Outer", &[1.0, 1.0, 1.0], [89, 161, 79, 255], ChartKind::Doughnut),
+        ],
+        vary_colors: true,
+        legend_by_point: true,
+    };
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let wedges: Vec<(f32, f32, f32)> = prims
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Wedge { r_outer, r_inner, a0, .. } => Some((*r_outer, *r_inner, *a0)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(wedges.len(), 9, "three rings of three slices");
+    // Excel draws the first series as the innermost ring; the hole is 25% of the radius.
+    assert!(wedges[0].0 < wedges[3].0 && wedges[3].0 < wedges[6].0, "{wedges:?}");
+    assert!(wedges[0].1 > 0.0, "hole: {wedges:?}");
+}
+
+#[test]
+fn doughnut_with_many_series_still_draws_the_outer_rings() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.hole_size = 75;
+    // The annulus is a few dozen pixels tall and there are far more series than pixels, so every
+    // ring is thinner than 1 px. The chart used to draw nothing at all.
+    let many = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: (0..255).map(|i| series(&format!("S{i}"), &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)).collect(),
+        vary_colors: true,
+        legend_by_point: true,
+    };
+    let single = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        // Two series, so the title fallback (a lone series names the chart) does not shrink the plot.
+        series: vec![
+            series("Only", &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut),
+            series("Other", &[1.0, 1.0], [221, 132, 82, 255], ChartKind::Doughnut),
+        ],
+        vary_colors: true,
+        legend_by_point: true,
+    };
+    let (w, h) = (640.0, 400.0);
+    let radii = |d: &ChartData| -> Vec<f32> {
+        render(&c, d, w, h, &ApproxMeasure)
+            .iter()
+            .filter_map(|p| match p {
+                Prim::Wedge { r_outer, .. } => Some(*r_outer),
+                _ => None,
+            })
+            .collect()
+    };
+    let outer = radii(&many);
+    assert!(!outer.is_empty(), "a sub-pixel ring must not suppress the whole chart");
+    let mut distinct = outer.clone();
+    distinct.sort_by(f32::total_cmp);
+    distinct.dedup();
+    assert!(distinct.len() > 8, "only {} rings drawn", distinct.len());
+    assert!(distinct.len() < 255, "too many rings for the pixels available: {}", distinct.len());
+    // The outermost ring still reaches the plot radius the single-ring chart uses.
+    let r = radii(&single).into_iter().fold(0.0f32, f32::max);
+    let drawn = distinct.last().copied().unwrap_or(0.0);
+    assert!((drawn - r).abs() < 0.01, "outermost ring {drawn} of {r}");
+}
+
+#[test]
+fn doughnut_one_pixel_rings_skip_the_separator_stroke() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.hole_size = 75;
+    // 255 series over a 46-pixel annulus: every drawn ring is one pixel tall, narrower than the
+    // 1.5-pixel white separator, which would otherwise paint over both neighbouring rings.
+    let thin = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: (0..255).map(|i| series(&format!("S{i}"), &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)).collect(),
+        vary_colors: true,
+        legend_by_point: true,
+    };
+    let strokes: Vec<Option<(Rgba, f32)>> = render(&c, &thin, 640.0, 400.0, &ApproxMeasure)
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Wedge { stroke, .. } => Some(*stroke),
+            _ => None,
+        })
+        .collect();
+    assert!(!strokes.is_empty(), "the chart must still draw its rings");
+    assert!(strokes.iter().all(Option::is_none), "a 1.5px stroke covers a 1px band: {strokes:?}");
+
+    // A ring with room for the separator keeps it.
+    let thick = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: vec![
+            series("Inner", &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut),
+            series("Outer", &[1.0, 1.0], [221, 132, 82, 255], ChartKind::Doughnut),
+        ],
+        vary_colors: true,
+        legend_by_point: true,
+    };
+    let strokes: Vec<Option<(Rgba, f32)>> = render(&c, &thick, 640.0, 400.0, &ApproxMeasure)
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Wedge { stroke, .. } => Some(*stroke),
+            _ => None,
+        })
+        .collect();
+    assert!(!strokes.is_empty());
+    assert!(strokes.iter().all(Option::is_some), "wide rings keep their separators: {strokes:?}");
+}
+
+#[test]
+fn doughnut_wedge_budget_bounds_many_series_and_categories() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.hole_size = 75;
+    c.first_slice_angle = 0;
+    // 20,000 categories across 80 series would be hundreds of thousands of wedges: the per-series
+    // limit does not bound the product. The first ten categories of every ring are the largest.
+    let cats = 20_000usize;
+    let values: Vec<f64> = (0..cats).map(|j| if j < 10 { 1000.0 } else { 1.0 }).collect();
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: (0..cats).map(|j| format!("C{j}")).collect(),
+        series: (0..80)
+            .map(|i| SeriesData { name: format!("S{i}"), values: values.iter().map(|v| Some(*v)).collect(), ..SeriesData::default() })
+            .collect(),
+        vary_colors: true,
+        legend_by_point: true,
+    };
+    let wedges: Vec<(f32, f32)> = render(&c, &d, 640.0, 400.0, &ApproxMeasure)
+        .iter()
+        .filter_map(|p| match p {
+            Prim::Wedge { r_outer, a0, a1, .. } => Some((*r_outer, *a1 - *a0)),
+            _ => None,
+        })
+        .collect();
+    assert!(!wedges.is_empty(), "the innermost ring must still be drawn");
+    let mut radii: Vec<f32> = wedges.iter().map(|(r, _)| *r).collect();
+    radii.sort_by(f32::total_cmp);
+    radii.dedup();
+    assert!(radii.len() > 1, "every drawable ring is capped, not dropped");
+    // A slice crossing 12 o'clock is split into two primitives, so each ring may add one.
+    let budget = crate::render::MAX_WEDGES + radii.len();
+    assert!(wedges.len() <= budget, "{} wedges for {} rings", wedges.len(), radii.len());
+
+    // The first (innermost) ring keeps its largest slices and still fills the circle.
+    let inner: Vec<f32> = wedges.iter().filter(|(r, _)| *r == radii[0]).map(|(_, a)| *a).collect();
+    assert!(inner.len() < cats, "the ring was not capped: {}", inner.len());
+    assert_eq!(inner.iter().filter(|a| **a > 0.1).count(), 10, "largest slices went missing");
+    let cover: f32 = inner.iter().sum();
+    assert!((cover - std::f32::consts::TAU).abs() < 0.01, "first ring covers {cover}");
+}
+
+#[test]
+fn doughnut_first_slice_angle_rotates_the_start() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.first_slice_angle = 90;
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: vec![series("Only", &[1.0, 1.0], [20, 96, 130, 255], ChartKind::Doughnut)],
+        vary_colors: true,
+        legend_by_point: true,
+    };
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let first = prims.iter().find_map(|p| match p {
+        Prim::Wedge { a0, .. } => Some(*a0),
+        _ => None,
+    });
+    assert!(first.is_some_and(|a| (a - std::f32::consts::FRAC_PI_2).abs() < 0.01), "{first:?}");
+}
+
+/// Every slice must occupy exactly its angular share, even when the first slice angle pushes the
+/// start past 12 o'clock (the split at TAU used to put whole slices over their neighbours).
+#[test]
+fn rotated_wedges_cover_each_slice_once_without_overlap() {
+    const TAU: f32 = std::f32::consts::TAU;
+    for kind in [ChartKind::Doughnut, ChartKind::Pie] {
+        for angle in [180u16, 270] {
+            let mut c = chart(kind);
+            c.title = None;
+            c.legend = LegendPos::None;
+            c.data_labels = false;
+            c.first_slice_angle = angle;
+            let d = ChartData {
+                category_levels: vec![],
+                palette: vec![[230, 126, 34, 255], [39, 174, 96, 255], [142, 68, 173, 255]],
+                categories: ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect(),
+                series: vec![series("Only", &[1.0; 4], [20, 96, 130, 255], kind)],
+                vary_colors: kind == ChartKind::Pie || kind == ChartKind::Doughnut,
+                legend_by_point: kind == ChartKind::Pie || kind == ChartKind::Doughnut,
+            };
+            let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+            let wedges: Vec<(f32, f32)> = prims
+                .iter()
+                .filter_map(|p| match p {
+                    Prim::Wedge { a0, a1, .. } => Some((*a0, *a1)),
+                    _ => None,
+                })
+                .collect();
+            assert!(wedges.len() >= 4, "{kind:?} at {angle}: {wedges:?}");
+            for (a0, a1) in &wedges {
+                assert!((0.0..TAU).contains(a0), "{kind:?} at {angle}: start {a0} outside [0, TAU)");
+                assert!(*a1 > *a0 && *a1 <= TAU + 1e-4, "{kind:?} at {angle}: bad sweep {a0}..{a1}");
+            }
+            // Sample away from the boundaries: a correct four-slice chart covers every angle once.
+            let steps = 1440;
+            for k in 0..steps {
+                let theta = (k as f32 + 0.5) * TAU / steps as f32;
+                let cover = wedges.iter().filter(|(a0, a1)| theta >= *a0 && theta < *a1).count();
+                assert_eq!(cover, 1, "{kind:?} at {angle}: {theta} covered {cover} times by {wedges:?}");
+            }
+        }
+    }
+}
+
+/// A slice that crosses 12 o'clock is filled as two halves but outlined once: stroking each half
+/// separately ran the white separator along the shared radial edge, straight through the slice.
+#[test]
+fn slice_crossing_twelve_has_no_internal_seam() {
+    const TAU: f32 = std::f32::consts::TAU;
+    let mut c = chart(ChartKind::Pie);
+    c.title = None;
+    c.legend = LegendPos::None;
+    c.data_labels = false;
+    c.first_slice_angle = 90;
+    let a = [230, 126, 34, 255];
+    let b = [39, 174, 96, 255];
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![a, b],
+        categories: ["A", "B"].iter().map(|s| s.to_string()).collect(),
+        series: vec![series("Only", &[1.0, 1.0], a, ChartKind::Pie)],
+        vary_colors: true,
+        legend_by_point: true,
+    };
+    let (w, h) = (400u32, 400u32);
+    let prims = render(&c, &d, w as f32, h as f32, &ApproxMeasure);
+    // The second slice starts at 270° and wraps past 0°, so it is drawn as two unstroked halves.
+    let mut halves = 0;
+    let mut cx = 0.0;
+    let mut cy = 0.0;
+    let mut r = 0.0;
+    for p in &prims {
+        if let Prim::Wedge { cx: x, cy: y, r_outer, a0, a1, fill, stroke, .. } = p
+            && *fill == b
+        {
+            assert!(stroke.is_none(), "a split half must not stroke its shared edge: {p:?}");
+            assert!(*a0 == 0.0 || *a1 == TAU, "the crossing slice is split at 12 o'clock: {p:?}");
+            halves += 1;
+            (cx, cy, r) = (*x, *y, *r_outer);
+        }
+    }
+    assert_eq!(halves, 2, "one slice crosses 12 o'clock");
+    // Exactly one outline covers the whole crossing slice, drawn as line primitives.
+    assert_eq!(prims.iter().filter(|p| matches!(p, Prim::Line { color, .. } if *color == [255, 255, 255, 255])).count(), 1, "{prims:?}");
+    // No white pixel inside the slice along 12 o'clock, where the shared edge used to be stroked.
+    let img = rasterize(&prims, w, h, [255, 255, 255, 255]);
+    for t in [0.3f32, 0.5, 0.7] {
+        assert_eq!(pixel(&img, w, cx as u32, (cy - r * t) as u32), b, "white seam at {t} of the slice");
+    }
+}
+
+#[test]
+fn doughnut_legend_names_categories_and_matches_every_ring() {
+    let mut c = chart(ChartKind::Doughnut);
+    c.title = None;
+    c.data_labels = false;
+    c.legend = LegendPos::Right;
+    c.first_slice_angle = 180;
+    let d = ChartData {
+        category_levels: vec![],
+        palette: vec![[230, 126, 34, 255], [39, 174, 96, 255], [142, 68, 173, 255]],
+        categories: ["A", "B", "C", "D"].iter().map(|s| s.to_string()).collect(),
+        series: vec![
+            series("Outer", &[1.0; 4], [20, 96, 130, 255], ChartKind::Doughnut),
+            series("Inner", &[1.0; 4], [221, 132, 82, 255], ChartKind::Doughnut),
+        ],
+        vary_colors: true,
+        legend_by_point: true,
+    };
+    let entries = legend_entries(&c, &d);
+    assert_eq!(entries.iter().map(|(name, _, _)| name.as_str()).collect::<Vec<_>>(), ["A", "B", "C", "D"]);
+
+    let start = f32::from(c.first_slice_angle) * std::f32::consts::TAU / 360.0;
+    let prims = render(&c, &d, 640.0, 400.0, &ApproxMeasure);
+    let mut rings = Vec::new();
+    for p in &prims {
+        let Prim::Wedge { r_outer, a0, a1, fill, .. } = p else { continue };
+        rings.push(*r_outer);
+        let rel = ((a0 + a1) / 2.0 - start).rem_euclid(std::f32::consts::TAU);
+        let cat = ((rel / (std::f32::consts::TAU / 4.0)) as usize).min(3);
+        assert_eq!(*fill, entries[cat].1, "ring wedge at {a0}..{a1} does not match legend entry {}", entries[cat].0);
+    }
+    rings.sort_by(f32::total_cmp);
+    rings.dedup();
+    assert_eq!(rings.len(), 2, "two series must draw two rings");
 }
 
 #[test]
@@ -232,6 +571,9 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            points: Vec::new(),
+            invert_if_negative: false,
+            invert_color: None,
         },
         Series {
             name: None,
@@ -244,6 +586,9 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            points: Vec::new(),
+            invert_if_negative: false,
+            invert_color: None,
         },
         Series {
             name: Some("Literal".into()),
@@ -256,6 +601,9 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            points: Vec::new(),
+            invert_if_negative: false,
+            invert_color: None,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -295,6 +643,9 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            points: Vec::new(),
+            invert_if_negative: false,
+            invert_color: None,
         },
         Series {
             name: None,
@@ -307,6 +658,9 @@ fn resolve_from_workbook() {
             quartiles: Default::default(),
             smooth: false,
             trendlines: Vec::new(),
+            points: Vec::new(),
+            invert_if_negative: false,
+            invert_color: None,
         },
     ];
     let d = resolve(&wb, 0, &c);
@@ -324,6 +678,9 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        points: Vec::new(),
+        invert_if_negative: false,
+        invert_color: None,
     }];
     let d = resolve(&wb, 0, &c);
     assert_eq!(d.series[0].x.as_ref().map(|x| x.len()), Some(3));
@@ -342,6 +699,9 @@ fn resolve_from_workbook() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        points: Vec::new(),
+        invert_if_negative: false,
+        invert_color: None,
     }];
     let d = resolve(&wb, 7, &c);
     assert_eq!(d.series.len(), 1);
@@ -373,7 +733,7 @@ fn scatter_with_text_x_values_numbers_the_points() {
         assert_eq!(d.series[0].x, None, "{kind:?}");
         let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
         let empty =
-            render(&c, &ChartData { category_levels: vec![], palette: vec![], categories: vec![], series: vec![] }, 400.0, 300.0, &ApproxMeasure);
+            render(&c, &ChartData { palette: vec![], categories: vec![], series: vec![], ..Default::default() }, 400.0, 300.0, &ApproxMeasure);
         assert!(prims.len() > empty.len() + 2, "{kind:?} draws its points");
         // Numeric X values are kept.
         c.series[0].categories = Some("Sheet1!$C$1:$C$3".into());
@@ -458,7 +818,11 @@ fn pie_starts_at_twelve_clockwise() {
     assert!(wedges.windows(2).all(|w| w[1].0 >= w[0].1 - 1e-4));
     assert!((wedges[5].1 - std::f32::consts::TAU).abs() < 1e-3);
     assert!(wedges.iter().all(|w| w.2 == 0.0 && w.3.map(|s| s.0) == Some([255; 4])));
-    let prims = render(&chart(ChartKind::Doughnut), &d, 400.0, 400.0, &ApproxMeasure);
+    let mut c = chart(ChartKind::Doughnut);
+    c.hole_size = 50;
+    let mut d = sample(ChartKind::Doughnut);
+    d.series.truncate(1);
+    let prims = render(&c, &d, 400.0, 400.0, &ApproxMeasure);
     let ok = prims.iter().any(|p| matches!(p, Prim::Wedge { r_outer, r_inner, .. } if (r_inner / r_outer - 0.5).abs() < 1e-3));
     assert!(ok);
 }
@@ -467,10 +831,10 @@ fn pie_starts_at_twelve_clockwise() {
 fn negative_values_put_axis_below_zero() {
     let c = chart(ChartKind::ColumnClustered);
     let d = ChartData {
-        category_levels: vec![],
         palette: vec![],
         categories: vec![],
         series: vec![series("N", &[-5.0, 3.0, -2.0], [1, 2, 3, 255], ChartKind::ColumnClustered)],
+        ..Default::default()
     };
     let prims = render(&c, &d, 400.0, 300.0, &ApproxMeasure);
     let t = texts(&prims);
@@ -487,6 +851,7 @@ fn edge_cases_never_panic() {
         palette: vec![],
         categories: vec!["a".into(), "b".into()],
         series: vec![series("z", &[0.0, 0.0], [0, 0, 0, 255], ChartKind::Line)],
+        ..Default::default()
     };
     let weird = ChartData {
         category_levels: vec![],
@@ -499,6 +864,7 @@ fn edge_cases_never_panic() {
             sizes: Some(vec![Some(-1.0), Some(0.0)]),
             ..SeriesData::default()
         }],
+        ..Default::default()
     };
     for kind in ALL_KINDS {
         let c = chart(kind);
@@ -521,12 +887,8 @@ fn thousands_of_points_are_decimated() {
     let vals: Vec<f64> = (0..n).map(|i| ((i as f64) * 0.01).sin() * 100.0 + i as f64 * 0.001).collect();
     let mut c = chart(ChartKind::Line);
     c.data_labels = true;
-    let d = ChartData {
-        category_levels: vec![],
-        palette: vec![],
-        categories: vec![],
-        series: vec![series("big", &vals, [9, 9, 9, 255], ChartKind::Line)],
-    };
+    let d =
+        ChartData { palette: vec![], categories: vec![], series: vec![series("big", &vals, [9, 9, 9, 255], ChartKind::Line)], ..Default::default() };
     let prims = render(&c, &d, 800.0, 400.0, &ApproxMeasure);
     let max_line = prims
         .iter()
@@ -551,7 +913,7 @@ fn smooth_line_adds_interpolated_points_and_keeps_endpoints() {
     let line_pts = |smooth: bool, m: &ApproxMeasure| -> usize {
         let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
         s.smooth = smooth;
-        let d = ChartData { category_levels: vec![], palette: vec![], categories: cats.clone(), series: vec![s] };
+        let d = ChartData { palette: vec![], categories: cats.clone(), series: vec![s], ..Default::default() };
         render(&chart(ChartKind::Line), &d, 600.0, 400.0, m)
             .iter()
             .filter_map(|p| match p {
@@ -568,7 +930,7 @@ fn smooth_line_adds_interpolated_points_and_keeps_endpoints() {
     // Rendering either way must stay finite and inside the canvas.
     let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
     s.smooth = true;
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: cats, series: vec![s] };
+    let d = ChartData { palette: vec![], categories: cats, series: vec![s], ..Default::default() };
     assert_sane(&render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m), 600.0, 400.0);
 }
 
@@ -578,7 +940,7 @@ fn smooth_line_splits_at_gaps() {
     let mut s = series("L", &[1.0, 5.0, 2.0, 6.0], [10, 20, 30, 255], ChartKind::Line);
     s.smooth = true;
     s.values[1] = None; // gap between two data points
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: vec!["a".into(), "b".into(), "c".into(), "d".into()], series: vec![s] };
+    let d = ChartData { palette: vec![], categories: vec!["a".into(), "b".into(), "c".into(), "d".into()], series: vec![s], ..Default::default() };
     let prims = render(&chart(ChartKind::Line), &d, 600.0, 400.0, &m);
     // Two separate runs (before/after the gap) → at least two line primitives.
     let lines = prims.iter().filter(|p| matches!(p, Prim::Line { .. })).count();
@@ -652,15 +1014,12 @@ fn fuzz_random_data_and_sizes() {
                     })
                     .collect(),
                 number_format: ["General", "$#,##0", "0.00%", "yyyy-mm-dd", "#,##0.0;[Red]-#,##0.0", "@"][(r.next() % 6) as usize].into(),
+                ..Default::default()
             })
             .collect();
         let ncat = (r.next() % 50) as usize;
-        let d = ChartData {
-            category_levels: vec![],
-            palette: vec![],
-            categories: (0..ncat).map(|i| "c".repeat(i % 7) + &i.to_string()).collect(),
-            series,
-        };
+        let d =
+            ChartData { palette: vec![], categories: (0..ncat).map(|i| "c".repeat(i % 7) + &i.to_string()).collect(), series, ..Default::default() };
         let mut c = chart(kind);
         c.legend = [LegendPos::None, LegendPos::Bottom, LegendPos::Top, LegendPos::Left, LegendPos::Right][(r.next() % 5) as usize];
         c.data_labels = r.next().is_multiple_of(2);
@@ -835,8 +1194,7 @@ fn line_chart_draws_trendline_forecast_and_labels() {
     let mut s = series("Sales", &[9.0, 7.0, 5.0, 3.0], [10, 20, 30, 255], ChartKind::Line);
     s.trendlines =
         vec![TrendlineData { spec: Trendline { forward: 1.0, display_equation: true, display_r_squared: true, ..Trendline::default() }, color: tc }];
-    let d =
-        ChartData { category_levels: vec![], palette: vec![], categories: ["a", "b", "c", "d"].map(String::from).to_vec(), series: vec![s.clone()] };
+    let d = ChartData { palette: vec![], categories: ["a", "b", "c", "d"].map(String::from).to_vec(), series: vec![s.clone()], ..Default::default() };
     let mut c = chart(ChartKind::Line);
     c.legend = LegendPos::None; // keeps legend swatches out of the line counts
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -860,7 +1218,7 @@ fn line_chart_draws_trendline_forecast_and_labels() {
     assert!(lines_of(&pie, tc).is_empty());
     // One point: nothing to fit, nothing drawn.
     s.values.truncate(1);
-    let one = ChartData { category_levels: vec![], palette: vec![], categories: vec!["a".into()], series: vec![s] };
+    let one = ChartData { palette: vec![], categories: vec!["a".into()], series: vec![s], ..Default::default() };
     assert!(lines_of(&render(&c, &one, 600.0, 400.0, &m), tc).is_empty());
 }
 
@@ -880,7 +1238,7 @@ fn scatter_trendlines_use_x_values_and_stay_in_the_plot() {
         TrendlineData { spec: Trendline { kind: TrendlineKind::Exponential, forward: 30.0, ..Trendline::default() }, color: colors[1] },
         TrendlineData { spec: Trendline { kind: TrendlineKind::MovingAverage(2), ..Trendline::default() }, color: colors[2] },
     ];
-    let d = ChartData { category_levels: vec![], palette: vec![], categories: vec![], series: vec![s] };
+    let d = ChartData { palette: vec![], categories: vec![], series: vec![s], ..Default::default() };
     let mut c = chart(ChartKind::Scatter);
     c.legend = LegendPos::None;
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -899,6 +1257,7 @@ fn treemap_and_histogram_shapes() {
         palette: vec![],
         categories: vec!["a".into(), "b".into(), "c".into(), "d".into()],
         series: vec![series("t", &[6.0, 6.0, 4.0, 3.0], [10, 20, 30, 255], ChartKind::Treemap)],
+        ..Default::default()
     };
     let mut c = chart(ChartKind::Treemap);
     c.title = None;
@@ -918,10 +1277,10 @@ fn treemap_and_histogram_shapes() {
 
     let vals: Vec<f64> = (0..100).map(|i| i as f64).collect();
     let d = ChartData {
-        category_levels: vec![],
         palette: vec![],
         categories: vec![],
         series: vec![series("h", &vals, [10, 20, 30, 255], ChartKind::Histogram)],
+        ..Default::default()
     };
     let prims = render(&chart(ChartKind::Histogram), &d, 600.0, 400.0, &ApproxMeasure);
     let bins = prims.iter().filter(|p| matches!(p, Prim::Rect { fill: Some([10, 20, 30, 255]), .. })).count();
@@ -932,10 +1291,10 @@ fn treemap_and_histogram_shapes() {
 fn histogram_boundary_values_match_interval_labels() {
     let heights = |vals: &[f64]| -> Vec<f32> {
         let d = ChartData {
-            category_levels: vec![],
             palette: vec![],
             categories: vec![],
             series: vec![series("h", vals, [10, 20, 30, 255], ChartKind::Histogram)],
+            ..Default::default()
         };
         let prims = render(&chart(ChartKind::Histogram), &d, 600.0, 400.0, &ApproxMeasure);
         prims.iter().filter_map(|p| if let Prim::Rect { h, fill: Some([10, 20, 30, 255]), .. } = p { Some(*h) } else { None }).collect()
@@ -1009,6 +1368,7 @@ fn funnel_value_labels_follow_the_data_labels_flag() {
         palette: vec![],
         categories: vec!["a".into(), "b".into(), "c".into()],
         series: vec![series("S", &[11111.0, 22222.0, 33333.0], [20, 96, 130, 255], ChartKind::Funnel)],
+        ..Default::default()
     };
     let mut c = chart(ChartKind::Funnel);
     c.data_labels = false;
@@ -1043,6 +1403,9 @@ fn pie_points_follow_workbook_theme() {
         quartiles: Default::default(),
         smooth: false,
         trendlines: Vec::new(),
+        points: Vec::new(),
+        invert_if_negative: false,
+        invert_color: None,
     }];
     let d = resolve(&wb, 0, &c);
     let expected = vec![series_color(&wb.theme, 0), series_color(&wb.theme, 1)];
@@ -1099,6 +1462,38 @@ fn area_charts_draw_source_value_labels_only_when_enabled() {
 }
 
 #[test]
+fn drawing_and_resolving_agree_on_the_combo_plot_kind() {
+    // Resolved series carry `effective_kind`; drawing re-derives the kind from it. Both paths
+    // must give the same kind for every chart kind, series kind (or none) and series index.
+    let series_kinds = std::iter::once(None).chain(ALL_KINDS.iter().map(|k| Some(*k)));
+    for ck in ALL_KINDS {
+        for sk in series_kinds.clone() {
+            for i in 0..3 {
+                let mut c = chart(ck);
+                c.series = (0..3).map(|j| Series { kind: if j == i { sk } else { None }, ..Default::default() }).collect();
+                let from_chart = series_plot_kind(&c, i);
+                let resolved = crate::resolve::effective_kind(ck, sk, i);
+                assert_eq!(crate::resolve::plot_kind(ck, Some(resolved), i), from_chart, "{ck:?} {sk:?} {i}");
+                if ck != ChartKind::Combo {
+                    assert_eq!(from_chart, ck);
+                } else {
+                    assert_ne!(from_chart, ChartKind::Combo);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ticks_of_a_scale_off_the_step_grid_start_at_its_min() {
+    let s = Scale { min: 3.0, max: 7.0, step: 4.0 };
+    assert_eq!(s.ticks(), vec![3.0, 7.0]);
+    // Aligned scales still snap float error away.
+    let s = Scale { min: 0.0, max: 1.0, step: 0.1 };
+    assert!((s.ticks()[3] - 0.3).abs() < 1e-12 && s.ticks()[0] == 0.0);
+}
+
+#[test]
 fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
     let d = ChartData {
         category_levels: vec![],
@@ -1108,6 +1503,7 @@ fn hundred_percent_stacked_areas_fill_each_category_to_its_total() {
             series("North", &[10.0, 30.0, 0.0, 5.0], [20, 96, 130, 255], ChartKind::AreaStacked100),
             series("South", &[30.0, 10.0, 0.0, 15.0], [25, 107, 36, 255], ChartKind::AreaStacked100),
         ],
+        ..Default::default()
     };
     let mut c = chart(ChartKind::AreaStacked100);
     c.data_labels = false;
@@ -1218,7 +1614,7 @@ fn a_huge_trendline_forecast_does_not_collapse_the_columns() {
     let col: Rgba = [10, 20, 30, 255];
     let mut s = series("Sales", &[1.0, 3.0, 2.0, 5.0, 4.0], col, ChartKind::ColumnClustered);
     s.trendlines = vec![TrendlineData { spec: Trendline { forward: 1e6, backward: 1e6, ..Trendline::default() }, color: tc }];
-    let d = ChartData { palette: vec![], category_levels: vec![], categories: ["a", "b", "c", "d", "e"].map(String::from).to_vec(), series: vec![s] };
+    let d = ChartData { palette: vec![], categories: ["a", "b", "c", "d", "e"].map(String::from).to_vec(), series: vec![s], ..Default::default() };
     let mut c = chart(ChartKind::ColumnClustered);
     c.legend = LegendPos::None;
     let prims = render(&c, &d, 600.0, 400.0, &m);
@@ -1254,4 +1650,82 @@ fn box_whisker_draws_each_series_quartile_method() {
     assert_eq!(heights.len(), 2);
     // The boxes span 3.5 and 2.5 data units on the same value axis.
     assert!((heights[0] / heights[1] - 1.4).abs() < 0.001);
+}
+
+#[test]
+fn a_series_named_by_a_name_on_a_sheet_with_an_apostrophe_resolves() {
+    // #2012: `'Bob''s'!Title` kept the doubled quote, so the sheet wasn't found and the series
+    // was named by the literal text.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "Bob's".into();
+        s.set_value(CellRef::new(0, 0), Value::from("Takings"));
+        s.set_value(CellRef::new(1, 0), Value::Number(4.0));
+        s.set_value(CellRef::new(2, 0), Value::Number(9.0));
+    }
+    wb.names.push(gridcraft_model::DefinedName {
+        name: "Title".into(),
+        scope: Some(0),
+        formula: "'Bob''s'!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        name: Some("'Bob''s'!Title".into()),
+        categories: None,
+        values: "'Bob''s'!$A$2:$A$3".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+        points: Vec::new(),
+        invert_if_negative: false,
+        invert_color: None,
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
+}
+
+#[test]
+fn a_series_named_by_a_name_on_a_sheet_with_a_bang_resolves() {
+    // `'a!b'!Title`: the sheet name holds a `!`, so the evaluator must split the parsed name at
+    // the last one, not the first.
+    let mut wb = Workbook::new();
+    {
+        let s = wb.sheet_mut(0).unwrap();
+        s.name = "a!b".into();
+        s.set_value(CellRef::new(0, 0), Value::from("Takings"));
+        s.set_value(CellRef::new(1, 0), Value::Number(4.0));
+        s.set_value(CellRef::new(2, 0), Value::Number(9.0));
+    }
+    wb.names.push(gridcraft_model::DefinedName {
+        name: "Title".into(),
+        scope: Some(0),
+        formula: "'a!b'!$A$1".into(),
+        comment: String::new(),
+        hidden: false,
+    });
+    let mut c = chart(ChartKind::ColumnClustered);
+    c.series = vec![Series {
+        name: Some("'a!b'!Title".into()),
+        categories: None,
+        values: "'a!b'!$A$2:$A$3".into(),
+        bubble_sizes: None,
+        color: None,
+        secondary: false,
+        kind: None,
+        quartiles: Default::default(),
+        smooth: false,
+        trendlines: Vec::new(),
+        points: Vec::new(),
+        invert_if_negative: false,
+        invert_color: None,
+    }];
+    let d = resolve(&wb, 0, &c);
+    assert_eq!(d.series.first().map(|s| s.name.as_str()), Some("Takings"));
 }

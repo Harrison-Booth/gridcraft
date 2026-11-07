@@ -1,6 +1,11 @@
 use super::frame::Bx;
 use super::trend::supports_trendline;
-use super::*;
+use super::{
+    Chart, ChartData, ChartKind, Ctx, DOWN, HAlign, LABEL_SIZE, MAX_CATS, MAX_SERIES, MAX_TRENDLINES, Prim, Rgba, SeriesData, TEXT, Theme, UP,
+    VAlign, auto_name, series_color,
+};
+use crate::points;
+use gridcraft_model::LegendPos;
 
 /// How a legend entry's swatch is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,14 +16,17 @@ pub enum Swatch {
     Marker,
 }
 
-/// The kind a series is drawn as (per-series kinds only apply to combo charts).
-pub(super) fn plot_kind(chart: &Chart, s: &SeriesData) -> ChartKind {
-    if chart.kind == ChartKind::Combo { if s.kind == ChartKind::Combo { ChartKind::Line } else { s.kind } } else { chart.kind }
+/// The kind series `i` is drawn as (per-series kinds only apply to combo charts); the same rule
+/// as `series_plot_kind`, applied to the already resolved series kind.
+pub(super) fn plot_kind(chart: &Chart, s: &SeriesData, i: usize) -> ChartKind {
+    crate::resolve::plot_kind(chart.kind, Some(s.kind), i)
 }
 
 /// Colour of point `j` for charts that colour by point (pie, doughnut, treemap, sunburst).
-pub(super) fn point_color(data: &ChartData, j: usize) -> Rgba {
+pub(super) fn point_color(chart: &Chart, data: &ChartData, j: usize) -> Rgba {
     match (j, data.series.first()) {
+        // Pie and doughnut slices: the point's own fill, vary colors, else the series colour.
+        (_, Some(s)) if matches!(chart.kind, ChartKind::Pie | ChartKind::Doughnut) => points::fill(data, s, j, None).0,
         (0, Some(s)) => s.color,
         _ => j.checked_rem(data.palette.len()).and_then(|k| data.palette.get(k)).copied().unwrap_or_else(|| series_color(&Theme::default(), j)),
     }
@@ -38,9 +46,11 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
         return vec![];
     }
     match chart.kind {
+        // Pie, doughnut (Excel's default `varyColors=1`, so every ring repeats the category colours
+        // and the legend names categories rather than series), treemap and sunburst.
         ChartKind::Pie | ChartKind::Doughnut | ChartKind::Treemap | ChartKind::Sunburst => {
             let n = first_len(data).min(MAX_CATS);
-            (0..n).map(|j| (cat_label(data, j), point_color(data, j), Swatch::Box)).collect()
+            (0..n).map(|j| (cat_label(data, j), point_color(chart, data, j), Swatch::Box)).collect()
         }
         ChartKind::Histogram | ChartKind::Funnel | ChartKind::Stock => vec![],
         ChartKind::Waterfall => {
@@ -50,22 +60,29 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
             let total = data.series.first().map(|s| s.color).unwrap_or(TEXT);
             vec![("Increase".into(), UP, Swatch::Box), ("Decrease".into(), DOWN, Swatch::Box), ("Total".into(), total, Swatch::Box)]
         }
+        // The only series of a chart that varies colours by point, or whose points have formats
+        // of their own: one entry per point, as Excel lists them.
+        _ if data.legend_by_point && data.series.len() == 1 => {
+            let Some(s) = data.series.first() else { return vec![] };
+            let sw = swatch_of(plot_kind(chart, s, 0));
+            let n = s.values.len().max(data.categories.len()).min(MAX_CATS);
+            (0..n)
+                .map(|j| {
+                    let c = match sw {
+                        Swatch::Box => points::fill(data, s, j, None).0,
+                        Swatch::Line => points::line(data, s, j),
+                        Swatch::LineMarker | Swatch::Marker => points::marker_fill(data, s, j),
+                    };
+                    (cat_label(data, j), c, sw)
+                })
+                .collect()
+        }
         _ => {
             let series = data.series.iter().take(MAX_SERIES);
-            let mut out: Vec<(String, Rgba, Swatch)> = series
-                .clone()
-                .map(|s| {
-                    let sw = match plot_kind(chart, s) {
-                        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
-                        ChartKind::LineMarkers => Swatch::LineMarker,
-                        ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
-                        _ => Swatch::Box,
-                    };
-                    (s.name.clone(), s.color, sw)
-                })
-                .collect();
+            let mut out: Vec<(String, Rgba, Swatch)> =
+                series.clone().enumerate().map(|(i, s)| (s.name.clone(), s.color, swatch_of(plot_kind(chart, s, i)))).collect();
             // Trendlines follow the series, named "Linear (Sales)" unless given a name.
-            for s in series.filter(|s| supports_trendline(plot_kind(chart, s))) {
+            for (_, s) in series.enumerate().filter(|(i, s)| supports_trendline(plot_kind(chart, s, *i))) {
                 for t in s.trendlines.iter().take(MAX_TRENDLINES) {
                     out.push((t.spec.name.clone().unwrap_or_else(|| auto_name(t.spec.kind, &s.name)), t.color, Swatch::Line));
                 }
@@ -75,13 +92,22 @@ pub fn legend_entries(chart: &Chart, data: &ChartData) -> Vec<(String, Rgba, Swa
     }
 }
 
+fn swatch_of(k: ChartKind) -> Swatch {
+    match k {
+        ChartKind::Line | ChartKind::LineStacked | ChartKind::Radar | ChartKind::ScatterLines => Swatch::Line,
+        ChartKind::LineMarkers => Swatch::LineMarker,
+        ChartKind::Scatter | ChartKind::Bubble => Swatch::Marker,
+        _ => Swatch::Box,
+    }
+}
+
 // ---------------------------------------------------------------- legend
 
 fn swatch_w(sw: Swatch, s: f32) -> f32 {
     if sw == Swatch::Box { s } else { s * 2.0 }
 }
 
-fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, color: Rgba) {
+pub(super) fn draw_swatch(ctx: &mut Ctx, sw: Swatch, x: f32, yc: f32, s: f32, color: Rgba) {
     match sw {
         Swatch::Box => ctx.rect(x, yc - s / 2.0, s, s, color, None),
         Swatch::Line => ctx.hline(x, x + 2.0 * s, yc, color, 2.0),
@@ -132,7 +158,7 @@ pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos
                         draw_swatch(ctx, e.2, x, yc, s, e.1);
                         let sx = swatch_w(e.2, s) + gap;
                         let t = ctx.fit(&e.0, size, (iw - sx).max(0.0) + 0.5);
-                        ctx.text(x + sx, yc, &t, size, TEXT, HAlign::Left, VAlign::Middle);
+                        ctx.text(x + sx, yc, &t, size, TEXT, (HAlign::Left, VAlign::Middle));
                     }
                     x += iw + spacing;
                 }
@@ -152,7 +178,7 @@ pub(super) fn draw_legend(ctx: &mut Ctx, entries: &[(String, Rgba, Swatch)], pos
                 draw_swatch(ctx, e.2, x0, yc, s, e.1);
                 let sx = swatch_w(e.2, s) + gap;
                 let t = ctx.fit(&e.0, size, (colw - sx).max(0.0) + 0.5);
-                ctx.text(x0 + sx, yc, &t, size, TEXT, HAlign::Left, VAlign::Middle);
+                ctx.text(x0 + sx, yc, &t, size, TEXT, (HAlign::Left, VAlign::Middle));
             }
             let used = colw + 8.0;
             if pos == LegendPos::Right { Bx { w: area.w - used, ..area } } else { Bx { x: area.x + used, w: area.w - used, ..area } }
