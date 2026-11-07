@@ -21,10 +21,18 @@ pub enum CellError {
     Calc,
     /// Circular reference that could not be resolved (shown as 0 by Excel; we keep it explicit).
     Circ,
+    /// A Python cell's code raised an error, or Python stopped.
+    Python,
+    /// A Python cell is waiting to run.
+    Busy,
+    /// A Python cell ran longer than the time limit.
+    Timeout,
+    /// Python can't run here: the workbook's content isn't enabled, or this build has no Python.
+    Blocked,
 }
 
 impl CellError {
-    pub const ALL: [CellError; 10] = [
+    pub const ALL: [CellError; 14] = [
         CellError::Null,
         CellError::Div0,
         CellError::Value,
@@ -35,6 +43,10 @@ impl CellError {
         CellError::GettingData,
         CellError::Spill,
         CellError::Calc,
+        CellError::Python,
+        CellError::Busy,
+        CellError::Timeout,
+        CellError::Blocked,
     ];
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -49,9 +61,16 @@ impl CellError {
             CellError::Spill => "#SPILL!",
             CellError::Calc => "#CALC!",
             CellError::Circ => "#CIRC!",
+            CellError::Python => "#PYTHON!",
+            CellError::Busy => "#BUSY!",
+            CellError::Timeout => "#TIMEOUT!",
+            CellError::Blocked => "#BLOCKED!",
         }
     }
-    /// `ERROR.TYPE` number.
+    /// `ERROR.TYPE` number. Microsoft documents 1 to 8; 9 (#SPILL!), 11 (#BLOCKED!) and 14 (#CALC!)
+    /// are the numbers Excel returns. Microsoft documents no number for #PYTHON!, #BUSY! or
+    /// #TIMEOUT!: 19, 20 and 21 are GridCraft's own choice, after the numbers Excel is known to use,
+    /// and may change if Excel's numbers become known.
     pub fn code(&self) -> u32 {
         match self {
             CellError::Null => 1,
@@ -65,6 +84,10 @@ impl CellError {
             CellError::Spill => 9,
             CellError::Calc => 14,
             CellError::Circ => 15,
+            CellError::Blocked => 11,
+            CellError::Python => 19,
+            CellError::Busy => 20,
+            CellError::Timeout => 21,
         }
     }
     pub fn parse(s: &str) -> Option<CellError> {
@@ -389,6 +412,31 @@ pub fn sci_text(n: f64, sig: usize) -> String {
     format!("{}E{}{:02}", mant, if e < 0 { '-' } else { '+' }, e.abs())
 }
 
+/// Longest text a cell can hold, in UTF-16 code units.
+pub const MAX_TEXT_CHARS: usize = 32_767;
+
+/// `s` cut to [`MAX_TEXT_CHARS`] UTF-16 code units without splitting a Unicode scalar value.
+pub fn cap_text(mut s: String) -> String {
+    if s.len() > MAX_TEXT_CHARS {
+        let mut units = 0;
+        if let Some((i, _)) = s.char_indices().find(|(_, c)| {
+            units += c.len_utf16();
+            units > MAX_TEXT_CHARS
+        }) {
+            s.truncate(i);
+        }
+    }
+    s
+}
+
+/// `v` with text cut to [`MAX_TEXT_CHARS`] UTF-16 code units; other values pass through.
+pub fn cap_value(v: Value) -> Value {
+    match v {
+        Value::Text(t) if t.len() > MAX_TEXT_CHARS => Value::text(cap_text(t.to_string())),
+        v => v,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -435,6 +483,16 @@ mod tests {
     }
 
     #[test]
+    fn cap_text_uses_utf16_units_without_splitting_surrogate_pairs() {
+        let face = "😀";
+        assert_eq!(cap_text("x".repeat(MAX_TEXT_CHARS)), "x".repeat(MAX_TEXT_CHARS));
+        assert_eq!(cap_text("x".repeat(MAX_TEXT_CHARS + 1)), "x".repeat(MAX_TEXT_CHARS));
+        assert_eq!(cap_text(format!("{}{}", "x".repeat(MAX_TEXT_CHARS - 2), face)), format!("{}{}", "x".repeat(MAX_TEXT_CHARS - 2), face));
+        assert_eq!(cap_text(format!("{}{}", "x".repeat(MAX_TEXT_CHARS - 1), face)), "x".repeat(MAX_TEXT_CHARS - 1));
+        assert_eq!(cap_text(face.repeat(16_384)), face.repeat(16_383));
+    }
+
+    #[test]
     fn errors() {
         for e in CellError::ALL {
             assert_eq!(CellError::parse(e.as_str()), Some(e));
@@ -454,11 +512,12 @@ mod tests {
     }
 
     #[test]
-    fn arrays() {
-        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).unwrap();
+    fn arrays() -> Result<(), std::io::Error> {
+        let a = Array::new(2, 2, vec![1.0.into(), 2.0.into(), 3.0.into(), 4.0.into()]).ok_or_else(|| std::io::Error::other("valid array"))?;
         assert_eq!(a.transpose().get(0, 1), Some(&Value::Number(3.0)));
         assert!(Array::new(2, 2, vec![]).is_none());
         let row = Array::row(vec![1.0.into(), 2.0.into()]);
         assert_eq!(row.get_broadcast(5, 1), Value::Number(2.0));
+        Ok(())
     }
 }
