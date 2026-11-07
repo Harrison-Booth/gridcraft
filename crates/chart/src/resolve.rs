@@ -2,10 +2,10 @@
 
 use gridcraft_calc::evaluate;
 use gridcraft_core::{CellRef, RangeRef, Value, category_levels, number_to_text};
-use gridcraft_model::{Chart, ChartKind, Theme, Workbook, style::apply_tint};
+use gridcraft_model::{Chart, ChartKind, ErrorAmount, Theme, Workbook, style::apply_tint};
 use gridcraft_numfmt::{NumberFormat, format_value};
 
-use crate::{ChartData, Rgba, SeriesData, TrendlineData};
+use crate::{ChartData, ErrorBarData, Rgba, SeriesData, TrendlineData};
 
 /// Cap on points per series (keeps whole-column references from exploding).
 pub(crate) const MAX_POINTS: usize = 100_000;
@@ -13,6 +13,8 @@ pub(crate) const MAX_POINTS: usize = 100_000;
 pub(crate) const MAX_SERIES: usize = 255;
 /// Cap on trendlines drawn per series.
 pub(crate) const MAX_TRENDLINES: usize = 16;
+/// Automatic error bar colour (a dark grey, like the axis text).
+pub(crate) const ERROR_BAR_GREY: Rgba = [0x59, 0x59, 0x59, 0xFF];
 
 /// Tints used for series beyond the six theme accents: lighter, darker, lighter still…
 const CYCLE_TINTS: [f64; 6] = [0.0, 0.4, -0.25, 0.6, -0.5, 0.2];
@@ -179,9 +181,10 @@ fn category_table(wb: &Workbook, sheet: usize, formula: &str, values: &str) -> (
 /// Whether `t` names a defined name seen from `sheet` (`Name`, or `Sheet1!Name` looked up on
 /// that sheet), the way the evaluator looks names up.
 fn is_defined_name(wb: &Workbook, sheet: usize, t: &str) -> bool {
-    match t.split_once('!') {
-        Some((s, bare)) => wb.sheet_index(s.trim_matches('\'')).is_some_and(|i| wb.name(bare, i).is_some()),
-        None => wb.name(t, sheet).is_some(),
+    // `'Bob''s'!Name`: the sheet is unquoted as everywhere else (#2012).
+    match gridcraft_core::split_sheet(t) {
+        (Some(s), bare) => wb.sheet_index(&s).is_some_and(|i| wb.name(bare, i).is_some()),
+        (None, _) => wb.name(t, sheet).is_some(),
     }
 }
 
@@ -200,7 +203,7 @@ fn series_name(wb: &Workbook, sheet: usize, name: &str) -> String {
     t.to_string()
 }
 
-fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
+pub(crate) fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
     match (chart_kind, series_kind) {
         (ChartKind::Combo, Some(k)) if k != ChartKind::Combo => k,
         (ChartKind::Combo, _) => {
@@ -215,9 +218,15 @@ fn effective_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usiz
     }
 }
 
+/// The kind series `i` is drawn as: its own kind in a combo chart (first series a column, the
+/// rest lines when it has none), else the chart's. The one rule shared by resolving and drawing.
+pub(crate) fn plot_kind(chart_kind: ChartKind, series_kind: Option<ChartKind>, i: usize) -> ChartKind {
+    if chart_kind == ChartKind::Combo { effective_kind(chart_kind, series_kind, i) } else { chart_kind }
+}
+
 /// The kind series `i` of `chart` is drawn as: its own kind in a combo chart, else the chart's.
 pub fn series_plot_kind(chart: &Chart, i: usize) -> ChartKind {
-    if chart.kind == ChartKind::Combo { effective_kind(chart.kind, chart.series.get(i).and_then(|s| s.kind), i) } else { chart.kind }
+    plot_kind(chart.kind, chart.series.get(i).and_then(|s| s.kind), i)
 }
 
 /// Evaluates a chart's series formulas: names, values, categories (default "1", "2", …), X
@@ -258,6 +267,26 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
                 color: t.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or(color),
             })
             .collect();
+        let error_bars = s
+            .error_bars
+            .iter()
+            .take(2)
+            .map(|e| {
+                let (plus, minus) = match &e.amount {
+                    ErrorAmount::Custom { plus, minus } => {
+                        let eval = |f: &Option<String>| f.as_deref().map(|f| nums(wb, sheet, f)).unwrap_or_default();
+                        (eval(plus), eval(minus))
+                    }
+                    _ => (Vec::new(), Vec::new()),
+                };
+                ErrorBarData {
+                    spec: e.clone(),
+                    color: e.color.as_ref().and_then(|c| c.resolve(&wb.theme)).map(|[r, g, b]| [r, g, b, 0xFF]).unwrap_or(ERROR_BAR_GREY),
+                    plus,
+                    minus,
+                }
+            })
+            .collect();
         series.push(SeriesData {
             name,
             values,
@@ -268,6 +297,7 @@ pub fn resolve(wb: &Workbook, sheet: usize, chart: &Chart) -> ChartData {
             secondary: s.secondary,
             smooth: s.smooth,
             trendlines,
+            error_bars,
             number_format: ref_format(wb, sheet, &s.values),
         });
     }

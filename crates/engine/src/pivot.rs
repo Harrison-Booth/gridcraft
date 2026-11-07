@@ -228,7 +228,7 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
     }
     if !replace {
         for (c, cell) in sh.cells.iter_range(area) {
-            if (!cell.value.is_empty() || cell.formula.is_some()) && !pt.last_range.is_some_and(|r| r.contains(c)) {
+            if cell.has_content() && !pt.last_range.is_some_and(|r| r.contains(c)) {
                 return Err(format!(
                     "There's already data in {}!{}. Do you want to replace it? (Run again with replace: true to overwrite.)",
                     quote_sheet(&sh.name),
@@ -278,7 +278,10 @@ pub fn refresh(wb: &mut Workbook, sheet: usize, idx: usize, replace: bool) -> Re
             if oc.value.is_empty() && id == StyleId::default() {
                 continue;
             }
-            cells.push((CellRef::new(origin.row + ri as u32, origin.col + ci as u32), Cell { value: oc.value.clone(), formula: None, style: id }));
+            cells.push((
+                CellRef::new(origin.row + ri as u32, origin.col + ci as u32),
+                Cell { value: oc.value.clone(), formula: None, style: id, py: None },
+            ));
         }
     }
     // Column widths that fit the labels.
@@ -325,5 +328,36 @@ mod fit_tests {
         assert!(!data_cols_exceed_sheet(64, false, 256));
         assert!(!data_cols_exceed_sheet(16_384, false, 0));
         assert!(data_cols_exceed_sheet(16_385, false, 0));
+    }
+}
+
+#[cfg(test)]
+mod carry_error_bars_tests {
+    use super::charts::carry_error_bars;
+    use super::*;
+
+    fn series(name: &str, bars: usize) -> Series {
+        Series {
+            name: Some(name.into()),
+            categories: None,
+            values: String::new(),
+            bubble_sizes: None,
+            color: None,
+            secondary: false,
+            kind: None,
+            quartiles: Default::default(),
+            smooth: false,
+            trendlines: Vec::new(),
+            error_bars: vec![Default::default(); bars],
+        }
+    }
+
+    #[test]
+    fn duplicate_names_take_distinct_old_series() {
+        let old = [series("a", 1), series("a", 0)];
+        let mut new = [series("a", 0), series("a", 0), series("a", 0)];
+        carry_error_bars(&old, &mut new);
+        let counts: Vec<usize> = new.iter().map(|s| s.error_bars.len()).collect();
+        assert_eq!(counts, [1, 0, 0]);
     }
 }

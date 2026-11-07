@@ -1,25 +1,26 @@
 //! Chart layout: title, legend, axes and every chart kind, drawn into [`Prim`]s.
 
-use std::collections::HashSet;
 use std::f32::consts::{PI, TAU};
 
-use gridcraft_model::{Chart, ChartKind, LegendPos, LineDash, QuartileMethod, Theme, TrendlineKind};
+use gridcraft_model::{Chart, ChartKind, ErrorBarDirection, LineDash, QuartileMethod, Theme, TrendlineKind};
 
-use crate::axis::{Fmt, Scale, clean, fixed_scale, nice_scale};
+use crate::axis::{Fmt, Scale, clean, nice_scale};
+use crate::errbars::error_spans;
 use crate::resolve::{MAX_POINTS, MAX_SERIES, MAX_TRENDLINES, series_color};
 use crate::trend::{auto_name, fit_trendline, moving_average};
-use crate::{ChartData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
+use crate::{ChartData, ErrorBarData, HAlign, Measure, Prim, Rgba, SeriesData, VAlign};
 
 mod cartesian;
 mod frame;
 mod kinds;
 mod legend;
 mod lines;
+mod table;
 mod trend;
 
 use cartesian::{cartesian, scatter};
 use frame::{Bx, axis_titles, chart_title};
-use kinds::{box_whisker, funnel, histogram, pie, radar, stock, treemap, waterfall};
+use kinds::{box_whisker, doughnut, funnel, histogram, pie, radar, stock, treemap, waterfall};
 use legend::draw_legend;
 pub use legend::{Swatch, legend_entries};
 pub use trend::supports_trendline;
@@ -42,8 +43,15 @@ const MAX_CATS: usize = 20_000;
 const MAX_LINE_PTS: usize = 2000;
 /// Most markers per series (after de-duplicating by pixel).
 const MAX_MARKERS: usize = 5000;
+/// Error bars drawn per chart, over every series and direction (axis bounds still use them all).
+const MAX_ERR_BARS: usize = 20_000;
 /// Data labels are skipped when a series has more points than this.
 const MAX_LABELS: usize = 200;
+/// Most wedges a doughnut draws for the whole chart. The per-series and per-category limits do not
+/// bound their product: 255 series of 20,000 categories would be millions of wedges. Every drawable
+/// ring shares this budget, so the innermost ring keeps its largest slices and the outer rings are
+/// capped instead of the chart dropping rings wholesale.
+pub(crate) const MAX_WEDGES: usize = 2_048;
 
 struct Ctx<'a> {
     out: Vec<Prim>,
@@ -70,8 +78,7 @@ impl Ctx<'_> {
         }
         String::new()
     }
-    #[allow(clippy::too_many_arguments)]
-    fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, align: HAlign, valign: VAlign) {
+    fn text(&mut self, x: f32, y: f32, s: &str, size: f32, color: Rgba, (align, valign): (HAlign, VAlign)) {
         if s.is_empty() {
             return;
         }
@@ -116,6 +123,12 @@ fn sanitize(d: &ChartData) -> ChartData {
                 secondary: s.secondary,
                 smooth: s.smooth,
                 trendlines: s.trendlines.iter().take(MAX_TRENDLINES).cloned().collect(),
+                error_bars: s
+                    .error_bars
+                    .iter()
+                    .take(2)
+                    .map(|e| ErrorBarData { spec: e.spec.clone(), color: e.color, plus: sanitize_vals(&e.plus), minus: sanitize_vals(&e.minus) })
+                    .collect(),
                 number_format: s.number_format.clone(),
             })
             .collect(),
@@ -135,7 +148,7 @@ pub fn render(chart: &Chart, data: &ChartData, w: f32, h: f32, m: &dyn Measure) 
     if let Some(t) = chart_title(chart, &data) {
         let size = TITLE_SIZE.min(h * 0.12).max(4.0);
         let t = ctx.fit(&t, size, area.w);
-        ctx.text(w / 2.0, area.y, &t, size, TEXT, HAlign::Center, VAlign::Top);
+        ctx.text(w / 2.0, area.y, &t, size, TEXT, (HAlign::Center, VAlign::Top));
         let used = size * 1.3 + 4.0;
         area.y += used;
         area.h -= used;
@@ -154,7 +167,7 @@ fn draw_kind(ctx: &mut Ctx, chart: &Chart, data: &ChartData, area: Bx) {
     use ChartKind::*;
     match chart.kind {
         Pie => pie(ctx, chart, data, area, 0.0, false),
-        Doughnut => pie(ctx, chart, data, area, 0.5, false),
+        Doughnut => doughnut(ctx, chart, data, area),
         Sunburst => pie(ctx, chart, data, area, 0.2, true),
         Treemap => treemap(ctx, chart, data, area),
         Funnel => funnel(ctx, chart, data, area),
@@ -252,4 +265,73 @@ pub(crate) fn finalize(prims: Vec<Prim>, w: f32, h: f32) -> Vec<Prim> {
             }
         })
         .collect()
+}
+
+// ---------------------------------------------------------------- error bars
+
+/// Half the length of an error bar's end cap.
+const CAP: f32 = 2.5;
+
+/// One drawn error bar in data units along its axis: the point index, the low and high ends,
+/// and whether each end gets a cap (the start of a one-sided bar has none).
+#[derive(Clone, Copy, Debug)]
+struct ErrSeg {
+    j: usize,
+    lo: f64,
+    hi: f64,
+    cap_lo: bool,
+    cap_hi: bool,
+}
+
+/// Error bar segments of `eb` for the points `values` (their own values along the bar axis)
+/// drawn at `anchors` (the plotted positions: the value, or the stack top).
+fn error_segments(eb: &ErrorBarData, values: &[Option<f64>], anchors: &[Option<f64>]) -> Vec<ErrSeg> {
+    error_spans(eb, values)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(j, sp)| {
+            let sp = sp?;
+            let at = anchors.get(j).copied().flatten()?;
+            let v = values.get(j).copied().flatten()?;
+            let c = sp.center.map(|m| m + (at - v)).unwrap_or(at);
+            let (lo, hi) = (c - sp.minus, c + sp.plus);
+            // Excel caps only the ends away from the start: a plus-only standard deviation bar
+            // runs up from the mean with no cap at the mean.
+            (lo.is_finite() && hi.is_finite() && (sp.minus > 0.0 || sp.plus > 0.0)).then_some(ErrSeg {
+                j,
+                lo,
+                hi,
+                cap_lo: sp.minus > 0.0,
+                cap_hi: sp.plus > 0.0,
+            })
+        })
+        .collect()
+}
+
+/// Draws one error bar from `a` to `b` (pixels), capped across its direction at the ends
+/// asked for, clipped to the plot.
+fn draw_error_bar(ctx: &mut Ctx, plot: Bx, a: [f32; 2], b: [f32; 2], caps: (bool, bool), eb: &ErrorBarData, cap_on: bool) {
+    if !(fin(a[0]) && fin(a[1]) && fin(b[0]) && fin(b[1])) {
+        return;
+    }
+    let clamp = |p: [f32; 2]| [p[0].clamp(plot.x, plot.right()), p[1].clamp(plot.y, plot.bottom())];
+    // Excel's automatic error bar line is 0.75 pt.
+    let width = eb.spec.width.filter(|w| w.is_finite()).unwrap_or(0.75).clamp(0.25, 12.0);
+    let dash = eb.spec.dash.is_some_and(|d| d != LineDash::Solid);
+    let (ca, cb) = (clamp(a), clamp(b));
+    if ca != cb {
+        ctx.out.push(Prim::Line { pts: vec![ca, cb], color: eb.color, width, dash });
+    }
+    if !cap_on {
+        return;
+    }
+    let vertical = (a[0] - b[0]).abs() < (a[1] - b[1]).abs();
+    for (p, on, cp) in [(a, caps.0, ca), (b, caps.1, cb)] {
+        // A cap past the plot edge is clipped away with its end.
+        if !on || p != cp {
+            continue;
+        }
+        let (p0, p1) = if vertical { ([p[0] - CAP, p[1]], [p[0] + CAP, p[1]]) } else { ([p[0], p[1] - CAP], [p[0], p[1] + CAP]) };
+        ctx.out.push(Prim::Line { pts: vec![p0, p1], color: eb.color, width, dash: false });
+    }
 }
