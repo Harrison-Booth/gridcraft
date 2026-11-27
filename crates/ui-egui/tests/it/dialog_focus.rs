@@ -2,6 +2,7 @@
 //! column width without clicking into the field first.
 
 use egui::{Event, Key, vec2};
+use egui_kittest::kittest::Queryable;
 use gridcraft_engine::Session;
 use gridcraft_engine::core::CellRef;
 use gridcraft_ui_egui::SheetApp;
@@ -80,4 +81,378 @@ fn command_search_arrow_and_page_keys_move_the_selection_and_keep_the_search_foc
     let after_page = h.state().dialog.as_ref().map(|d| d.list_index).unwrap_or(0);
     assert!(after_page > 2, "PageDown moved past the third row, got {after_page}");
     assert!(h.ctx.memory(|m| m.focused()).is_some(), "the search field kept focus");
+}
+
+/// The palette displays the engine metadata unchanged on either runtime OS.
+#[test]
+fn command_search_shows_engine_shortcuts() {
+    use egui::os::OperatingSystem;
+
+    for os in [OperatingSystem::Windows, OperatingSystem::Mac] {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        for (query, expected) in [
+            ("home.bold", if os == OperatingSystem::Mac { "Bold  (Cmd+B)" } else { "Bold  (Ctrl+B)" }),
+            ("data.filter", "Filter  (Ctrl+Shift+L)"),
+            ("edit.copy", if os == OperatingSystem::Mac { "Copy  (Cmd+C)" } else { "Copy  (Ctrl+C)" }),
+            ("edit.paste", if os == OperatingSystem::Mac { "Paste  (Cmd+V)" } else { "Paste  (Ctrl+V)" }),
+            ("home.italic", if os == OperatingSystem::Mac { "Italic  (Cmd+I)" } else { "Italic  (Ctrl+I)" }),
+            ("home.underline", if os == OperatingSystem::Mac { "Underline  (Cmd+U)" } else { "Underline  (Ctrl+U)" }),
+            ("edit.fillDown", if os == OperatingSystem::Mac { "Fill Down  (Cmd+D)" } else { "Fill Down  (Ctrl+D)" }),
+            ("edit.flashFill", "Flash Fill  (Ctrl+E)"),
+            ("home.alignLeft", if os == OperatingSystem::Mac { "Align Left  (Cmd+L)" } else { "Align Left    Home" }),
+            ("home.alignCenter", if os == OperatingSystem::Mac { "Center  (Cmd+E)" } else { "Center    Home" }),
+            ("selection.row", "Select Entire Row  (Shift+Space)"),
+            ("selection.column", "Select Entire Column  (Ctrl+Space)"),
+            ("data.group", if os == OperatingSystem::Mac { "Group  (Cmd+Shift+K)" } else { "Group  (Alt+Shift+Right)" }),
+            ("data.ungroup", if os == OperatingSystem::Mac { "Ungroup  (Cmd+Shift+J)" } else { "Ungroup  (Alt+Shift+Left)" }),
+        ] {
+            h.state_mut().dialog.as_mut().unwrap().search = query.into();
+            h.run_steps(3);
+            h.get_by_label_contains(expected);
+        }
+    }
+}
+
+/// Paste Special uses the engine's shortcut metadata when enabled.
+#[test]
+fn command_search_shows_paste_special_metadata() {
+    use egui::os::OperatingSystem;
+
+    for os in [OperatingSystem::Windows, OperatingSystem::Mac] {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().session.execute("cell.set", json!({"cell": "C3", "input": "copied"})).unwrap();
+
+        h.state_mut().session.execute("edit.copy", json!({"range": "C3"})).unwrap();
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        h.state_mut().dialog.as_mut().unwrap().search = "edit.pasteSpecial".into();
+        h.run_steps(3);
+
+        h.get_by_label_contains(if os == OperatingSystem::Mac { "Paste Special…  (Ctrl+Cmd+V)" } else { "Paste Special…  (Ctrl+Alt+V)" });
+    }
+}
+
+/// The engine registry is the authoritative shortcut source.
+#[test]
+fn command_palette_shortcuts_come_from_engine_metadata() {
+    let session = gridcraft_engine::Session::new();
+    let commands = session.commands();
+
+    for (id, mac, other) in [
+        ("home.bold", Some("Cmd+B"), Some("Ctrl+B")),
+        ("edit.find", Some("Cmd+F"), Some("Ctrl+F")),
+        ("edit.selectAll", Some("Cmd+A"), Some("Ctrl+A")),
+        ("edit.undo", Some("Cmd+Z"), Some("Ctrl+Z")),
+        ("edit.redo", Some("Cmd+Y"), Some("Ctrl+Y")),
+        ("edit.copy", Some("Cmd+C"), Some("Ctrl+C")),
+        ("edit.cut", Some("Cmd+X"), Some("Ctrl+X")),
+        ("edit.paste", Some("Cmd+V"), Some("Ctrl+V")),
+        ("edit.fillDown", Some("Cmd+D"), Some("Ctrl+D")),
+        ("edit.fillRight", Some("Cmd+R"), Some("Ctrl+R")),
+        ("home.italic", Some("Cmd+I"), Some("Ctrl+I")),
+        ("home.underline", Some("Cmd+U"), Some("Ctrl+U")),
+        ("edit.pasteSpecial", Some("Ctrl+Cmd+V"), Some("Ctrl+Alt+V")),
+        ("home.alignLeft", Some("Cmd+L"), None),
+        ("home.alignCenter", Some("Cmd+E"), None),
+        ("data.group", Some("Cmd+Shift+K"), Some("Alt+Shift+Right")),
+        ("data.ungroup", Some("Cmd+Shift+J"), Some("Alt+Shift+Left")),
+        ("edit.flashFill", Some("Ctrl+E"), Some("Ctrl+E")),
+        ("data.filter", Some("Ctrl+Shift+L"), Some("Ctrl+Shift+L")),
+        ("selection.row", Some("Shift+Space"), Some("Shift+Space")),
+        ("selection.column", Some("Ctrl+Space"), Some("Ctrl+Space")),
+    ] {
+        let command = commands.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(command.shortcut_for_platform(true), mac.map(str::to_string), "{id}: macOS");
+        assert_eq!(command.shortcut_for_platform(false), other.map(str::to_string), "{id}: Windows/Linux");
+    }
+
+    for (id, legacy) in
+        [("data.group", "Alt+Shift+Right"), ("data.ungroup", "Alt+Shift+Left"), ("home.alignLeft", "Cmd+L"), ("home.alignCenter", "Cmd+E")]
+    {
+        let command = commands.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(command.shortcut, Some(legacy), "{id}: legacy CLI shortcut");
+    }
+
+    let command = commands.iter().find(|c| c.id == "home.alignRight").unwrap();
+    assert_eq!(command.shortcut_for_platform(true), None);
+    assert_eq!(command.shortcut_for_platform(false), None);
+}
+/// Current Region displays the shortcut declared in engine metadata.
+#[test]
+fn command_search_shows_current_region_shortcut() {
+    use egui::os::OperatingSystem;
+
+    for (os, expected) in
+        [(OperatingSystem::Windows, "Select Current Region  (Ctrl+Shift+8)"), (OperatingSystem::Mac, "Select Current Region  (Ctrl+Shift+8)")]
+    {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        h.state_mut().dialog.as_mut().unwrap().search = "selection.currentRegion".into();
+
+        h.run_steps(3);
+        h.get_by_label_contains(expected);
+    }
+}
+
+/// Disabled commands are absent; commands without shortcuts show no invented keys.
+#[test]
+fn command_search_hides_disabled_and_handles_missing_shortcuts() {
+    use egui::os::OperatingSystem;
+
+    for os in [OperatingSystem::Windows, OperatingSystem::Mac] {
+        let mut h = harness();
+        h.ctx.set_os(os);
+        h.run_steps(2);
+
+        // Undo is disabled in a fresh workbook with no undo history.
+        let undo = h.state().session.commands().into_iter().find(|c| c.id == "edit.undo").unwrap();
+
+        assert!(!undo.enabled, "Undo should initially be disabled");
+
+        h.state_mut().open_dialog("commandSearch", json!({}));
+        h.run_steps(6);
+
+        h.state_mut().dialog.as_mut().unwrap().search = "edit.undo".into();
+        h.run_steps(3);
+
+        assert!(
+            h.query_by_label("Undo  (Cmd+Z)    Edit").is_none() && h.query_by_label("Undo  (Ctrl+Z)    Edit").is_none(),
+            "Disabled Undo must not appear in the palette"
+        );
+
+        // Align Right has no shortcut on either platform.
+        h.state_mut().dialog.as_mut().unwrap().search = "home.alignRight".into();
+        h.run_steps(3);
+
+        let align = h.state().session.commands().into_iter().find(|c| c.id == "home.alignRight").unwrap();
+
+        assert_eq!(align.shortcut_for_platform(os == OperatingSystem::Mac), None);
+
+        h.get_by_label_contains("Align Right    Home");
+    }
+}
+
+/// #2189: A failed rename must not dismiss its own error on Enter.
+#[test]
+fn failed_rename_enter_keeps_error_visible() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().dialog.is_some(), "failed dialog stays open");
+    assert!(
+        h.state().message.as_ref().is_some_and(|(_, text)| text.contains("A sheet name can't contain any of these characters: : \\ / ? * [ ]")),
+        "Enter must leave the invalid-sheet-name error visible: {:?}",
+        h.state().message
+    );
+
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Sheet1", "invalid rename must not change the sheet");
+
+    // The next Enter dismisses the error, not the dialog.
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "second Enter dismisses error");
+    assert!(h.state().dialog.is_some(), "rename dialog stays editable");
+
+    // After dismissing the error, the dialog remains usable for a valid rename.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("Renamed"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().dialog.is_none(), "valid rename confirms and closes dialog");
+    assert!(h.state().message.is_none(), "valid rename leaves no error");
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Renamed");
+}
+
+/// Mouse OK still shows the error; Escape dismisses only the message.
+#[test]
+fn failed_rename_click_keeps_error_until_escape() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+
+    h.get_by_label_contains("OK").click();
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "mouse OK shows error");
+    assert!(h.state().dialog.is_some());
+
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "Escape dismisses error");
+    assert!(h.state().dialog.is_some(), "Escape keeps dialog open");
+}
+
+/// #2189: Clicking the message box's OK button dismisses only the error and leaves the dialog usable.
+#[test]
+fn failed_rename_message_box_ok_dismisses_error_and_recovers() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "invalid rename shows message box");
+    assert!(h.state().dialog.is_some(), "rename dialog remains open behind message box");
+
+    // `message_box` renders `"  OK  "` while `dialogs::show::ok_cancel` renders `"   OK   "`.
+    assert_eq!(h.query_all_by_label("  OK  ").count(), 1, "message box OK button is uniquely selectable");
+    h.get_by_label("  OK  ").click();
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "clicking message box OK dismisses the error");
+    assert!(h.state().dialog.is_some(), "rename dialog stays open after dismissing message box");
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Sheet1");
+
+    // Verify recovery after dismissing via mouse OK.
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("Recovered"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().dialog.is_none(), "recovered rename closes dialog");
+    assert!(h.state().message.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Recovered");
+}
+
+/// #2189: A pre-existing `state.message` consumes Enter and Escape before the underlying dialog.
+#[test]
+fn existing_message_takes_enter_and_escape_before_open_dialog() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("LaterName"));
+    h.state_mut().message = Some(("Alert".into(), "Existing alert".into()));
+    h.run_steps(2);
+
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "Enter dismisses pre-existing message");
+    assert!(h.state().dialog.is_some(), "dialog stays open because message owned Enter");
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Sheet1", "draft name was not submitted");
+
+    h.state_mut().message = Some(("Alert".into(), "Second alert".into()));
+    h.run_steps(2);
+
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_none(), "Escape dismisses pre-existing message");
+    assert!(h.state().dialog.is_some(), "dialog stays open because message owned Escape");
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "Sheet1");
+
+    // Once the message is gone, Enter confirms the still-open dialog.
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().dialog.is_none(), "Enter confirms dialog after message dismissal");
+    assert!(h.state().message.is_none());
+    assert_eq!(h.state().session.active().unwrap().wb.active().unwrap().name, "LaterName");
+}
+
+/// #2189: Ctrl+Escape while an error message is open must not close the dialog behind it or lose the draft.
+#[test]
+fn ctrl_escape_does_not_close_dialog_behind_error_message() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some());
+    assert!(h.state().dialog.is_some());
+
+    h.key_press_modifiers(egui::Modifiers::CTRL, Key::Escape);
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "Ctrl+Escape does not dismiss the error alert");
+    assert!(h.state().dialog.is_some(), "Ctrl+Escape must not close the dialog behind the alert");
+    assert_eq!(h.state().dialog.as_ref().unwrap().values.get("name"), Some(&json!("a/b")), "rename draft remains intact");
+
+    // Plain Escape still dismisses only the message.
+    h.key_press(Key::Escape);
+    h.run_steps(3);
+    assert!(h.state().message.is_none());
+    assert!(h.state().dialog.is_some());
+}
+
+/// #2189: Holding Enter (OS key-repeat) after a failed rename keeps the error visible until a fresh press.
+#[test]
+fn held_enter_key_repeat_does_not_dismiss_error_message() {
+    let mut h = harness();
+    h.state_mut().open_dialog("renameSheet", json!({}));
+    h.run_steps(4);
+
+    h.state_mut().dialog.as_mut().unwrap().values.insert("name".into(), json!("a/b"));
+
+    // Press and hold Enter (no release event yet) so egui tracks Key::Enter in `keys_down`.
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(3);
+
+    assert!(h.state().message.is_some(), "initial held Enter shows error");
+    assert!(h.state().dialog.is_some());
+
+    // Subsequent OS key-repeat events while Enter remains held must not dismiss the alert.
+    for _ in 0..2 {
+        h.input_mut().events.push(egui::Event::Key {
+            key: Key::Enter,
+            physical_key: None,
+            pressed: true,
+            repeat: true,
+            modifiers: egui::Modifiers::NONE,
+        });
+        h.run_steps(2);
+        assert!(h.state().message.is_some(), "key-repeat Enter must not dismiss the error alert");
+        assert!(h.state().dialog.is_some(), "key-repeat Enter must not close the dialog");
+    }
+
+    // Release the held Enter key, then press Enter fresh: dismisses the alert while keeping the dialog open.
+    h.input_mut().events.push(egui::Event::Key {
+        key: Key::Enter,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.run_steps(1);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert!(h.state().message.is_none());
+    assert!(h.state().dialog.is_some());
 }

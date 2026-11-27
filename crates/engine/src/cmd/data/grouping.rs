@@ -1,4 +1,7 @@
-use super::*;
+use super::{
+    CellRef, EngineError, Json, LineInfo, RangeRef, Result, Session, bad, bool_param, col_param, data_target, edit, json, outline, parse_lines,
+    str_param, target_sheet,
+};
 
 // ---------------------------------------------------------------- outline
 
@@ -18,6 +21,15 @@ fn outline_lines(s: &Session, p: &Json) -> Result<(bool, u32, u32)> {
     }
 }
 
+/// Outline commands change line visibility and grouping: a protected sheet must allow formatting that axis.
+fn refuse_unless_outline_allowed(s: &Session, sheet: usize, rows: bool) -> Result<()> {
+    if rows {
+        crate::cmd::refuse_unless_allowed(s, sheet, "Formatting rows", |p| p.format_rows)
+    } else {
+        crate::cmd::refuse_unless_allowed(s, sheet, "Formatting columns", |p| p.format_columns)
+    }
+}
+
 pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
     let si = target_sheet(s, p)?;
     // The selection belongs to the active sheet, so another sheet needs its lines.
@@ -25,6 +37,7 @@ pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
         return Err(bad(if on { "data.group" } else { "data.ungroup" }, "missing `rows` or `cols`: the selection is on the active sheet"));
     }
     let (rows, a, b) = outline_lines(s, p)?;
+    refuse_unless_outline_allowed(s, si, rows)?;
     edit(s, |cx| {
         let sh = cx.sheet_mut(si)?;
         let before = outline::summary_before(sh, rows);
@@ -55,6 +68,7 @@ pub(super) fn group(s: &mut Session, p: &Json, on: bool) -> Result<Json> {
 /// + button, saved to XLSX); showing keeps inner groups that were collapsed on their own collapsed.
 pub(super) fn detail(s: &mut Session, p: &Json, hide: bool) -> Result<Json> {
     let (rows, a, b) = outline_lines(s, p)?;
+    refuse_unless_outline_allowed(s, s.doc()?.wb.active_sheet(), rows)?;
     let want = p.get("level").and_then(Json::as_u64).map(|l| l.min(outline::MAX_LEVEL as u64) as u8);
     edit(s, |cx| {
         let si = cx.sheet_index();
@@ -119,6 +133,12 @@ pub(super) fn show_levels(s: &mut Session, p: &Json) -> Result<Json> {
             cmd: "data.showLevels".into(),
             msg: "give `rows` or `cols`: the outline level to show (1 = top-level summaries only)".into(),
         });
+    }
+    let active = s.doc()?.wb.active_sheet();
+    for (n, is_rows) in [(rows, true), (cols, false)] {
+        if n.is_some() {
+            refuse_unless_outline_allowed(s, active, is_rows)?;
+        }
     }
     edit(s, |cx| {
         let si = cx.sheet_index();
@@ -232,36 +252,44 @@ pub(super) fn subtotal(s: &mut Session, p: &Json) -> Result<Json> {
             start = row;
         }
     }
-    // The totals go below each group, so the outline puts summary rows below their detail (the
-    // Subtotal dialog's "Summary below data"), in the same undo step.
-    if !sh.summary_below {
-        s.execute("data.outlineSettings", json!({"sheet": sheet, "summaryBelow": true}))?;
-    }
-    // Insert a total row after each group, bottom-up so indices stay valid.
-    let mut inserted = 0;
-    for (g0, g1, name) in groups.iter().rev() {
-        s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", g1 + 2, g1 + 2)}))?;
-        let row = g1 + 1;
-        let lbl = CellRef::new(row, group_col).a1();
-        s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("{name} {label}")}))?;
-        for c in &cols {
-            let range = RangeRef::new(CellRef::new(*g0, *c), CellRef::new(*g1, *c)).a1();
-            s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(row, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
+    let summary_below = sh.summary_below;
+    // The steps run in one undo group: a step that fails part way (the grand total past the last
+    // row, say) restores the sheet, so nothing is left changed that the journal doesn't hold.
+    s.grouped("Subtotal", |s| {
+        // The totals go below each group, so the outline puts summary rows below their detail (the
+        // Subtotal dialog's "Summary below data"), in the same undo step.
+        if !summary_below {
+            s.execute("data.outlineSettings", json!({"sheet": sheet, "summaryBelow": true}))?;
         }
-        s.execute(
-            "home.bold",
-            json!({"sheet": sheet, "range": RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)).a1(), "on": true}),
-        )?;
-        s.execute("data.group", json!({"sheet": sheet, "rows": format!("{}:{}", g0 + 1, g1 + 1)}))?;
-        inserted += 1;
-    }
-    let last = r.end.row + inserted + 1;
-    let lbl = CellRef::new(last, group_col).a1();
-    s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", last + 1, last + 1)}))?;
-    s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("Grand {label}")}))?;
-    for c in &cols {
-        let range = RangeRef::new(CellRef::new(first, *c), CellRef::new(last - 1, *c)).a1();
-        s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
-    }
-    Ok(json!({"groups": inserted}))
+        // Insert a total row after each group, bottom-up so indices stay valid.
+        let mut inserted = 0;
+        for (g0, g1, name) in groups.iter().rev() {
+            s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", g1 + 2, g1 + 2)}))?;
+            let row = g1 + 1;
+            let lbl = CellRef::new(row, group_col).a1();
+            s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("{name} {label}")}))?;
+            for c in &cols {
+                let range = RangeRef::new(CellRef::new(*g0, *c), CellRef::new(*g1, *c)).a1();
+                s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(row, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
+            }
+            s.execute(
+                "home.bold",
+                json!({"sheet": sheet, "range": RangeRef::new(CellRef::new(row, r.start.col), CellRef::new(row, r.end.col)).a1(), "on": true}),
+            )?;
+            s.execute("data.group", json!({"sheet": sheet, "rows": format!("{}:{}", g0 + 1, g1 + 1)}))?;
+            inserted += 1;
+        }
+        let last = r.end.row + inserted + 1;
+        let lbl = CellRef::new(last, group_col).a1();
+        s.execute("home.insertRows", json!({"sheet": sheet, "rows": format!("{}:{}", last + 1, last + 1)}))?;
+        s.execute("cell.set", json!({"sheet": sheet, "cell": lbl, "input": format!("Grand {label}")}))?;
+        for c in &cols {
+            let range = RangeRef::new(CellRef::new(first, *c), CellRef::new(last - 1, *c)).a1();
+            s.execute("cell.set", json!({"sheet": sheet, "cell": CellRef::new(last, *c).a1(), "input": format!("=SUBTOTAL({code},{range})")}))?;
+        }
+        // One outer group over every data and subtotal row, summarised by the grand total, as in
+        // Excel: outline level 1 then shows only the grand total, and level 2 the subtotals.
+        s.execute("data.group", json!({"sheet": sheet, "rows": format!("{}:{}", first + 1, last)}))?;
+        Ok(json!({"groups": inserted}))
+    })
 }
